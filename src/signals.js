@@ -422,11 +422,14 @@ class NeuralSignalEngine {
   #candles = [];
   #trades = [];
   #openTrades = [];
-  #patterns = [];
   #qTable = {};
   #maxCandles = 1000;
   #maxTrades = 1000;
-  #maxPatterns = 15000;
+  #patternBuckets = {};
+  #bucketSize = 100; // Max patterns per bucket
+  #maxBuckets = 10000; // Adjusted for 1M patterns (optional, was 100000)
+  #totalPatterns = 0;
+  #maxPatterns = 1000000; // Target capacity
   #state = {
     winRate: 0.5,
     tradeCount: 0,
@@ -552,7 +555,8 @@ class NeuralSignalEngine {
   #saveLearningState() {
     const state = {
       qTable: this.#qTable,
-      patterns: this.#patterns
+      patternBuckets: this.#patternBuckets,
+      totalPatterns: this.#totalPatterns
     };
     try {
       fs.writeFileSync(path.join(directoryPath, 'learning_state.json'), JSON.stringify(state), 'utf8');
@@ -562,7 +566,7 @@ class NeuralSignalEngine {
   #loadLearningState() {
     try {
       const state = JSON.parse(fs.readFileSync(path.join(directoryPath, 'learning_state.json'), 'utf8'));
-      if (typeof state.qTable === 'object' && Array.isArray(state.patterns)) {
+      if (typeof state.qTable === 'object' && typeof state.patternBuckets === 'object' && isValidNumber(state.totalPatterns)) {
         this.#qTable = {};
         for (const [key, value] of Object.entries(state.qTable)) {
           if (
@@ -573,10 +577,25 @@ class NeuralSignalEngine {
             this.#qTable[key] = { buy: value.buy, hold: value.hold };
           }
         }
-        this.#patterns = state.patterns
-          .filter(p => Array.isArray(p.features) && p.features.every(isValidNumber) && isValidNumber(p.score))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, this.#maxPatterns);
+        this.#patternBuckets = {};
+        this.#totalPatterns = 0;
+        for (const [key, bucket] of Object.entries(state.patternBuckets)) {
+          if (Array.isArray(bucket)) {
+            this.#patternBuckets[key] = bucket
+              .filter(p => Array.isArray(p.features) && p.features.every(isValidNumber) && isValidNumber(p.score))
+              .slice(0, this.#bucketSize);
+            this.#totalPatterns += this.#patternBuckets[key].length;
+          }
+        }
+        // Ensure totalPatterns doesn't exceed maxPatterns
+        if (this.#totalPatterns > this.#maxPatterns) {
+          const keys = Object.keys(this.#patternBuckets);
+          while (this.#totalPatterns > this.#maxPatterns && keys.length > 0) {
+            const key = keys.pop();
+            this.#totalPatterns -= this.#patternBuckets[key].length;
+            delete this.#patternBuckets[key];
+          }
+        }
       }
     } catch {}
   }
@@ -663,10 +682,18 @@ class NeuralSignalEngine {
   }
 
   #scorePattern(features) {
-    const matches = this.#patterns.filter(p => {
-      return features.every((f, i) => isValidNumber(f) && isValidNumber(p.features[i]) && Math.abs(f - p.features[i]) < 0.1);
-    });
-    return matches.length > 0 ? matches.reduce((sum, p) => sum + p.score, 0) / matches.length : 0;
+    const key = this.#generateFeatureKey(features);
+    const bucket = this.#patternBuckets[key] || [];
+    if (bucket.length === 0) return 0;
+    let totalScore = 0;
+    let matchCount = 0;
+    for (const pattern of bucket) {
+      if (features.every((f, i) => isValidNumber(f) && isValidNumber(pattern.features[i]) && Math.abs(f - pattern.features[i]) < 0.1)) {
+        totalScore += pattern.score;
+        matchCount++;
+      }
+    }
+    return matchCount > 0 ? totalScore / matchCount : 0;
   }
 
   #computeDynamicThreshold(data, confidence, baseThreshold = this.#config.baseConfidenceThreshold) {
@@ -684,6 +711,12 @@ class NeuralSignalEngine {
     if (!isValidNumber(confidence)) return parseFloat(dynamicThreshold.toFixed(3));
     const confidenceProximity = Math.abs(confidence - dynamicThreshold) / 100;
     return parseFloat((dynamicThreshold * (1 - 0.1 * confidenceProximity)).toFixed(3));
+  }
+
+  #generateFeatureKey(features) {
+    if (!Array.isArray(features) || features.length !== 6) return 'default';
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 10) / 10 : 0);
+    return quantized.join('|');
   }
 
   #updateOpenTrades(candles) {
@@ -762,8 +795,30 @@ class NeuralSignalEngine {
       this.#trades.push(trade);
       this.#trades = this.#trades.slice(-this.#maxTrades);
 
-      this.#patterns.push({ features: trade.features, score: trade.reward });
-      // Removed sorting from here
+      const pattern = { features: trade.features, score: trade.reward };
+      const key = this.#generateFeatureKey(trade.features);
+      this.#patternBuckets[key] = this.#patternBuckets[key] || [];
+
+      if (this.#patternBuckets[key].length < this.#bucketSize) {
+        this.#patternBuckets[key].push(pattern);
+        this.#totalPatterns++;
+      } else {
+        // Replace the lowest-scoring pattern in the bucket if new score is higher
+        const minIndex = this.#patternBuckets[key].reduce((minIdx, p, idx) => p.score < this.#patternBuckets[key][minIdx].score ? idx : minIdx, 0);
+        if (pattern.score > this.#patternBuckets[key][minIndex].score) {
+          this.#patternBuckets[key][minIndex] = pattern;
+        }
+      }
+
+      // Evict buckets if total patterns exceed maxPatterns
+      if (this.#totalPatterns > this.#maxPatterns) {
+        const keys = Object.keys(this.#patternBuckets);
+        if (keys.length > this.#maxBuckets) {
+          const keyToRemove = keys[Math.floor(Math.random() * keys.length)];
+          this.#totalPatterns -= this.#patternBuckets[keyToRemove].length;
+          delete this.#patternBuckets[keyToRemove];
+        }
+      }
 
       this.#state.tradeCount++;
       this.#state.winRate = this.#trades.length > 0 ? this.#trades.filter(t => t.outcome > 0).length / this.#trades.length : 0.5;
@@ -781,12 +836,6 @@ class NeuralSignalEngine {
       
       this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
       this.#autoencoder.train(trade.features);
-    }
-
-    // Sort and slice patterns once after all trades are processed
-    if (closedTrades.length > 0) {
-      this.#patterns.sort((a, b) => b.score - a.score);
-      this.#patterns = this.#patterns.slice(0, this.#maxPatterns);
     }
   }
 
