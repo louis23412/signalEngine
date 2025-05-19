@@ -811,12 +811,26 @@ class NeuralSignalEngine {
       }
 
       // Evict buckets if total patterns exceed maxPatterns
+      // In #updateOpenTrades, replace the eviction logic (lines around 614-620 in your file)
+      // Evict buckets if total patterns exceed maxPatterns
       if (this.#totalPatterns > this.#maxPatterns) {
         const keys = Object.keys(this.#patternBuckets);
         if (keys.length > this.#maxBuckets) {
-          const keyToRemove = keys[Math.floor(Math.random() * keys.length)];
-          this.#totalPatterns -= this.#patternBuckets[keyToRemove].length;
-          delete this.#patternBuckets[keyToRemove];
+          // Find the bucket with the lowest average score
+          let lowestAvgScore = Infinity;
+          let keyToRemove = null;
+          for (const key of keys) {
+            const bucket = this.#patternBuckets[key];
+            const avgScore = bucket.length > 0 ? bucket.reduce((sum, p) => sum + p.score, 0) / bucket.length : 0;
+            if (avgScore < lowestAvgScore) {
+              lowestAvgScore = avgScore;
+              keyToRemove = key;
+            }
+          }
+          if (keyToRemove) {
+            this.#totalPatterns -= this.#patternBuckets[keyToRemove].length;
+            delete this.#patternBuckets[keyToRemove];
+          }
         }
       }
 
