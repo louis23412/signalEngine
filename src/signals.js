@@ -427,9 +427,9 @@ class NeuralSignalEngine {
   #maxTrades = 1000;
   #patternBuckets = {};
   #bucketSize = 100; // Max patterns per bucket
-  #maxBuckets = 10000; // Adjusted for 1M patterns (optional, was 100000)
+  #maxBuckets = 20000; // Adjusted for 1M patterns (optional, was 100000)
   #totalPatterns = 0;
-  #maxPatterns = 1000000; // Target capacity
+  #maxPatterns = 2000000; // Target capacity
   #state = {
     winRate: 0.5,
     tradeCount: 0,
