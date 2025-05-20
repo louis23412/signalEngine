@@ -426,10 +426,10 @@ class NeuralSignalEngine {
   #maxCandles = 1000;
   #maxTrades = 1000;
   #patternBuckets = {};
-  #bucketSize = 100; // Max patterns per bucket
-  #maxBuckets = 20000; // Adjusted for 1M patterns (optional, was 100000)
+  #bucketSize = 200; // Max patterns per bucket
+  #maxBuckets = 1250; // Adjusted for 1M patterns (optional, was 100000)
   #totalPatterns = 0;
-  #maxPatterns = 2000000; // Target capacity
+  #maxPatterns = 250000; // Target capacity
   #state = {
     winRate: 0.5,
     tradeCount: 0,
@@ -454,7 +454,7 @@ class NeuralSignalEngine {
     atrFactor: 10,
     stopFactor: 2.5,
     learningRate: 0.25,
-    explorationRate: 0.25
+    explorationRate: 0.33
   };
   #longTermBuffer = [];
 
@@ -952,7 +952,8 @@ class NeuralSignalEngine {
       performanceWinRate: truncateToDecimals(this.#performanceBaseline.avgWinRate * 100, 4),
       performanceAvgReward: truncateToDecimals(this.#performanceBaseline.avgReward, 8),
       lastUpdate: this.#state.lastUpdate ? new Date(this.#state.lastUpdate).toLocaleString() : 'N/A',
-      signalReliability: truncateToDecimals(this.#state.signalReliability, 4)
+      signalReliability: truncateToDecimals(this.#state.signalReliability, 4),
+      activePatterns : this.#totalPatterns
     };
   }
 
