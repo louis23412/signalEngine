@@ -128,9 +128,7 @@ async function runBacktest(runNumber) {
                 const filesToDelete = [
                     'lifetime_state.json',
                     'performance_summary.json',
-                    'open_trades.json',
-                    'candle_embeddings.json',
-                    'neural_state.json'
+                    'candle_embeddings.json'
                 ];
 
                 filesToDelete.forEach(file => {
@@ -146,12 +144,13 @@ async function runBacktest(runNumber) {
                 });
 
                 console.log(signal)
-                console.log(currentScore)
-                const newObj = {
-                    currentScore,
-                    signal
-                }
-                fs.appendFileSync('./scores.jsonl', `${JSON.stringify(newObj)}\n`)
+                process.exit()
+                // console.log(currentScore)
+                // const newObj = {
+                //     currentScore,
+                //     signal
+                // }
+                // fs.appendFileSync('./scores.jsonl', `${JSON.stringify(newObj)}\n`)
 
                 // if (currentScore > bestScore) {
                 //     console.log('Best score!:', currentScore)

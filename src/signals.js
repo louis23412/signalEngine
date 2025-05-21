@@ -415,21 +415,76 @@ class IndicatorProcessor {
   }
 }
 
+class MinHeap {
+  #heap = [];
+  #maxSize;
+  constructor(maxSize) {
+    this.#maxSize = maxSize;
+  }
+  push(item) {
+    this.#heap.push(item);
+    this.#siftUp(this.#heap.length - 1);
+    if (this.#heap.length > this.#maxSize) {
+      this.pop();
+    }
+  }
+  pop() {
+    if (this.#heap.length === 0) return null;
+    if (this.#heap.length === 1) return this.#heap.pop();
+    const min = this.#heap[0];
+    this.#heap[0] = this.#heap.pop();
+    this.#siftDown(0);
+    return min;
+  }
+  #siftUp(index) {
+    let parent = Math.floor((index - 1) / 2);
+    while (index > 0 && this.#heap[parent].score > this.#heap[index].score) {
+      [this.#heap[parent], this.#heap[index]] = [this.#heap[index], this.#heap[parent]];
+      index = parent;
+      parent = Math.floor((index - 1) / 2);
+    }
+  }
+  #siftDown(index) {
+    let minIndex = index;
+    const length = this.#heap.length;
+    while (true) {
+      const left = 2 * index + 1;
+      const right = 2 * index + 2;
+      if (left < length && this.#heap[left].score < this.#heap[minIndex].score) minIndex = left;
+      if (right < length && this.#heap[right].score < this.#heap[minIndex].score) minIndex = right;
+      if (minIndex === index) break;
+      [this.#heap[index], this.#heap[minIndex]] = [this.#heap[minIndex], this.#heap[index]];
+      index = minIndex;
+    }
+  }
+  get size() {
+    return this.#heap.length;
+  }
+  get items() {
+    return this.#heap.slice();
+  }
+}
+
 class NeuralSignalEngine {
   #transformer = new Transformer();
   #autoencoder = new AutoEncoder();
   #indicators = new IndicatorProcessor();
   #candles = [];
   #trades = [];
-  #openTrades = [];
+  #openTrades = new Map();
+  #candlesTimestamps = new Set();
+  #tradeMetadata = new Map();
+  #tradeBuckets = { sell: {}, stop: {} };
+  #patternScoreCache = new Map();
+  #bucketPriceRange = 10;
   #qTable = {};
   #maxCandles = 1000;
-  #maxTrades = 1000;
+  #maxTrades = 10000000;
   #patternBuckets = {};
-  #bucketSize = 200; // Max patterns per bucket
-  #maxBuckets = 1250; // Adjusted for 1M patterns (optional, was 100000)
+  #bucketSize = 200;
+  #maxBuckets = 10000;
   #totalPatterns = 0;
-  #maxPatterns = 250000; // Target capacity
+  #maxPatterns = 2000000;
   #state = {
     winRate: 0.5,
     tradeCount: 0,
@@ -454,7 +509,7 @@ class NeuralSignalEngine {
     atrFactor: 10,
     stopFactor: 2.5,
     learningRate: 0.25,
-    explorationRate: 0.33
+    explorationRate: 0.25
   };
   #longTermBuffer = [];
 
@@ -553,9 +608,13 @@ class NeuralSignalEngine {
   }
 
   #saveLearningState() {
+    const serializablePatternBuckets = {};
+    for (const [key, bucket] of Object.entries(this.#patternBuckets)) {
+      serializablePatternBuckets[key] = bucket.items;
+    }
     const state = {
       qTable: this.#qTable,
-      patternBuckets: this.#patternBuckets,
+      patternBuckets: serializablePatternBuckets,
       totalPatterns: this.#totalPatterns
     };
     try {
@@ -587,7 +646,7 @@ class NeuralSignalEngine {
             this.#totalPatterns += this.#patternBuckets[key].length;
           }
         }
-        // Ensure totalPatterns doesn't exceed maxPatterns
+
         if (this.#totalPatterns > this.#maxPatterns) {
           const keys = Object.keys(this.#patternBuckets);
           while (this.#totalPatterns > this.#maxPatterns && keys.length > 0) {
@@ -602,7 +661,8 @@ class NeuralSignalEngine {
 
   #saveOpenTrades() {
     try {
-      fs.writeFileSync(path.join(directoryPath, 'open_trades.json'), JSON.stringify(this.#openTrades), 'utf8');
+      const tradesArray = Array.from(this.#openTrades.values());
+      fs.writeFileSync(path.join(directoryPath, 'open_trades.json'), JSON.stringify(tradesArray), 'utf8');
     } catch {}
   }
 
@@ -610,7 +670,8 @@ class NeuralSignalEngine {
     try {
       const openTrades = JSON.parse(fs.readFileSync(path.join(directoryPath, 'open_trades.json'), 'utf8'));
       if (Array.isArray(openTrades)) {
-        this.#openTrades = openTrades
+        this.#openTrades = new Map();
+        openTrades
           .filter(trade => 
             isValidNumber(trade.timestamp) &&
             isValidNumber(trade.entryPrice) &&
@@ -624,9 +685,10 @@ class NeuralSignalEngine {
             isValidNumber(trade.dynamicThreshold) &&
             isValidNumber(trade.candlesHeld) && trade.candlesHeld >= 0
           )
-        this.#openTrades.forEach(trade => {
-          this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
-        });
+          .forEach(trade => {
+            this.#openTrades.set(trade.timestamp.toString(), trade);
+            this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
+          });
       }
     } catch {}
   }
@@ -664,6 +726,9 @@ class NeuralSignalEngine {
     this.#longTermBuffer.push(...embeddings.slice(-this.#maxCandles));
     this.#longTermBuffer = this.#longTermBuffer.slice(-this.#maxCandles);
     this.#candles = this.#candles.slice(-50);
+    for (const candle of toCompress) {
+      this.#candlesTimestamps.delete(candle.timestamp);
+    }
   }
 
   #extractFeatures(data) {
@@ -683,17 +748,25 @@ class NeuralSignalEngine {
 
   #scorePattern(features) {
     const key = this.#generateFeatureKey(features);
-    const bucket = this.#patternBuckets[key] || [];
-    if (bucket.length === 0) return 0;
+    if (this.#patternScoreCache.has(key)) {
+      return this.#patternScoreCache.get(key);
+    }
+    const bucket = this.#patternBuckets[key];
+    if (!bucket || bucket.size === 0) return 0;
     let totalScore = 0;
     let matchCount = 0;
-    for (const pattern of bucket) {
+    for (const pattern of bucket.items) {
       if (features.every((f, i) => isValidNumber(f) && isValidNumber(pattern.features[i]) && Math.abs(f - pattern.features[i]) < 0.1)) {
         totalScore += pattern.score;
         matchCount++;
       }
     }
-    return matchCount > 0 ? totalScore / matchCount : 0;
+    const score = matchCount > 0 ? totalScore / matchCount : 0;
+    this.#patternScoreCache.set(key, score);
+    if (this.#patternScoreCache.size > 10000) {
+      this.#patternScoreCache.delete(this.#patternScoreCache.keys().next().value);
+    }
+    return score;
   }
 
   #computeDynamicThreshold(data, confidence, baseThreshold = this.#config.baseConfidenceThreshold) {
@@ -715,7 +788,7 @@ class NeuralSignalEngine {
 
   #generateFeatureKey(features) {
     if (!Array.isArray(features) || features.length !== 6) return 'default';
-    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 10) / 10 : 0);
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 5) / 5 : 0);
     return quantized.join('|');
   }
 
@@ -730,25 +803,34 @@ class NeuralSignalEngine {
       isValidNumber(c.close) &&
       isValidNumber(c.volume) &&
       c.volume >= 0 &&
-      !this.#candles.some(existing => existing.timestamp === c.timestamp)
+      !this.#candlesTimestamps.has(c.timestamp)
     );
 
     if (newCandles.length === 0) return;
 
-    this.#openTrades = this.#openTrades.map(trade => ({
-      ...trade,
-      candlesHeld: trade.candlesHeld + newCandles.length
-    }));
+    const minLow = Math.min(...newCandles.map(c => isValidNumber(c.low) ? c.low : Infinity));
+    const maxHigh = Math.max(...newCandles.map(c => isValidNumber(c.high) ? c.high : -Infinity));
+    if (!isValidNumber(minLow) || !isValidNumber(maxHigh)) return;
 
     const closedTrades = [];
-    this.#openTrades = this.#openTrades.filter(trade => {
-      let isOpen = true;
+    const keysToDelete = new Set();
+
+    const sellBucketStart = Math.floor(minLow / this.#bucketPriceRange);
+    const stopBucketEnd = Math.ceil(maxHigh / this.#bucketPriceRange);
+    const tradeKeys = new Set();
+    for (let i = sellBucketStart; i <= stopBucketEnd; i++) {
+      if (this.#tradeBuckets.sell[i]) this.#tradeBuckets.sell[i].forEach(key => tradeKeys.add(key));
+      if (this.#tradeBuckets.stop[i]) this.#tradeBuckets.stop[i].forEach(key => tradeKeys.add(key));
+    }
+
+    for (const key of tradeKeys) {
+      const trade = this.#openTrades.get(key);
+      if (!trade) continue;
+      const { sellPrice, stopLoss, entryPrice, confidence, candlesHeld } = trade;
+      const metadata = this.#tradeMetadata.get(key);
+
       for (const candle of newCandles) {
         if (!candle || !isValidNumber(candle.high) || !isValidNumber(candle.low)) continue;
-
-        const entryPrice = trade.entryPrice;
-        const sellPrice = trade.sellPrice;
-        const stopLoss = trade.stopLoss;
 
         if (candle.high >= sellPrice) {
           const outcome = (sellPrice - entryPrice) / entryPrice;
@@ -756,17 +838,17 @@ class NeuralSignalEngine {
             timestamp: Date.now(),
             entryPrice,
             exitPrice: sellPrice,
-            confidence: trade.confidence,
+            confidence,
             outcome: Math.min(Math.max(outcome, -1), 1),
-            reward: outcome * (trade.confidence / 100),
-            strategy: trade.strategy,
-            patternScore: trade.patternScore,
-            candlesHeld: trade.candlesHeld,
-            features: trade.features,
-            stateKey: trade.stateKey,
-            dynamicThreshold: trade.dynamicThreshold
+            reward: outcome * (confidence / 100),
+            strategy: metadata.strategy,
+            patternScore: metadata.patternScore,
+            candlesHeld: candlesHeld + newCandles.length,
+            features: metadata.features,
+            stateKey: metadata.stateKey,
+            dynamicThreshold: metadata.dynamicThreshold
           });
-          isOpen = false;
+          keysToDelete.add(key);
           break;
         } else if (candle.low <= stopLoss) {
           const outcome = (stopLoss - entryPrice) / entryPrice;
@@ -774,82 +856,92 @@ class NeuralSignalEngine {
             timestamp: Date.now(),
             entryPrice,
             exitPrice: stopLoss,
-            confidence: trade.confidence,
+            confidence,
             outcome: Math.min(Math.max(outcome, -1), 1),
-            reward: outcome * (trade.confidence / 100),
-            strategy: trade.strategy,
-            patternScore: trade.patternScore,
-            candlesHeld: trade.candlesHeld,
-            features: trade.features,
-            stateKey: trade.stateKey,
-            dynamicThreshold: trade.dynamicThreshold
+            reward: outcome * (confidence / 100),
+            strategy: metadata.strategy,
+            patternScore: metadata.patternScore,
+            candlesHeld: candlesHeld + newCandles.length,
+            features: metadata.features,
+            stateKey: metadata.stateKey,
+            dynamicThreshold: metadata.dynamicThreshold
           });
-          isOpen = false;
+          keysToDelete.add(key);
           break;
         }
       }
-      return isOpen;
-    });
+    }
 
-    for (const trade of closedTrades) {
-      this.#trades.push(trade);
+    for (const key of keysToDelete) {
+      const trade = this.#openTrades.get(key);
+      if (trade) {
+        const sellBucket = Math.floor(trade.sellPrice / this.#bucketPriceRange);
+        const stopBucket = Math.floor(trade.stopLoss / this.#bucketPriceRange);
+        if (this.#tradeBuckets.sell[sellBucket]) this.#tradeBuckets.sell[sellBucket].delete(key);
+        if (this.#tradeBuckets.stop[stopBucket]) this.#tradeBuckets.stop[stopBucket].delete(key);
+        this.#openTrades.delete(key);
+        this.#tradeMetadata.delete(key);
+      }
+    }
+
+    if (closedTrades.length > 0) {
+      this.#trades.push(...closedTrades);
       this.#trades = this.#trades.slice(-this.#maxTrades);
 
-      const pattern = { features: trade.features, score: trade.reward };
-      const key = this.#generateFeatureKey(trade.features);
-      this.#patternBuckets[key] = this.#patternBuckets[key] || [];
-
-      if (this.#patternBuckets[key].length < this.#bucketSize) {
+      for (const trade of closedTrades) {
+        const pattern = { features: trade.features, score: trade.reward };
+        const key = this.#generateFeatureKey(trade.features);
+        if (!this.#patternBuckets[key]) {
+          this.#patternBuckets[key] = new MinHeap(this.#bucketSize);
+        }
         this.#patternBuckets[key].push(pattern);
-        this.#totalPatterns++;
-      } else {
-        // Replace the lowest-scoring pattern in the bucket if new score is higher
-        const minIndex = this.#patternBuckets[key].reduce((minIdx, p, idx) => p.score < this.#patternBuckets[key][minIdx].score ? idx : minIdx, 0);
-        if (pattern.score > this.#patternBuckets[key][minIndex].score) {
-          this.#patternBuckets[key][minIndex] = pattern;
-        }
+        this.#totalPatterns = Math.min(this.#totalPatterns + 1, this.#maxPatterns);
+
+        this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
+        this.#qTable[trade.stateKey].buy += this.#config.learningRate * (trade.reward - this.#qTable[trade.stateKey].buy);
+        
+        this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
+        this.#autoencoder.train(trade.features);
       }
 
-      // Evict buckets if total patterns exceed maxPatterns
-      // In #updateOpenTrades, replace the eviction logic (lines around 614-620 in your file)
-      // Evict buckets if total patterns exceed maxPatterns
-      if (this.#totalPatterns > this.#maxPatterns) {
-        const keys = Object.keys(this.#patternBuckets);
-        if (keys.length > this.#maxBuckets) {
-          // Find the bucket with the lowest average score
-          let lowestAvgScore = Infinity;
-          let keyToRemove = null;
-          for (const key of keys) {
-            const bucket = this.#patternBuckets[key];
-            const avgScore = bucket.length > 0 ? bucket.reduce((sum, p) => sum + p.score, 0) / bucket.length : 0;
-            if (avgScore < lowestAvgScore) {
-              lowestAvgScore = avgScore;
-              keyToRemove = key;
-            }
-          }
-          if (keyToRemove) {
-            this.#totalPatterns -= this.#patternBuckets[keyToRemove].length;
-            delete this.#patternBuckets[keyToRemove];
-          }
-        }
+      if (this.#state.tradeCount % 1000 === 0) {
+        this.#prunePatternBuckets();
       }
 
-      this.#state.tradeCount++;
-      this.#state.winRate = this.#trades.length > 0 ? this.#trades.filter(t => t.outcome > 0).length / this.#trades.length : 0.5;
-      this.#state.avgReward = this.#trades.length > 0 ? this.#trades.reduce((sum, t) => sum + t.reward, 0) / this.#trades.length : 0;
-      this.#state.signalReliability = this.#trades.length > 0 ? this.#trades.filter(t => t.confidence > trade.dynamicThreshold && t.outcome > 0).length / this.#trades.length : 0.5;
-      this.#lifetimeState.totalTrades++;
-      if (trade.outcome > 0) this.#lifetimeState.totalWins++;
+      this.#state.tradeCount += closedTrades.length;
+      const wins = closedTrades.filter(t => t.outcome > 0).length;
+      const totalReward = closedTrades.reduce((sum, t) => sum + t.reward, 0);
+      const reliableSignals = closedTrades.filter(t => t.confidence > t.dynamicThreshold && t.outcome > 0).length;
+      this.#state.winRate = (this.#state.winRate * this.#trades.length + wins) / (this.#trades.length + closedTrades.length) || 0.5;
+      this.#state.avgReward = (this.#state.avgReward * this.#trades.length + totalReward) / (this.#trades.length + closedTrades.length) || 0;
+      this.#state.signalReliability = (this.#state.signalReliability * this.#trades.length + reliableSignals) / (this.#trades.length + closedTrades.length) || 0.5;
+      this.#lifetimeState.totalTrades += closedTrades.length;
+      this.#lifetimeState.totalWins += wins;
       this.#lifetimeState.totalAccuracy = this.#lifetimeState.totalTrades > 0 ? (this.#lifetimeState.totalWins / this.#lifetimeState.totalTrades) * 100 : 50;
       this.#performanceBaseline.avgWinRate = (this.#performanceBaseline.avgWinRate * 0.9 + this.#state.winRate * 0.1);
       this.#performanceBaseline.avgReward = (this.#performanceBaseline.avgReward * 0.9 + this.#state.avgReward * 0.1);
-      this.#performanceBaseline.avgConfidence = (this.#performanceBaseline.avgConfidence * 0.9 + trade.confidence * 0.1);
-      
-      this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
-      this.#qTable[trade.stateKey].buy += this.#config.learningRate * (trade.reward - this.#qTable[trade.stateKey].buy);
-      
-      this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
-      this.#autoencoder.train(trade.features);
+      this.#performanceBaseline.avgConfidence = (this.#performanceBaseline.avgConfidence * 0.9 + (closedTrades.reduce((sum, t) => sum + t.confidence, 0) / closedTrades.length || 0) * 0.1);
+    }
+  }
+
+  #prunePatternBuckets() {
+    if (this.#totalPatterns <= this.#maxPatterns || Object.keys(this.#patternBuckets).length <= this.#maxBuckets) return;
+
+    let lowestAvgScore = Infinity;
+    let keyToRemove = null;
+    for (const key of Object.keys(this.#patternBuckets)) {
+      const bucket = this.#patternBuckets[key];
+      const items = bucket.items;
+      const avgScore = items.length > 0 ? items.reduce((sum, p) => sum + p.score, 0) / items.length : 0;
+      if (avgScore < lowestAvgScore) {
+        lowestAvgScore = avgScore;
+        keyToRemove = key;
+      }
+    }
+    if (keyToRemove) {
+      this.#totalPatterns -= this.#patternBuckets[keyToRemove].size;
+      delete this.#patternBuckets[keyToRemove];
+      this.#patternScoreCache.delete(keyToRemove);
     }
   }
 
@@ -870,18 +962,21 @@ class NeuralSignalEngine {
       isValidNumber(c.close) &&
       isValidNumber(c.volume) &&
       c.volume >= 0 &&
-      !this.#candles.some(existing => existing.timestamp === c.timestamp)
+      !this.#candlesTimestamps.has(c.timestamp)
     );
+
     if (newCandles.length === 0 && this.#candles.length === 0) {
-      return {
-        error : 'Invalid candle array type or length'
-      };
+      return { error: 'Invalid candle array type or length' };
     }
 
     this.#candles.push(...newCandles);
+    for (const candle of newCandles) {
+      this.#candlesTimestamps.add(candle.timestamp);
+    }
     this.#candles = this.#candles.slice(-this.#maxCandles);
+
     this.#compressCandles();
-    const indicators = this.#indicators.compute(this.#candles);
+    const indicators = this.#indicators.compute(this.#candles.slice(-100));
     if (indicators.error) {
       return {
         error : 'Indicators error'
@@ -907,30 +1002,42 @@ class NeuralSignalEngine {
     const stateKey = JSON.stringify(features.map(f => isValidNumber(f) ? Math.round(f * 10) / 10 : 0));
     this.#qTable[stateKey] = this.#qTable[stateKey] || { buy: 0, hold: 0 };
 
-    const baseRate = this.#config.explorationRate;
-    const decayFactor = 1 - Math.min(this.#lifetimeState.totalTrades / 25000, 1);
-    const effectiveExplorationRate = Math.max(baseRate * decayFactor, baseRate * 0.1);
+    // const baseRate = this.#config.explorationRate;
+    // const decayFactor = 1 - Math.min(this.#lifetimeState.totalTrades / 25000, 1);
+    // const effectiveExplorationRate = Math.max(baseRate * decayFactor, baseRate * 0.1);
 
-    const action = Math.random() < effectiveExplorationRate
-      ? (Math.random() < 0.5 ? 'buy' : 'hold')
-      : this.#qTable[stateKey].buy > this.#qTable[stateKey].hold ? 'buy' : 'hold';
+    // const action = Math.random() < effectiveExplorationRate
+    //   ? (Math.random() < 0.5 ? 'buy' : 'hold')
+    //   : this.#qTable[stateKey].buy > this.#qTable[stateKey].hold ? 'buy' : 'hold';
+    const action = 'buy'
 
-    if (action === 'buy' && confidence >= dynamicThreshold && this.#candles.length > 1) {
+    /* && confidence >= dynamicThreshold && this.#candles.length > 1 */
+
+    if (action === 'buy') {
       const entryPrice = indicators.lastClose;
+      const key = Date.now().toString();
       const trade = {
-        timestamp: Date.now(),
-        entryPrice,
         sellPrice: truncateToDecimals(sellPrice, 2),
         stopLoss: truncateToDecimals(stopLoss, 2),
+        entryPrice,
         confidence,
+        candlesHeld: 0
+      };
+      this.#openTrades.set(key, trade);
+      this.#tradeMetadata.set(key, {
         strategy: action,
         patternScore,
         features,
         stateKey,
-        dynamicThreshold,
-        candlesHeld: 0
-      };
-      this.#openTrades.push(trade);
+        dynamicThreshold
+      });
+
+      const sellBucket = Math.floor(sellPrice / this.#bucketPriceRange);
+      const stopBucket = Math.floor(stopLoss / this.#bucketPriceRange);
+      this.#tradeBuckets.sell[sellBucket] = this.#tradeBuckets.sell[sellBucket] || new Set();
+      this.#tradeBuckets.stop[stopBucket] = this.#tradeBuckets.stop[stopBucket] || new Set();
+      this.#tradeBuckets.sell[sellBucket].add(key);
+      this.#tradeBuckets.stop[stopBucket].add(key);
     }
 
     this.#state.lastUpdate = Date.now();
