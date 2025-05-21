@@ -640,18 +640,20 @@ class NeuralSignalEngine {
         this.#totalPatterns = 0;
         for (const [key, bucket] of Object.entries(state.patternBuckets)) {
           if (Array.isArray(bucket)) {
-            this.#patternBuckets[key] = bucket
+            const heap = new MinHeap(this.#bucketSize);
+            const validPatterns = bucket
               .filter(p => Array.isArray(p.features) && p.features.every(isValidNumber) && isValidNumber(p.score))
               .slice(0, this.#bucketSize);
-            this.#totalPatterns += this.#patternBuckets[key].length;
+            validPatterns.forEach(pattern => heap.push(pattern));
+            this.#patternBuckets[key] = heap;
+            this.#totalPatterns += validPatterns.length;
           }
         }
-
         if (this.#totalPatterns > this.#maxPatterns) {
           const keys = Object.keys(this.#patternBuckets);
           while (this.#totalPatterns > this.#maxPatterns && keys.length > 0) {
             const key = keys.pop();
-            this.#totalPatterns -= this.#patternBuckets[key].length;
+            this.#totalPatterns -= this.#patternBuckets[key].size;
             delete this.#patternBuckets[key];
           }
         }
