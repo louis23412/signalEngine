@@ -481,8 +481,8 @@ class NeuralSignalEngine {
   #maxCandles = 1000;
   #maxTrades = 10000000;
   #patternBuckets = {};
-  #bucketSize = 200;
-  #maxBuckets = 10000;
+  #bucketSize = 20000000;
+  #maxBuckets = 2000000;
   #totalPatterns = 0;
   #maxPatterns = 2000000;
   #state = {
@@ -790,7 +790,7 @@ class NeuralSignalEngine {
 
   #generateFeatureKey(features) {
     if (!Array.isArray(features) || features.length !== 6) return 'default';
-    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 5) / 5 : 0);
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000000000000000) / 1000000000000000 : 0);
     return quantized.join('|');
   }
 

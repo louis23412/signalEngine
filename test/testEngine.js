@@ -97,6 +97,12 @@ async function runBacktest(runNumber) {
                 batchBuffer.push(candleObj);
                 totalCandles++;
 
+                // if (totalCandles === 100000) {
+                //     engine.dumpState()
+                //     console.log(signal)
+                //     process.exit()
+                // }
+
                 if (batchBuffer.length >= batchSize && cache.length >= minCacheSize) {
                     try {
                         signal = engine.getSignalsAndHealth(cache.getArray(), false);
