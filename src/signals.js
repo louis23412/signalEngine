@@ -554,7 +554,6 @@ class NeuralSignalEngine {
   #saveState(force = false) {
     let filesSaved = 0;
     try {
-      fs.mkdirSync(directoryPath, { recursive: true });
       if (force || this.#stateChanged.lifetimeState) {
         this.#saveCompressedFile(path.join(directoryPath, 'lifetime_state.json'), this.#lifetimeState);
         filesSaved++;
