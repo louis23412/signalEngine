@@ -737,7 +737,7 @@ class NeuralSignalEngine {
 
   #generateFeatureKey(features) {
     if (!Array.isArray(features) || features.length !== 6) return 'default';
-    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000000000000000) / 1000000000000000 : 0);
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000000) / 1000000 : 0);
     return quantized.join('|');
   }
 
