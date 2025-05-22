@@ -105,7 +105,8 @@ async function runBacktest(runNumber) {
 
                 if (batchBuffer.length >= batchSize && cache.length >= minCacheSize) {
                     try {
-                        signal = engine.getSignalsAndHealth(cache.getArray(), false);
+                        signal = engine.getSignalsAndHealth(cache.getArray(), true);
+                        console.log(signal)
                         currentScore = calculateScore(signal.totalAccuracy, signal.performanceWinRate, signal.performanceAvgReward, signal.totalTrades)
                     } catch (e) {
                         console.error(`Error in getSignalsAndHealth (Run ${runNumber}):`, e);
@@ -131,23 +132,23 @@ async function runBacktest(runNumber) {
                 engine.dumpState();
 
                 // Delete specific files in stateDir, preserving learning_state.json and neural_state.json
-                const filesToDelete = [
-                    'lifetime_state.json',
-                    'performance_summary.json',
-                    'candle_embeddings.json'
-                ];
+                // const filesToDelete = [
+                //     'lifetime_state.json',
+                //     'performance_summary.json',
+                //     'candle_embeddings.json'
+                // ];
 
-                filesToDelete.forEach(file => {
-                    const filePath = path.join(stateDir, file);
-                    try {
-                        if (fs.existsSync(filePath)) {
-                            fs.unlinkSync(filePath);
-                            console.log(`Deleted ${file}`);
-                        }
-                    } catch (err) {
-                        console.error(`Error deleting ${file}: ${err}`);
-                    }
-                });
+                // filesToDelete.forEach(file => {
+                //     const filePath = path.join(stateDir, file);
+                //     try {
+                //         if (fs.existsSync(filePath)) {
+                //             fs.unlinkSync(filePath);
+                //             console.log(`Deleted ${file}`);
+                //         }
+                //     } catch (err) {
+                //         console.error(`Error deleting ${file}: ${err}`);
+                //     }
+                // });
 
                 console.log(signal)
                 process.exit()

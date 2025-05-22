@@ -1,5 +1,6 @@
-import fs from 'fs';
+import fs, { stat } from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 
 const directoryPath = path.join(import.meta.dirname, '..', 'state')
 
@@ -512,57 +513,112 @@ class NeuralSignalEngine {
     explorationRate: 0.25
   };
   #longTermBuffer = [];
+  #stateChanged = {
+    lifetimeState: false,
+    performanceBaseline: false,
+    neuralState: false,
+    learningState: false,
+    openTrades: false,
+    candleEmbeddings: false
+  };
 
   constructor() {
     this.#loadState();
   }
 
+  #saveCompressedFile(filePath, data) {
+    try {
+      const jsonString = JSON.stringify(data);
+      const compressed = zlib.brotliCompressSync(jsonString, {
+        params: {
+          [zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY
+        }
+      });
+      fs.writeFileSync(filePath, compressed);
+    } catch (error) {
+    }
+  }
+
+  #loadCompressedFile(filePath) {
+    try {
+      const compressed = fs.readFileSync(filePath);
+      const decompressed = zlib.brotliDecompressSync(compressed);
+      return JSON.parse(decompressed.toString('utf8'));
+    } catch (error) {
+      return null;
+    }
+  }
+
   #loadState() {
-    try {
-      const state = JSON.parse(fs.readFileSync(path.join(directoryPath, 'lifetime_state.json'), 'utf8'));
-      if (
-        isValidNumber(state.totalTrades) &&
-        state.totalTrades >= 0 &&
-        isValidNumber(state.totalWins) &&
-        state.totalWins >= 0 &&
-        state.totalWins <= state.totalTrades &&
-        isValidNumber(state.totalAccuracy) &&
-        state.totalAccuracy >= 0 &&
-        state.totalAccuracy <= 100
-      ) {
-        this.#lifetimeState.totalTrades = state.totalTrades;
-        this.#lifetimeState.totalWins = state.totalWins;
-        this.#lifetimeState.totalAccuracy = state.totalAccuracy;
-      }
-    } catch {}
-    try {
-      const baseline = JSON.parse(fs.readFileSync(path.join(directoryPath, 'performance_summary.json'), 'utf8'));
-      if (
-        isValidNumber(baseline.avgWinRate) &&
-        isValidNumber(baseline.avgReward) &&
-        isValidNumber(baseline.avgConfidence)
-      ) {
-        this.#performanceBaseline.avgWinRate = baseline.avgWinRate;
-        this.#performanceBaseline.avgReward = baseline.avgReward;
-        this.#performanceBaseline.avgConfidence = baseline.avgConfidence;
-      }
-    } catch {}
+    const state = this.#loadCompressedFile(path.join(directoryPath, 'lifetime_state.json'));
+    if (
+      state &&
+      isValidNumber(state.totalTrades) &&
+      state.totalTrades >= 0 &&
+      isValidNumber(state.totalWins) &&
+      state.totalWins >= 0 &&
+      state.totalWins <= state.totalTrades &&
+      isValidNumber(state.totalAccuracy) &&
+      state.totalAccuracy >= 0 &&
+      state.totalAccuracy <= 100
+    ) {
+      this.#lifetimeState.totalTrades = state.totalTrades;
+      this.#lifetimeState.totalWins = state.totalWins;
+      this.#lifetimeState.totalAccuracy = state.totalAccuracy;
+    }
+
+    const baseline = this.#loadCompressedFile(path.join(directoryPath, 'performance_summary.json'));
+    if (
+      baseline &&
+      isValidNumber(baseline.avgWinRate) &&
+      isValidNumber(baseline.avgReward) &&
+      isValidNumber(baseline.avgConfidence)
+    ) {
+      this.#performanceBaseline.avgWinRate = baseline.avgWinRate;
+      this.#performanceBaseline.avgReward = baseline.avgReward;
+      this.#performanceBaseline.avgConfidence = baseline.avgConfidence;
+    }
+
     this.#loadNeuralState();
     this.#loadLearningState();
     this.#loadOpenTrades();
     this.#loadCandleEmbeddings();
   }
 
-  #saveState() {
+  #saveState(force = false) {
+    let filesSaved = 0
     try {
       fs.mkdirSync(directoryPath, { recursive: true });
-      fs.writeFileSync(path.join(directoryPath, 'lifetime_state.json'), JSON.stringify(this.#lifetimeState), 'utf8');
-      fs.writeFileSync(path.join(directoryPath, 'performance_summary.json'), JSON.stringify(this.#performanceBaseline), 'utf8');
-      this.#saveNeuralState();
-      this.#saveLearningState();
-      this.#saveOpenTrades();
-      this.#saveCandleEmbeddings();
-    } catch {}
+      if (force || this.#stateChanged.lifetimeState) {
+        this.#saveCompressedFile(path.join(directoryPath, 'lifetime_state.json'), this.#lifetimeState);
+        filesSaved++
+      }
+      if (force || this.#stateChanged.performanceBaseline) {
+        this.#saveCompressedFile(path.join(directoryPath, 'performance_summary.json'), this.#performanceBaseline);
+        filesSaved++
+      }
+      if (force || this.#stateChanged.neuralState) {
+        this.#saveNeuralState();
+        filesSaved++
+      }
+      if (force || this.#stateChanged.learningState) {
+        this.#saveLearningState();
+        filesSaved++
+      }
+      if (force || this.#stateChanged.openTrades) {
+        this.#saveOpenTrades();
+        filesSaved++
+      }
+      if (force || this.#stateChanged.candleEmbeddings) {
+        this.#saveCandleEmbeddings();
+        filesSaved++
+      }
+
+      console.log(`Files saved : ${filesSaved} / 6`)
+    } catch (error) {
+      // Handle errors silently as in original
+      console.log(error)
+    }
   }
 
   #saveNeuralState() {
@@ -584,27 +640,25 @@ class NeuralSignalEngine {
         biasOut: this.#transformer.getBiasOut()
       }
     };
-    try {
-      fs.writeFileSync(path.join(directoryPath, 'neural_state.json'), JSON.stringify(state), 'utf8');
-    } catch {}
+    this.#saveCompressedFile(path.join(directoryPath, 'neural_state.json'), state);
   }
 
   #loadNeuralState() {
-    try {
-      const state = JSON.parse(fs.readFileSync(path.join(directoryPath, 'neural_state.json'), 'utf8'));
-      this.#autoencoder.setWeightsEncode(state.autoEncoder.weightsEncode);
-      this.#autoencoder.setWeightsDecode(state.autoEncoder.weightsDecode);
-      this.#autoencoder.setBiasEncode(state.autoEncoder.biasEncode);
-      this.#autoencoder.setBiasDecode(state.autoEncoder.biasDecode);
-      this.#transformer.setWeightsQ(state.transformer.weightsQ);
-      this.#transformer.setWeightsK(state.transformer.weightsK);
-      this.#transformer.setWeightsV(state.transformer.weightsV);
-      this.#transformer.setWeightsOut(state.transformer.weightsOut);
-      this.#transformer.setBiasQ(state.transformer.biasQ);
-      this.#transformer.setBiasK(state.transformer.biasK);
-      this.#transformer.setBiasV(state.transformer.biasV);
-      this.#transformer.setBiasOut(state.transformer.biasOut);
-    } catch {}
+    const state = this.#loadCompressedFile(path.join(directoryPath, 'neural_state.json'));
+    if (state) {
+      this.#autoencoder.setWeightsEncode(state.autoEncoder?.weightsEncode);
+      this.#autoencoder.setWeightsDecode(state.autoEncoder?.weightsDecode);
+      this.#autoencoder.setBiasEncode(state.autoEncoder?.biasEncode);
+      this.#autoencoder.setBiasDecode(state.autoEncoder?.biasDecode);
+      this.#transformer.setWeightsQ(state.transformer?.weightsQ);
+      this.#transformer.setWeightsK(state.transformer?.weightsK);
+      this.#transformer.setWeightsV(state.transformer?.weightsV);
+      this.#transformer.setWeightsOut(state.transformer?.weightsOut);
+      this.#transformer.setBiasQ(state.transformer?.biasQ);
+      this.#transformer.setBiasK(state.transformer?.biasK);
+      this.#transformer.setBiasV(state.transformer?.biasV);
+      this.#transformer.setBiasOut(state.transformer?.biasOut);
+    }
   }
 
   #saveLearningState() {
@@ -617,100 +671,88 @@ class NeuralSignalEngine {
       patternBuckets: serializablePatternBuckets,
       totalPatterns: this.#totalPatterns
     };
-    try {
-      fs.writeFileSync(path.join(directoryPath, 'learning_state.json'), JSON.stringify(state), 'utf8');
-    } catch {}
+    this.#saveCompressedFile(path.join(directoryPath, 'learning_state.json'), state);
   }
 
   #loadLearningState() {
-    try {
-      const state = JSON.parse(fs.readFileSync(path.join(directoryPath, 'learning_state.json'), 'utf8'));
-      if (typeof state.qTable === 'object' && typeof state.patternBuckets === 'object' && isValidNumber(state.totalPatterns)) {
-        this.#qTable = {};
-        for (const [key, value] of Object.entries(state.qTable)) {
-          if (
-            value &&
-            isValidNumber(value.buy) &&
-            isValidNumber(value.hold)
-          ) {
-            this.#qTable[key] = { buy: value.buy, hold: value.hold };
-          }
-        }
-        this.#patternBuckets = {};
-        this.#totalPatterns = 0;
-        for (const [key, bucket] of Object.entries(state.patternBuckets)) {
-          if (Array.isArray(bucket)) {
-            const heap = new MinHeap(this.#bucketSize);
-            const validPatterns = bucket
-              .filter(p => Array.isArray(p.features) && p.features.every(isValidNumber) && isValidNumber(p.score))
-              .slice(0, this.#bucketSize);
-            validPatterns.forEach(pattern => heap.push(pattern));
-            this.#patternBuckets[key] = heap;
-            this.#totalPatterns += validPatterns.length;
-          }
-        }
-        if (this.#totalPatterns > this.#maxPatterns) {
-          const keys = Object.keys(this.#patternBuckets);
-          while (this.#totalPatterns > this.#maxPatterns && keys.length > 0) {
-            const key = keys.pop();
-            this.#totalPatterns -= this.#patternBuckets[key].size;
-            delete this.#patternBuckets[key];
-          }
+    const state = this.#loadCompressedFile(path.join(directoryPath, 'learning_state.json'));
+    if (state && typeof state.qTable === 'object' && typeof state.patternBuckets === 'object' && isValidNumber(state.totalPatterns)) {
+      this.#qTable = {};
+      for (const [key, value] of Object.entries(state.qTable)) {
+        if (
+          value &&
+          isValidNumber(value.buy) &&
+          isValidNumber(value.hold)
+        ) {
+          this.#qTable[key] = { buy: value.buy, hold: value.hold };
         }
       }
-    } catch {}
+      this.#patternBuckets = {};
+      this.#totalPatterns = 0;
+      for (const [key, bucket] of Object.entries(state.patternBuckets)) {
+        if (Array.isArray(bucket)) {
+          const heap = new MinHeap(this.#bucketSize);
+          const validPatterns = bucket
+            .filter(p => Array.isArray(p.features) && p.features.every(isValidNumber) && isValidNumber(p.score))
+            .slice(0, this.#bucketSize);
+          validPatterns.forEach(pattern => heap.push(pattern));
+          this.#patternBuckets[key] = heap;
+          this.#totalPatterns += validPatterns.length;
+        }
+      }
+      if (this.#totalPatterns > this.#maxPatterns) {
+        const keys = Object.keys(this.#patternBuckets);
+        while (this.#totalPatterns > this.#maxPatterns && keys.length > 0) {
+          const key = keys.pop();
+          this.#totalPatterns -= this.#patternBuckets[key].size;
+          delete this.#patternBuckets[key];
+        }
+      }
+    }
   }
 
   #saveOpenTrades() {
-    try {
-      const tradesArray = Array.from(this.#openTrades.values());
-      fs.writeFileSync(path.join(directoryPath, 'open_trades.json'), JSON.stringify(tradesArray), 'utf8');
-    } catch {}
+    const tradesArray = Array.from(this.#openTrades.values());
+    this.#saveCompressedFile(path.join(directoryPath, 'open_trades.json'), tradesArray);
   }
 
   #loadOpenTrades() {
-    try {
-      const openTrades = JSON.parse(fs.readFileSync(path.join(directoryPath, 'open_trades.json'), 'utf8'));
-      if (Array.isArray(openTrades)) {
-        this.#openTrades = new Map();
-        openTrades
-          .filter(trade => 
-            isValidNumber(trade.timestamp) &&
-            isValidNumber(trade.entryPrice) &&
-            isValidNumber(trade.sellPrice) &&
-            isValidNumber(trade.stopLoss) &&
-            isValidNumber(trade.confidence) &&
-            typeof trade.strategy === 'string' &&
-            isValidNumber(trade.patternScore) &&
-            Array.isArray(trade.features) && trade.features.length === 6 && trade.features.every(isValidNumber) &&
-            typeof trade.stateKey === 'string' &&
-            isValidNumber(trade.dynamicThreshold) &&
-            isValidNumber(trade.candlesHeld) && trade.candlesHeld >= 0
-          )
-          .forEach(trade => {
-            this.#openTrades.set(trade.timestamp.toString(), trade);
-            this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
-          });
-      }
-    } catch {}
+    const openTrades = this.#loadCompressedFile(path.join(directoryPath, 'open_trades.json'));
+    if (Array.isArray(openTrades)) {
+      this.#openTrades = new Map();
+      openTrades
+        .filter(trade => 
+          isValidNumber(trade.timestamp) &&
+          isValidNumber(trade.entryPrice) &&
+          isValidNumber(trade.sellPrice) &&
+          isValidNumber(trade.stopLoss) &&
+          isValidNumber(trade.confidence) &&
+          typeof trade.strategy === 'string' &&
+          isValidNumber(trade.patternScore) &&
+          Array.isArray(trade.features) && trade.features.length === 6 && trade.features.every(isValidNumber) &&
+          typeof trade.stateKey === 'string' &&
+          isValidNumber(trade.dynamicThreshold) &&
+          isValidNumber(trade.candlesHeld) && trade.candlesHeld >= 0
+        )
+        .forEach(trade => {
+          this.#openTrades.set(trade.timestamp.toString(), trade);
+          this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
+        });
+    }
   }
 
   #saveCandleEmbeddings() {
     const state = { longTermBuffer: this.#longTermBuffer.slice(-this.#maxCandles / 2) };
-    try {
-      fs.writeFileSync(path.join(directoryPath, 'candle_embeddings.json'), JSON.stringify(state), 'utf8');
-    } catch {}
+    this.#saveCompressedFile(path.join(directoryPath, 'candle_embeddings.json'), state);
   }
 
   #loadCandleEmbeddings() {
-    try {
-      const state = JSON.parse(fs.readFileSync(path.join(directoryPath, 'candle_embeddings.json'), 'utf8'));
-      if (Array.isArray(state.longTermBuffer)) {
-        this.#longTermBuffer = state.longTermBuffer
-          .filter(embedding => Array.isArray(embedding) && embedding.every(isValidNumber))
-          .slice(-this.#maxCandles);
-      }
-    } catch {}
+    const state = this.#loadCompressedFile(path.join(directoryPath, 'candle_embeddings.json'));
+    if (state && Array.isArray(state.longTermBuffer)) {
+      this.#longTermBuffer = state.longTermBuffer
+        .filter(embedding => Array.isArray(embedding) && embedding.every(isValidNumber))
+        .slice(-this.#maxCandles);
+    }
   }
 
   #compressCandles() {
@@ -731,6 +773,7 @@ class NeuralSignalEngine {
     for (const candle of toCompress) {
       this.#candlesTimestamps.delete(candle.timestamp);
     }
+    this.#stateChanged.candleEmbeddings = true; // Flag candle embeddings as changed
   }
 
   #extractFeatures(data) {
@@ -883,6 +926,7 @@ class NeuralSignalEngine {
         if (this.#tradeBuckets.stop[stopBucket]) this.#tradeBuckets.stop[stopBucket].delete(key);
         this.#openTrades.delete(key);
         this.#tradeMetadata.delete(key);
+        this.#stateChanged.openTrades = true; // Flag open trades as changed
       }
     }
 
@@ -904,6 +948,8 @@ class NeuralSignalEngine {
         
         this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
         this.#autoencoder.train(trade.features);
+        this.#stateChanged.learningState = true; // Flag learning state as changed
+        this.#stateChanged.neuralState = true; // Flag neural state as changed
       }
 
       if (this.#state.tradeCount % 1000 === 0) {
@@ -923,6 +969,8 @@ class NeuralSignalEngine {
       this.#performanceBaseline.avgWinRate = (this.#performanceBaseline.avgWinRate * 0.9 + this.#state.winRate * 0.1);
       this.#performanceBaseline.avgReward = (this.#performanceBaseline.avgReward * 0.9 + this.#state.avgReward * 0.1);
       this.#performanceBaseline.avgConfidence = (this.#performanceBaseline.avgConfidence * 0.9 + (closedTrades.reduce((sum, t) => sum + t.confidence, 0) / closedTrades.length || 0) * 0.1);
+      this.#stateChanged.lifetimeState = true; // Flag lifetime state as changed
+      this.#stateChanged.performanceBaseline = true; // Flag performance baseline as changed
     }
   }
 
@@ -950,7 +998,7 @@ class NeuralSignalEngine {
   getSignalsAndHealth(candles, saveState = true) {
     if (!Array.isArray(candles) || candles.length === 0) {
       return {
-        error : 'Invalid candle array type or length'
+        error: 'Invalid candle array type or length'
       };
     }
 
@@ -974,6 +1022,7 @@ class NeuralSignalEngine {
     this.#candles.push(...newCandles);
     for (const candle of newCandles) {
       this.#candlesTimestamps.add(candle.timestamp);
+      this.#stateChanged.candleEmbeddings = true; // Flag candle embeddings as changed
     }
     this.#candles = this.#candles.slice(-this.#maxCandles);
 
@@ -981,7 +1030,7 @@ class NeuralSignalEngine {
     const indicators = this.#indicators.compute(this.#candles.slice(-100));
     if (indicators.error) {
       return {
-        error : 'Indicators error'
+        error: 'Indicators error'
       };
     }
 
@@ -1004,18 +1053,20 @@ class NeuralSignalEngine {
     const stateKey = JSON.stringify(features.map(f => isValidNumber(f) ? Math.round(f * 10) / 10 : 0));
     this.#qTable[stateKey] = this.#qTable[stateKey] || { buy: 0, hold: 0 };
 
+    // DONT REMOVE THESE COMMENTS!
+    
     // const baseRate = this.#config.explorationRate;
     // const decayFactor = 1 - Math.min(this.#lifetimeState.totalTrades / 25000, 1);
     // const effectiveExplorationRate = Math.max(baseRate * decayFactor, baseRate * 0.1);
 
     // const action = Math.random() < effectiveExplorationRate
     //   ? (Math.random() < 0.5 ? 'buy' : 'hold')
-    //   : this.#qTable[stateKey].buy > this.#qTable[stateKey].hold ? 'buy' : 'hold';
-    const action = 'buy'
+    //   : ;
+    const action = this.#qTable[stateKey].buy > this.#qTable[stateKey].hold ? 'buy' : 'hold'
 
-    /* && confidence >= dynamicThreshold && this.#candles.length > 1 */
+    /*  */
 
-    if (action === 'buy') {
+    if (action === 'buy' && confidence >= dynamicThreshold && this.#candles.length > 1) {
       const entryPrice = indicators.lastClose;
       const key = Date.now().toString();
       const trade = {
@@ -1040,12 +1091,25 @@ class NeuralSignalEngine {
       this.#tradeBuckets.stop[stopBucket] = this.#tradeBuckets.stop[stopBucket] || new Set();
       this.#tradeBuckets.sell[sellBucket].add(key);
       this.#tradeBuckets.stop[stopBucket].add(key);
+      this.#stateChanged.openTrades = true; // Flag open trades as changed
+      this.#stateChanged.learningState = true; // Flag learning state as changed
     }
 
     this.#state.lastUpdate = Date.now();
 
     if (saveState) {
+      console.log('1')
       this.#saveState();
+      console.log('2')
+      // Reset change flags after saving
+      this.#stateChanged = {
+        lifetimeState: false,
+        performanceBaseline: false,
+        neuralState: false,
+        learningState: false,
+        openTrades: false,
+        candleEmbeddings: false
+      };
     }
 
     return {
@@ -1062,12 +1126,12 @@ class NeuralSignalEngine {
       performanceAvgReward: truncateToDecimals(this.#performanceBaseline.avgReward, 8),
       lastUpdate: this.#state.lastUpdate ? new Date(this.#state.lastUpdate).toLocaleString() : 'N/A',
       signalReliability: truncateToDecimals(this.#state.signalReliability, 4),
-      activePatterns : this.#totalPatterns
+      activePatterns: this.#totalPatterns
     };
   }
 
   dumpState () {
-    this.#saveState()
+    this.#saveState(true)
   }
 }
 
