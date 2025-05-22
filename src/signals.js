@@ -552,32 +552,23 @@ class NeuralSignalEngine {
   }
 
   #saveState(force = false) {
-    let filesSaved = 0;
     try {
       if (force || this.#stateChanged.lifetimeState) {
         this.#saveCompressedFile(path.join(directoryPath, 'lifetime_state.json'), this.#lifetimeState);
-        filesSaved++;
       }
       if (force || this.#stateChanged.performanceBaseline) {
         this.#saveCompressedFile(path.join(directoryPath, 'performance_summary.json'), this.#performanceBaseline);
-        filesSaved++;
       }
       if (force || this.#stateChanged.neuralState) {
         this.#saveNeuralState();
-        filesSaved++;
       }
       if (force || this.#stateChanged.openTrades) {
         this.#saveOpenTrades();
-        filesSaved++;
       }
       if (force || this.#stateChanged.candleEmbeddings) {
         this.#saveCandleEmbeddings();
-        filesSaved++;
       }
-      console.log(`Files saved: ${filesSaved} / 5`);
-    } catch (error) {
-      console.log(error);
-    }
+    } catch {}
   }
 
   #saveNeuralState() {
