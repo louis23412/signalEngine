@@ -1,6 +1,7 @@
-import fs, { stat } from 'fs';
+import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
+import Database from 'better-sqlite3';
 
 const directoryPath = path.join(import.meta.dirname, '..', 'state')
 
@@ -416,60 +417,11 @@ class IndicatorProcessor {
   }
 }
 
-class MinHeap {
-  #heap = [];
-  #maxSize;
-  constructor(maxSize) {
-    this.#maxSize = maxSize;
-  }
-  push(item) {
-    this.#heap.push(item);
-    this.#siftUp(this.#heap.length - 1);
-    if (this.#heap.length > this.#maxSize) {
-      this.pop();
-    }
-  }
-  pop() {
-    if (this.#heap.length === 0) return null;
-    if (this.#heap.length === 1) return this.#heap.pop();
-    const min = this.#heap[0];
-    this.#heap[0] = this.#heap.pop();
-    this.#siftDown(0);
-    return min;
-  }
-  #siftUp(index) {
-    let parent = Math.floor((index - 1) / 2);
-    while (index > 0 && this.#heap[parent].score > this.#heap[index].score) {
-      [this.#heap[parent], this.#heap[index]] = [this.#heap[index], this.#heap[parent]];
-      index = parent;
-      parent = Math.floor((index - 1) / 2);
-    }
-  }
-  #siftDown(index) {
-    let minIndex = index;
-    const length = this.#heap.length;
-    while (true) {
-      const left = 2 * index + 1;
-      const right = 2 * index + 2;
-      if (left < length && this.#heap[left].score < this.#heap[minIndex].score) minIndex = left;
-      if (right < length && this.#heap[right].score < this.#heap[minIndex].score) minIndex = right;
-      if (minIndex === index) break;
-      [this.#heap[index], this.#heap[minIndex]] = [this.#heap[minIndex], this.#heap[index]];
-      index = minIndex;
-    }
-  }
-  get size() {
-    return this.#heap.length;
-  }
-  get items() {
-    return this.#heap.slice();
-  }
-}
-
 class NeuralSignalEngine {
   #transformer = new Transformer();
   #autoencoder = new AutoEncoder();
   #indicators = new IndicatorProcessor();
+  #db;
   #candles = [];
   #trades = [];
   #openTrades = new Map();
@@ -478,14 +430,8 @@ class NeuralSignalEngine {
   #tradeBuckets = { sell: {}, stop: {} };
   #patternScoreCache = new Map();
   #bucketPriceRange = 10;
-  #qTable = {};
   #maxCandles = 1000;
   #maxTrades = 10000000;
-  #patternBuckets = {};
-  #bucketSize = 20000000;
-  #maxBuckets = 2000000;
-  #totalPatterns = 0;
-  #maxPatterns = 2000000;
   #state = {
     winRate: 0.5,
     tradeCount: 0,
@@ -523,7 +469,28 @@ class NeuralSignalEngine {
   };
 
   constructor() {
+    fs.mkdirSync(directoryPath, { recursive: true });
+    this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
+    this.#initDatabase();
     this.#loadState();
+  }
+
+  #initDatabase() {
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS qtable (
+        state_key TEXT PRIMARY KEY,
+        buy REAL NOT NULL,
+        hold REAL NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS patterns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bucket_key TEXT NOT NULL,
+        features TEXT NOT NULL,
+        score REAL NOT NULL,
+        UNIQUE(bucket_key, features)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bucket_key ON patterns(bucket_key);
+    `);
   }
 
   #saveCompressedFile(filePath, data) {
@@ -580,44 +547,37 @@ class NeuralSignalEngine {
     }
 
     this.#loadNeuralState();
-    this.#loadLearningState();
     this.#loadOpenTrades();
     this.#loadCandleEmbeddings();
   }
 
   #saveState(force = false) {
-    let filesSaved = 0
+    let filesSaved = 0;
     try {
       fs.mkdirSync(directoryPath, { recursive: true });
       if (force || this.#stateChanged.lifetimeState) {
         this.#saveCompressedFile(path.join(directoryPath, 'lifetime_state.json'), this.#lifetimeState);
-        filesSaved++
+        filesSaved++;
       }
       if (force || this.#stateChanged.performanceBaseline) {
         this.#saveCompressedFile(path.join(directoryPath, 'performance_summary.json'), this.#performanceBaseline);
-        filesSaved++
+        filesSaved++;
       }
       if (force || this.#stateChanged.neuralState) {
         this.#saveNeuralState();
-        filesSaved++
-      }
-      if (force || this.#stateChanged.learningState) {
-        this.#saveLearningState();
-        filesSaved++
+        filesSaved++;
       }
       if (force || this.#stateChanged.openTrades) {
         this.#saveOpenTrades();
-        filesSaved++
+        filesSaved++;
       }
       if (force || this.#stateChanged.candleEmbeddings) {
         this.#saveCandleEmbeddings();
-        filesSaved++
+        filesSaved++;
       }
-
-      console.log(`Files saved : ${filesSaved} / 6`)
+      console.log(`Files saved: ${filesSaved} / 5`);
     } catch (error) {
-      // Handle errors silently as in original
-      console.log(error)
+      console.log(error);
     }
   }
 
@@ -661,56 +621,6 @@ class NeuralSignalEngine {
     }
   }
 
-  #saveLearningState() {
-    const serializablePatternBuckets = {};
-    for (const [key, bucket] of Object.entries(this.#patternBuckets)) {
-      serializablePatternBuckets[key] = bucket.items;
-    }
-    const state = {
-      qTable: this.#qTable,
-      patternBuckets: serializablePatternBuckets,
-      totalPatterns: this.#totalPatterns
-    };
-    this.#saveCompressedFile(path.join(directoryPath, 'learning_state.json'), state);
-  }
-
-  #loadLearningState() {
-    const state = this.#loadCompressedFile(path.join(directoryPath, 'learning_state.json'));
-    if (state && typeof state.qTable === 'object' && typeof state.patternBuckets === 'object' && isValidNumber(state.totalPatterns)) {
-      this.#qTable = {};
-      for (const [key, value] of Object.entries(state.qTable)) {
-        if (
-          value &&
-          isValidNumber(value.buy) &&
-          isValidNumber(value.hold)
-        ) {
-          this.#qTable[key] = { buy: value.buy, hold: value.hold };
-        }
-      }
-      this.#patternBuckets = {};
-      this.#totalPatterns = 0;
-      for (const [key, bucket] of Object.entries(state.patternBuckets)) {
-        if (Array.isArray(bucket)) {
-          const heap = new MinHeap(this.#bucketSize);
-          const validPatterns = bucket
-            .filter(p => Array.isArray(p.features) && p.features.every(isValidNumber) && isValidNumber(p.score))
-            .slice(0, this.#bucketSize);
-          validPatterns.forEach(pattern => heap.push(pattern));
-          this.#patternBuckets[key] = heap;
-          this.#totalPatterns += validPatterns.length;
-        }
-      }
-      if (this.#totalPatterns > this.#maxPatterns) {
-        const keys = Object.keys(this.#patternBuckets);
-        while (this.#totalPatterns > this.#maxPatterns && keys.length > 0) {
-          const key = keys.pop();
-          this.#totalPatterns -= this.#patternBuckets[key].size;
-          delete this.#patternBuckets[key];
-        }
-      }
-    }
-  }
-
   #saveOpenTrades() {
     const tradesArray = Array.from(this.#openTrades.values());
     this.#saveCompressedFile(path.join(directoryPath, 'open_trades.json'), tradesArray);
@@ -736,7 +646,8 @@ class NeuralSignalEngine {
         )
         .forEach(trade => {
           this.#openTrades.set(trade.timestamp.toString(), trade);
-          this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
+          const stmt = this.#db.prepare('INSERT OR IGNORE INTO qtable (state_key, buy, hold) VALUES (?, 0, 0)');
+          stmt.run(trade.stateKey);
         });
     }
   }
@@ -773,7 +684,7 @@ class NeuralSignalEngine {
     for (const candle of toCompress) {
       this.#candlesTimestamps.delete(candle.timestamp);
     }
-    this.#stateChanged.candleEmbeddings = true; // Flag candle embeddings as changed
+    this.#stateChanged.candleEmbeddings = true;
   }
 
   #extractFeatures(data) {
@@ -796,12 +707,16 @@ class NeuralSignalEngine {
     if (this.#patternScoreCache.has(key)) {
       return this.#patternScoreCache.get(key);
     }
-    const bucket = this.#patternBuckets[key];
-    if (!bucket || bucket.size === 0) return 0;
+    const stmt = this.#db.prepare(`
+      SELECT score, features FROM patterns WHERE bucket_key = ?
+    `);
+    const patterns = stmt.all(key);
+    if (!patterns || patterns.length === 0) return 0;
     let totalScore = 0;
     let matchCount = 0;
-    for (const pattern of bucket.items) {
-      if (features.every((f, i) => isValidNumber(f) && isValidNumber(pattern.features[i]) && Math.abs(f - pattern.features[i]) < 0.1)) {
+    for (const pattern of patterns) {
+      const patternFeatures = JSON.parse(pattern.features);
+      if (features.every((f, i) => isValidNumber(f) && isValidNumber(patternFeatures[i]) && Math.abs(f - patternFeatures[i]) < 0.1)) {
         totalScore += pattern.score;
         matchCount++;
       }
@@ -926,7 +841,7 @@ class NeuralSignalEngine {
         if (this.#tradeBuckets.stop[stopBucket]) this.#tradeBuckets.stop[stopBucket].delete(key);
         this.#openTrades.delete(key);
         this.#tradeMetadata.delete(key);
-        this.#stateChanged.openTrades = true; // Flag open trades as changed
+        this.#stateChanged.openTrades = true;
       }
     }
 
@@ -934,26 +849,26 @@ class NeuralSignalEngine {
       this.#trades.push(...closedTrades);
       this.#trades = this.#trades.slice(-this.#maxTrades);
 
+      const insertPatternStmt = this.#db.prepare(`
+        INSERT OR REPLACE INTO patterns (bucket_key, features, score)
+        VALUES (?, ?, ?)
+      `);
+      const updateQTableStmt = this.#db.prepare(`
+        INSERT OR REPLACE INTO qtable (state_key, buy, hold)
+        VALUES (?, ?, COALESCE((SELECT hold FROM qtable WHERE state_key = ?), 0))
+      `);
+
       for (const trade of closedTrades) {
         const pattern = { features: trade.features, score: trade.reward };
         const key = this.#generateFeatureKey(trade.features);
-        if (!this.#patternBuckets[key]) {
-          this.#patternBuckets[key] = new MinHeap(this.#bucketSize);
-        }
-        this.#patternBuckets[key].push(pattern);
-        this.#totalPatterns = Math.min(this.#totalPatterns + 1, this.#maxPatterns);
+        insertPatternStmt.run(key, JSON.stringify(trade.features), trade.reward);
 
-        this.#qTable[trade.stateKey] = this.#qTable[trade.stateKey] || { buy: 0, hold: 0 };
-        this.#qTable[trade.stateKey].buy += this.#config.learningRate * (trade.reward - this.#qTable[trade.stateKey].buy);
+        const existingQ = this.#db.prepare('SELECT buy, hold FROM qtable WHERE state_key = ?').get(trade.stateKey) || { buy: 0, hold: 0 };
+        updateQTableStmt.run(trade.stateKey, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.stateKey);
         
         this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
         this.#autoencoder.train(trade.features);
-        this.#stateChanged.learningState = true; // Flag learning state as changed
-        this.#stateChanged.neuralState = true; // Flag neural state as changed
-      }
-
-      if (this.#state.tradeCount % 1000 === 0) {
-        this.#prunePatternBuckets();
+        this.#stateChanged.neuralState = true;
       }
 
       this.#state.tradeCount += closedTrades.length;
@@ -969,29 +884,8 @@ class NeuralSignalEngine {
       this.#performanceBaseline.avgWinRate = (this.#performanceBaseline.avgWinRate * 0.9 + this.#state.winRate * 0.1);
       this.#performanceBaseline.avgReward = (this.#performanceBaseline.avgReward * 0.9 + this.#state.avgReward * 0.1);
       this.#performanceBaseline.avgConfidence = (this.#performanceBaseline.avgConfidence * 0.9 + (closedTrades.reduce((sum, t) => sum + t.confidence, 0) / closedTrades.length || 0) * 0.1);
-      this.#stateChanged.lifetimeState = true; // Flag lifetime state as changed
-      this.#stateChanged.performanceBaseline = true; // Flag performance baseline as changed
-    }
-  }
-
-  #prunePatternBuckets() {
-    if (this.#totalPatterns <= this.#maxPatterns || Object.keys(this.#patternBuckets).length <= this.#maxBuckets) return;
-
-    let lowestAvgScore = Infinity;
-    let keyToRemove = null;
-    for (const key of Object.keys(this.#patternBuckets)) {
-      const bucket = this.#patternBuckets[key];
-      const items = bucket.items;
-      const avgScore = items.length > 0 ? items.reduce((sum, p) => sum + p.score, 0) / items.length : 0;
-      if (avgScore < lowestAvgScore) {
-        lowestAvgScore = avgScore;
-        keyToRemove = key;
-      }
-    }
-    if (keyToRemove) {
-      this.#totalPatterns -= this.#patternBuckets[keyToRemove].size;
-      delete this.#patternBuckets[keyToRemove];
-      this.#patternScoreCache.delete(keyToRemove);
+      this.#stateChanged.lifetimeState = true;
+      this.#stateChanged.performanceBaseline = true;
     }
   }
 
@@ -1022,7 +916,7 @@ class NeuralSignalEngine {
     this.#candles.push(...newCandles);
     for (const candle of newCandles) {
       this.#candlesTimestamps.add(candle.timestamp);
-      this.#stateChanged.candleEmbeddings = true; // Flag candle embeddings as changed
+      this.#stateChanged.candleEmbeddings = true;
     }
     this.#candles = this.#candles.slice(-this.#maxCandles);
 
@@ -1050,23 +944,26 @@ class NeuralSignalEngine {
       ? (adjustedSellPrice - indicators.lastClose) / indicators.lastClose
       : 0;
 
-    const stateKey = JSON.stringify(features.map(f => isValidNumber(f) ? Math.round(f * 10) / 10 : 0));
-    this.#qTable[stateKey] = this.#qTable[stateKey] || { buy: 0, hold: 0 };
+    const stateKey = this.#generateFeatureKey(features);
+    const qTableStmt = this.#db.prepare('SELECT buy, hold FROM qtable WHERE state_key = ?');
+    let qValues = qTableStmt.get(stateKey);
+    if (!qValues) {
+      this.#db.prepare('INSERT OR IGNORE INTO qtable (state_key, buy, hold) VALUES (?, 0, 0)').run(stateKey);
+      qValues = { buy: 0, hold: 0 };
+    }
 
-    // DONT REMOVE THESE COMMENTS!
-    
-    // const baseRate = this.#config.explorationRate;
-    // const decayFactor = 1 - Math.min(this.#lifetimeState.totalTrades / 25000, 1);
-    // const effectiveExplorationRate = Math.max(baseRate * decayFactor, baseRate * 0.1);
+    const baseRate = this.#config.explorationRate;
+    const decayFactor = 1 - Math.min(this.#lifetimeState.totalTrades / 25000, 1);
+    const effectiveExplorationRate = Math.max(baseRate * decayFactor, baseRate * 0.1);
 
     // const action = Math.random() < effectiveExplorationRate
     //   ? (Math.random() < 0.5 ? 'buy' : 'hold')
-    //   : ;
-    const action = this.#qTable[stateKey].buy > this.#qTable[stateKey].hold ? 'buy' : 'hold'
+    //   : qValues.buy > qValues.hold ? 'buy' : 'hold';
+    const action = 'buy';
 
-    /*  */
+    /* && confidence >= dynamicThreshold && this.#candles.length > 1 */
 
-    if (action === 'buy' && confidence >= dynamicThreshold && this.#candles.length > 1) {
+    if (action === 'buy') {
       const entryPrice = indicators.lastClose;
       const key = Date.now().toString();
       const trade = {
@@ -1091,17 +988,13 @@ class NeuralSignalEngine {
       this.#tradeBuckets.stop[stopBucket] = this.#tradeBuckets.stop[stopBucket] || new Set();
       this.#tradeBuckets.sell[sellBucket].add(key);
       this.#tradeBuckets.stop[stopBucket].add(key);
-      this.#stateChanged.openTrades = true; // Flag open trades as changed
-      this.#stateChanged.learningState = true; // Flag learning state as changed
+      this.#stateChanged.openTrades = true;
     }
 
     this.#state.lastUpdate = Date.now();
 
     if (saveState) {
-      console.log('1')
       this.#saveState();
-      console.log('2')
-      // Reset change flags after saving
       this.#stateChanged = {
         lifetimeState: false,
         performanceBaseline: false,
@@ -1111,6 +1004,9 @@ class NeuralSignalEngine {
         candleEmbeddings: false
       };
     }
+
+    const totalPatternsStmt = this.#db.prepare('SELECT COUNT(*) as count FROM patterns');
+    const totalPatterns = totalPatternsStmt.get().count;
 
     return {
       currentConfidence: isValidNumber(confidence) ? truncateToDecimals(confidence, 3) : 0,
@@ -1126,12 +1022,12 @@ class NeuralSignalEngine {
       performanceAvgReward: truncateToDecimals(this.#performanceBaseline.avgReward, 8),
       lastUpdate: this.#state.lastUpdate ? new Date(this.#state.lastUpdate).toLocaleString() : 'N/A',
       signalReliability: truncateToDecimals(this.#state.signalReliability, 4),
-      activePatterns: this.#totalPatterns
+      activePatterns: totalPatterns
     };
   }
 
-  dumpState () {
-    this.#saveState(true)
+  dumpState() {
+    this.#saveState(true);
   }
 }
 

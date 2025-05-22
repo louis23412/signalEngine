@@ -97,16 +97,13 @@ async function runBacktest(runNumber) {
                 batchBuffer.push(candleObj);
                 totalCandles++;
 
-                // if (totalCandles === 100000) {
-                //     engine.dumpState()
-                //     console.log(signal)
-                //     process.exit()
-                // }
+                if (totalCandles % 1000 === 0) {
+                    console.log(`Run ${runNumber} Progress: ${totalCandles} candles`);
+                }
 
                 if (batchBuffer.length >= batchSize && cache.length >= minCacheSize) {
                     try {
-                        signal = engine.getSignalsAndHealth(cache.getArray(), true);
-                        console.log(signal)
+                        signal = engine.getSignalsAndHealth(cache.getArray(), false);
                         currentScore = calculateScore(signal.totalAccuracy, signal.performanceWinRate, signal.performanceAvgReward, signal.totalTrades)
                     } catch (e) {
                         console.error(`Error in getSignalsAndHealth (Run ${runNumber}):`, e);
@@ -114,10 +111,6 @@ async function runBacktest(runNumber) {
                         return;
                     }
                     batchBuffer = []; // Clear batch
-                }
-
-                if (totalCandles % 1000 === 0) {
-                    console.log(`Run ${runNumber} Progress: ${totalCandles} candles`);
                 }
             } catch (err) {
                 console.error(`Error parsing line (Run ${runNumber}):`, err);
