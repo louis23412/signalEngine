@@ -455,8 +455,7 @@ class NeuralSignalEngine {
     baseConfidenceThreshold: 60,
     atrFactor: 10,
     stopFactor: 2.5,
-    learningRate: 0.25,
-    explorationRate: 0.25
+    learningRate: 0.25
   };
   #longTermBuffer = [];
   #stateChanged = {
@@ -942,44 +941,33 @@ class NeuralSignalEngine {
       qValues = { buy: 0, hold: 0 };
     }
 
-    const baseRate = this.#config.explorationRate;
-    const decayFactor = 1 - Math.min(this.#lifetimeState.totalTrades / 25000, 1);
-    const effectiveExplorationRate = Math.max(baseRate * decayFactor, baseRate * 0.1);
+    const action = qValues.buy > qValues.hold ? 'buy' : 'hold';
 
-    // const action = Math.random() < effectiveExplorationRate
-    //   ? (Math.random() < 0.5 ? 'buy' : 'hold')
-    //   : qValues.buy > qValues.hold ? 'buy' : 'hold';
-    const action = 'buy';
+    const entryPrice = indicators.lastClose;
+    const key = Date.now().toString();
+    const trade = {
+      sellPrice: truncateToDecimals(sellPrice, 2),
+      stopLoss: truncateToDecimals(stopLoss, 2),
+      entryPrice,
+      confidence,
+      candlesHeld: 0
+    };
+    this.#openTrades.set(key, trade);
+    this.#tradeMetadata.set(key, {
+      strategy: action,
+      patternScore,
+      features,
+      stateKey,
+      dynamicThreshold
+    });
 
-    /* && confidence >= dynamicThreshold && this.#candles.length > 1 */
-
-    if (action === 'buy') {
-      const entryPrice = indicators.lastClose;
-      const key = Date.now().toString();
-      const trade = {
-        sellPrice: truncateToDecimals(sellPrice, 2),
-        stopLoss: truncateToDecimals(stopLoss, 2),
-        entryPrice,
-        confidence,
-        candlesHeld: 0
-      };
-      this.#openTrades.set(key, trade);
-      this.#tradeMetadata.set(key, {
-        strategy: action,
-        patternScore,
-        features,
-        stateKey,
-        dynamicThreshold
-      });
-
-      const sellBucket = Math.floor(sellPrice / this.#bucketPriceRange);
-      const stopBucket = Math.floor(stopLoss / this.#bucketPriceRange);
-      this.#tradeBuckets.sell[sellBucket] = this.#tradeBuckets.sell[sellBucket] || new Set();
-      this.#tradeBuckets.stop[stopBucket] = this.#tradeBuckets.stop[stopBucket] || new Set();
-      this.#tradeBuckets.sell[sellBucket].add(key);
-      this.#tradeBuckets.stop[stopBucket].add(key);
-      this.#stateChanged.openTrades = true;
-    }
+    const sellBucket = Math.floor(sellPrice / this.#bucketPriceRange);
+    const stopBucket = Math.floor(stopLoss / this.#bucketPriceRange);
+    this.#tradeBuckets.sell[sellBucket] = this.#tradeBuckets.sell[sellBucket] || new Set();
+    this.#tradeBuckets.stop[stopBucket] = this.#tradeBuckets.stop[stopBucket] || new Set();
+    this.#tradeBuckets.sell[sellBucket].add(key);
+    this.#tradeBuckets.stop[stopBucket].add(key);
+    this.#stateChanged.openTrades = true;
 
     this.#state.lastUpdate = Date.now();
 
