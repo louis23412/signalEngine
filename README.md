@@ -19,8 +19,8 @@ NeuralSignalEngine is a JavaScript-based trading signal generator that uses a tr
 ## Installation
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
-   cd <repository-directory>
+   git clone https://github.com/louis23412/signalEngine
+   cd signalEngine
    ```
 2. Install dependencies:
    ```bash
@@ -34,7 +34,7 @@ Before trusting the generated signals, the model must be trained with sufficient
 ## Usage
 1. **Import and Initialize**:
    ```javascript
-   import NeuralSignalEngine from './signals.js';
+   import NeuralSignalEngine from './src/signals.js';
 
    const engine = new NeuralSignalEngine();
    ```
