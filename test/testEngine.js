@@ -100,7 +100,7 @@ async function runBacktest(runNumber) {
                 if (totalCandles % 1000 === 0) {
                     console.log(`Run ${runNumber} Progress: ${totalCandles} candles`);
                 }
-                if (totalCandles % 10000 === 0) {
+                if (totalCandles % 20000 === 0) {
                     console.log(signal)
                     process.exit()
                 }
