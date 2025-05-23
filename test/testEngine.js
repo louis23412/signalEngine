@@ -101,17 +101,16 @@ async function runBacktest(runNumber) {
                     console.log(`Run ${runNumber} Progress: ${totalCandles} candles`);
                 }
                 if (totalCandles % 10000 === 0) {
-                    engine.dumpState()
                     console.log(signal)
                     process.exit()
                 }
 
                 if (batchBuffer.length >= batchSize && cache.length >= minCacheSize) {
                     try {
-                        signal = engine.getSignalsAndHealth(cache.getArray(), false);
+                        signal = engine.getSignal(cache.getArray());
                         currentScore = calculateScore(signal.totalAccuracy, signal.performanceWinRate, signal.performanceAvgReward, signal.totalTrades)
                     } catch (e) {
-                        console.error(`Error in getSignalsAndHealth (Run ${runNumber}):`, e);
+                        console.error(`Error in getSignal (Run ${runNumber}):`, e);
                         reject(e);
                         return;
                     }
@@ -125,9 +124,6 @@ async function runBacktest(runNumber) {
         rd.on('close', () => {
             try {
                 console.log(`Run ${runNumber} Completed. Total Candles: ${totalCandles}`);
-
-                // After calling engine.dumpState()
-                engine.dumpState();
 
                 // Delete specific files in stateDir, preserving learning_state.json and neural_state.json
                 // const filesToDelete = [
@@ -160,8 +156,6 @@ async function runBacktest(runNumber) {
                 // if (currentScore > bestScore) {
                 //     console.log('Best score!:', currentScore)
                 //     bestScore = currentScore
-
-                //     engine.dumpState()
 
                 //     renameFolder(stateDir, path.join(import.meta.dirname, '..', `${bestScore}`));
 

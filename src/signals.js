@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import zlib from 'zlib';
 import Database from 'better-sqlite3';
 
 const directoryPath = path.join(import.meta.dirname, '..', 'state')
@@ -28,138 +27,367 @@ const softmax = (arr) => {
 
 class Transformer {
   #inputSize = 6;
-  #hiddenSize = 8;
+  #hiddenSize = 16;
   #outputSize = 1;
-  #heads = 4;
-  #weightsQ;
-  #weightsK;
-  #weightsV;
-  #weightsOut;
-  #biasQ;
-  #biasK;
-  #biasV;
-  #biasOut;
+  #numHeads = 4;
+  #numLayers = 2;
+  #feedForwardSize = 32;
+  #dropoutRate = 0.1;
   #learningRate = 0.0005;
+  #ensembleSize = 3;
+  #transformers = [];
+  #ensembleWeights = [];
 
   constructor() {
     const xavierInit = (rows, cols) => Array(rows).fill().map(() => Array(cols).fill().map(() => (Math.random() - 0.5) * Math.sqrt(2 / (rows + cols))));
-    this.#weightsQ = xavierInit(this.#inputSize, this.#hiddenSize);
-    this.#weightsK = xavierInit(this.#inputSize, this.#hiddenSize);
-    this.#weightsV = xavierInit(this.#inputSize, this.#hiddenSize);
-    this.#weightsOut = xavierInit(this.#hiddenSize, this.#outputSize);
-    this.#biasQ = Array(this.#hiddenSize).fill(0);
-    this.#biasK = Array(this.#hiddenSize).fill(0);
-    this.#biasV = Array(this.#hiddenSize).fill(0);
-    this.#biasOut = Array(this.#outputSize).fill(0);
+    for (let i = 0; i < this.#ensembleSize; i++) {
+      const transformer = {
+        positionalEncoding: Array(this.#inputSize).fill().map((_, idx) => {
+          const pos = idx / (10000 ** (2 * Math.floor(idx / 2) / this.#hiddenSize));
+          return Array(this.#hiddenSize).fill().map((_, d) => d % 2 === 0 ? Math.sin(pos) : Math.cos(pos));
+        }),
+        attentionWeights: Array(this.#numLayers).fill().map(() => ({
+          Wq: xavierInit(this.#hiddenSize, this.#hiddenSize),
+          Wk: xavierInit(this.#hiddenSize, this.#hiddenSize),
+          Wv: xavierInit(this.#hiddenSize, this.#hiddenSize),
+          Wo: xavierInit(this.#hiddenSize, this.#hiddenSize)
+        })),
+        ffnWeights: Array(this.#numLayers).fill().map(() => ({
+          W1: xavierInit(this.#hiddenSize, this.#feedForwardSize),
+          W2: xavierInit(this.#feedForwardSize, this.#hiddenSize),
+          b1: Array(this.#feedForwardSize).fill(0),
+          b2: Array(this.#hiddenSize).fill(0)
+        })),
+        layerNormWeights: Array(this.#numLayers).fill().map(() => ({
+          gamma1: Array(this.#hiddenSize).fill(1),
+          beta1: Array(this.#hiddenSize).fill(0),
+          gamma2: Array(this.#hiddenSize).fill(1),
+          beta2: Array(this.#hiddenSize).fill(0)
+        })),
+        outputWeights: xavierInit(this.#hiddenSize, this.#outputSize),
+        outputBias: Array(this.#outputSize).fill(0)
+      };
+      this.#transformers.push(transformer);
+      this.#ensembleWeights.push(1 / this.#ensembleSize);
+    }
+    this.#normalizeEnsembleWeights();
   }
 
-  getWeightsQ() { return this.#weightsQ; }
-  getWeightsK() { return this.#weightsK; }
-  getWeightsV() { return this.#weightsV; }
-  getWeightsOut() { return this.#weightsOut; }
-  getBiasQ() { return this.#biasQ; }
-  getBiasK() { return this.#biasK; }
-  getBiasV() { return this.#biasV; }
-  getBiasOut() { return this.#biasOut; }
-
-  setWeightsQ(weights) {
-    if (this.#isValidMatrix(weights, this.#inputSize, this.#hiddenSize)) this.#weightsQ = weights;
-  }
-  setWeightsK(weights) {
-    if (this.#isValidMatrix(weights, this.#inputSize, this.#hiddenSize)) this.#weightsK = weights;
-  }
-  setWeightsV(weights) {
-    if (this.#isValidMatrix(weights, this.#inputSize, this.#hiddenSize)) this.#weightsV = weights;
-  }
-  setWeightsOut(weights) {
-    if (this.#isValidMatrix(weights, this.#hiddenSize, this.#outputSize)) this.#weightsOut = weights;
-  }
-  setBiasQ(bias) {
-    if (this.#isValidArray(bias, this.#hiddenSize)) this.#biasQ = bias;
-  }
-  setBiasK(bias) {
-    if (this.#isValidArray(bias, this.#hiddenSize)) this.#biasK = bias;
-  }
-  setBiasV(bias) {
-    if (this.#isValidArray(bias, this.#hiddenSize)) this.#biasV = bias;
-  }
-  setBiasOut(bias) {
-    if (this.#isValidArray(bias, this.#outputSize)) this.#biasOut = bias;
+  #normalizeEnsembleWeights() {
+    const sum = this.#ensembleWeights.reduce((s, w) => s + w, 0) || 1;
+    this.#ensembleWeights = this.#ensembleWeights.map(w => w / sum);
   }
 
-  #isValidMatrix(matrix, rows, cols) {
-    return Array.isArray(matrix) &&
-           matrix.length === rows &&
-           matrix.every(row => Array.isArray(row) && row.length === cols && row.every(isValidNumber));
+  #gelu(x) {
+    return isValidNumber(x) ? 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * x ** 3))) : 0;
   }
 
-  #isValidArray(arr, len) {
-    return Array.isArray(arr) && arr.length === len && arr.every(isValidNumber);
+  #geluDerivative(x) {
+    if (!isValidNumber(x)) return 0;
+    const cdf = 0.5 * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * x ** 3)));
+    const pdf = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+    return cdf + x * pdf;
+  }
+
+  #layerNorm(x, gamma, beta, eps = 1e-6) {
+    if (!x.every(isValidNumber)) return x.map((_, i) => beta[i]);
+    const mean = x.reduce((sum, val) => sum + val, 0) / x.length;
+    const variance = x.reduce((sum, val) => sum + (val - mean) ** 2, 0) / x.length;
+    return x.map((val, i) => isValidNumber(val) && isValidNumber(variance) ? gamma[i] * (val - mean) / Math.sqrt(variance + eps) + beta[i] : beta[i]);
+  }
+
+  #multiHeadAttention(x, layer) {
+    const headSize = this.#hiddenSize / this.#numHeads;
+    const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    for (let i = 0; i < this.#inputSize; i++) {
+      for (let j = 0; j < this.#hiddenSize; j++) {
+        for (let k = 0; k < this.#hiddenSize; k++) {
+          Q[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wq[k][j]) ? x[i][k] * layer.Wq[k][j] : 0;
+          K[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wk[k][j]) ? x[i][k] * layer.Wk[k][j] : 0;
+          V[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wv[k][j]) ? x[i][k] * layer.Wv[k][j] : 0;
+        }
+      }
+    }
+    const attentionScores = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+    for (let h = 0; h < this.#numHeads; h++) {
+      for (let i = 0; i < this.#inputSize; i++) {
+        for (let j = 0; j < this.#inputSize; j++) {
+          let sum = 0;
+          for (let k = 0; k < headSize; k++) {
+            sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k]) ? Q[i][h * headSize + k] * K[j][h * headSize + k] : 0;
+          }
+          attentionScores[h][i][j] = isValidNumber(sum) ? sum / Math.sqrt(headSize) : 0;
+        }
+      }
+      attentionScores[h] = attentionScores[h].map(row => softmax(row));
+    }
+    const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    for (let h = 0; h < this.#numHeads; h++) {
+      for (let i = 0; i < this.#inputSize; i++) {
+        for (let j = 0; j < this.#inputSize; j++) {
+          for (let k = 0; k < headSize; k++) {
+            output[i][h * headSize + k] += isValidNumber(attentionScores[h][i][j]) && isValidNumber(V[j][h * headSize + k]) ? attentionScores[h][i][j] * V[j][h * headSize + k] : 0;
+          }
+        }
+      }
+    }
+    const finalOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    for (let i = 0; i < this.#inputSize; i++) {
+      for (let j = 0; j < this.#hiddenSize; j++) {
+        for (let k = 0; k < this.#hiddenSize; k++) {
+          finalOutput[i][j] += isValidNumber(output[i][k]) && isValidNumber(layer.Wo[k][j]) ? output[i][k] * layer.Wo[k][j] : 0;
+        }
+      }
+    }
+    return finalOutput;
+  }
+
+  #feedForward(x, layer) {
+    const hidden = Array(this.#feedForwardSize).fill(0);
+    for (let i = 0; i < this.#hiddenSize; i++) {
+      for (let j = 0; j < this.#feedForwardSize; j++) {
+        hidden[j] += isValidNumber(x[i]) && isValidNumber(layer.W1[i][j]) ? x[i] * layer.W1[i][j] : 0;
+      }
+    }
+    const activated = hidden.map((val, i) => this.#gelu(val + (isValidNumber(layer.b1[i]) ? layer.b1[i] : 0)));
+    const output = Array(this.#hiddenSize).fill(0);
+    for (let i = 0; i < this.#feedForwardSize; i++) {
+      for (let j = 0; j < this.#hiddenSize; j++) {
+        output[j] += isValidNumber(activated[i]) && isValidNumber(layer.W2[i][j]) ? activated[i] * layer.W2[i][j] : 0;
+      }
+    }
+    return output.map((val, i) => val + (isValidNumber(layer.b2[i]) ? layer.b2[i] : 0));
+  }
+
+  #dropout(x, rate, training = false) {
+    if (!training) return x;
+    return x.map(val => isValidNumber(val) && Math.random() >= rate ? val / (1 - rate) : 0);
   }
 
   forward(inputs) {
     if (inputs.length !== this.#inputSize || !inputs.every(isValidNumber)) return [0];
-    const query = Array(this.#hiddenSize).fill(0);
-    const key = Array(this.#hiddenSize).fill(0);
-    const value = Array(this.#hiddenSize).fill(0);
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        query[j] += inputs[i] * this.#weightsQ[i][j];
-        key[j] += inputs[i] * this.#weightsK[i][j];
-        value[j] += inputs[i] * this.#weightsV[i][j];
+    const ensembleOutputs = this.#transformers.map((transformer, idx) => {
+      let x = inputs.map((val, i) => transformer.positionalEncoding[i].map(pos => isValidNumber(val) && isValidNumber(pos) ? val + pos : 0));
+      for (let layer = 0; layer < this.#numLayers; layer++) {
+        const normX = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1));
+        const attentionOutput = this.#multiHeadAttention(normX, transformer.attentionWeights[layer]);
+        x = x.map((row, i) => row.map((v, j) => isValidNumber(v) && isValidNumber(attentionOutput[i][j]) ? v + attentionOutput[i][j] : v));
+        const normAttention = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2));
+        x = normAttention.map(row => {
+          const ffnOutput = this.#feedForward(row, transformer.ffnWeights[layer]);
+          return row.map((v, j) => isValidNumber(v) && isValidNumber(ffnOutput[j]) ? v + ffnOutput[j] : v);
+        });
       }
-    }
-    const q = query.map((x, j) => x + this.#biasQ[j]);
-    const k = key.map((x, j) => x + this.#biasK[j]);
-    const v = value.map((x, j) => x + this.#biasV[j]);
-    const headSize = this.#hiddenSize / this.#heads;
-    const scores = Array(this.#heads).fill().map(() => Array(this.#heads).fill(0));
-    for (let i = 0; i < this.#heads; i++) {
-      for (let j = 0; j < this.#heads; j++) {
-        let sum = 0;
-        for (let k = 0; k < headSize; k++) {
-          sum += q[i * headSize + k] * k[j * headSize + k];
-        }
-        scores[i][j] = isValidNumber(sum) ? sum / Math.sqrt(headSize) : 0;
-      }
-    }
-    const attention = scores.map(row => softmax(row.map(v => isValidNumber(v) ? v : 0)));
-    const attended = Array(this.#hiddenSize).fill(0);
-    for (let i = 0; i < this.#heads; i++) {
-      for (let j = 0; j < this.#heads; j++) {
-        for (let k = 0; k < headSize; k++) {
-          attended[i * headSize + k] += attention[i][j] * v[j * headSize + k];
+      const finalOutput = Array(this.#outputSize).fill(0);
+      for (let i = 0; i < this.#hiddenSize; i++) {
+        for (let j = 0; j < this.#outputSize; j++) {
+          finalOutput[j] += isValidNumber(x[x.length - 1][i]) && isValidNumber(transformer.outputWeights[i][j]) ? x[x.length - 1][i] * transformer.outputWeights[i][j] : 0;
         }
       }
-    }
-    const output = Array(this.#outputSize).fill(0);
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      for (let j = 0; j < this.#outputSize; j++) {
-        output[j] += attended[i] * this.#weightsOut[i][j];
-      }
-    }
-    return output.map((x, j) => sigmoid(isValidNumber(x + this.#biasOut[j]) ? x + this.#biasOut[j] : 0));
+      return sigmoid(finalOutput[0] + (isValidNumber(transformer.outputBias[0]) ? transformer.outputBias[0] : 0));
+    });
+    return [ensembleOutputs.reduce((sum, output, idx) => sum + (isValidNumber(output) ? output * this.#ensembleWeights[idx] : 0), 0)];
   }
 
   train(inputs, target) {
     if (inputs.length !== this.#inputSize || !inputs.every(isValidNumber) || !isValidNumber(target)) return;
-    const output = this.forward(inputs);
-    const error = target - output[0];
-    const delta = Math.min(Math.max(error * output[0] * (1 - output[0]), -1), 1);
-    const hiddenErrors = Array(this.#hiddenSize).fill(0);
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      hiddenErrors[i] = delta * this.#weightsOut[i][0];
-    }
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      this.#weightsOut[i][0] += this.#learningRate * delta * hiddenErrors[i];
-      this.#biasOut[0] += this.#learningRate * delta;
-    }
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        this.#weightsQ[i][j] += this.#learningRate * hiddenErrors[j] * inputs[i];
-        this.#weightsK[i][j] += this.#learningRate * hiddenErrors[j] * inputs[i];
-        this.#weightsV[i][j] += this.#learningRate * hiddenErrors[j] * inputs[i];
+    const output = this.forward(inputs)[0];
+    const error = target - output;
+    const delta = Math.min(Math.max(error * output * (1 - output), -1), 1);
+    this.#transformers.forEach((transformer, idx) => {
+      let x = inputs.map((val, i) => transformer.positionalEncoding[i].map(pos => isValidNumber(val) && isValidNumber(pos) ? val + pos : 0));
+      const layerOutputs = [x];
+      const activations = [];
+      const attentionIntermediates = [];
+      for (let layer = 0; layer < this.#numLayers; layer++) {
+        const normX = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1));
+        const headSize = this.#hiddenSize / this.#numHeads;
+        const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let i = 0; i < this.#inputSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+            for (let k = 0; k < this.#hiddenSize; k++) {
+              Q[i][j] += isValidNumber(normX[i][k]) && isValidNumber(transformer.attentionWeights[layer].Wq[k][j]) ? normX[i][k] * transformer.attentionWeights[layer].Wq[k][j] : 0;
+              K[i][j] += isValidNumber(normX[i][k]) && isValidNumber(transformer.attentionWeights[layer].Wk[k][j]) ? normX[i][k] * transformer.attentionWeights[layer].Wk[k][j] : 0;
+              V[i][j] += isValidNumber(normX[i][k]) && isValidNumber(transformer.attentionWeights[layer].Wv[k][j]) ? normX[i][k] * transformer.attentionWeights[layer].Wv[k][j] : 0;
+            }
+          }
+        }
+        const attentionScores = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+        const attentionProbs = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+        for (let h = 0; h < this.#numHeads; h++) {
+          for (let i = 0; i < this.#inputSize; i++) {
+            for (let j = 0; j < this.#inputSize; j++) {
+              let sum = 0;
+              for (let k = 0; k < headSize; k++) {
+                sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k]) ? Q[i][h * headSize + k] * K[j][h * headSize + k] : 0;
+              }
+              attentionScores[h][i][j] = isValidNumber(sum) ? sum / Math.sqrt(headSize) : 0;
+            }
+          }
+          attentionProbs[h] = attentionScores[h].map(row => softmax(row));
+        }
+        const attentionOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let h = 0; h < this.#numHeads; h++) {
+          for (let i = 0; i < this.#inputSize; i++) {
+            for (let j = 0; j < this.#inputSize; j++) {
+              for (let k = 0; k < headSize; k++) {
+                attentionOutput[i][h * headSize + k] += isValidNumber(attentionProbs[h][i][j]) && isValidNumber(V[j][h * headSize + k]) ? attentionProbs[h][i][j] * V[j][h * headSize + k] : 0;
+              }
+            }
+          }
+        }
+        const finalAttentionOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let i = 0; i < this.#inputSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+            for (let k = 0; k < this.#hiddenSize; k++) {
+              finalAttentionOutput[i][j] += isValidNumber(attentionOutput[i][k]) && isValidNumber(transformer.attentionWeights[layer].Wo[k][j]) ? attentionOutput[i][k] * transformer.attentionWeights[layer].Wo[k][j] : 0;
+            }
+          }
+        }
+        x = x.map((row, i) => row.map((v, j) => isValidNumber(v) && isValidNumber(finalAttentionOutput[i][j]) ? v + finalAttentionOutput[i][j] : v));
+        const normAttention = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2));
+        x = normAttention.map(row => {
+          const ffnOutput = this.#feedForward(row, transformer.ffnWeights[layer]);
+          return this.#dropout(row.map((v, j) => isValidNumber(v) && isValidNumber(ffnOutput[j]) ? v + ffnOutput[j] : v), this.#dropoutRate, true);
+        });
+        layerOutputs.push(x);
+        activations.push({ normX, attentionOutput: finalAttentionOutput, normAttention });
+        attentionIntermediates.push({ Q, K, V, attentionScores, attentionProbs });
       }
+      let outputGrad = Array(this.#hiddenSize).fill(0);
+      for (let i = 0; i < this.#hiddenSize; i++) {
+        outputGrad[i] = delta * this.#ensembleWeights[idx] * transformer.outputWeights[i][0];
+        transformer.outputWeights[i][0] += this.#learningRate * outputGrad[i] * x[x.length - 1][i];
+      }
+      transformer.outputBias[0] += this.#learningRate * delta * this.#ensembleWeights[idx];
+      let grad = outputGrad;
+      for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
+        const ffnInput = activations[layer].normAttention;
+        for (let j = 0; j < this.#feedForwardSize; j++) {
+          let ffnGrad = 0;
+          for (let k = 0; k < this.#hiddenSize; k++) {
+            ffnGrad += grad[k] * transformer.ffnWeights[layer].W2[j][k];
+          }
+          ffnGrad *= this.#geluDerivative(ffnInput[ffnInput.length - 1][j]);
+          for (let i = 0; i < this.#hiddenSize; i++) {
+            transformer.ffnWeights[layer].W1[i][j] += this.#learningRate * ffnGrad * ffnInput[ffnInput.length - 1][i];
+          }
+          transformer.ffnWeights[layer].b1[j] += this.#learningRate * ffnGrad;
+        }
+        const w2Grad = Array(this.#hiddenSize).fill(0);
+        for (let j = 0; j < this.#hiddenSize; j++) {
+          for (let i = 0; i < this.#feedForwardSize; i++) {
+            const activatedInput = this.#gelu(ffnInput[ffnInput.length - 1][i] + (isValidNumber(transformer.ffnWeights[layer].b1[i]) ? transformer.ffnWeights[layer].b1[i] : 0));
+            w2Grad[j] += grad[j] * activatedInput;
+            transformer.ffnWeights[layer].W2[i][j] += this.#learningRate * grad[j] * activatedInput;
+          }
+        }
+        grad = w2Grad;
+        const { Q, K, V, attentionScores, attentionProbs } = attentionIntermediates[layer];
+        const headSize = this.#hiddenSize / this.#numHeads;
+        const attentionGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let i = 0; i < this.#inputSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+            attentionGrad[i][j] = grad[j]; // Residual connection gradient
+          }
+        }
+        const woGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const attentionOutputGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let i = 0; i < this.#inputSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+            for (let k = 0; k < this.#hiddenSize; k++) {
+              woGrad[k][j] += isValidNumber(attentionGrad[i][j]) && isValidNumber(activations[layer].attentionOutput[i][k]) ? attentionGrad[i][j] * activations[layer].attentionOutput[i][k] : 0;
+              attentionOutputGrad[i][k] += isValidNumber(attentionGrad[i][j]) && isValidNumber(transformer.attentionWeights[layer].Wo[k][j]) ? attentionGrad[i][j] * transformer.attentionWeights[layer].Wo[k][j] : 0;
+            }
+          }
+        }
+        const vGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(headSize).fill(0)));
+        const scoreGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+        for (let h = 0; h < this.#numHeads; h++) {
+          for (let i = 0; i < this.#inputSize; i++) {
+            for (let j = 0; j < this.#inputSize; j++) {
+              for (let k = 0; k < headSize; k++) {
+                scoreGrad[h][i][j] += isValidNumber(attentionOutputGrad[i][h * headSize + k]) && isValidNumber(V[j][h * headSize + k]) ? attentionOutputGrad[i][h * headSize + k] * V[j][h * headSize + k] : 0;
+                vGrad[h][j][k] += isValidNumber(attentionProbs[h][i][j]) && isValidNumber(attentionOutputGrad[i][h * headSize + k]) ? attentionProbs[h][i][j] * attentionOutputGrad[i][h * headSize + k] : 0;
+              }
+            }
+          }
+          // Softmax gradient
+          for (let i = 0; i < this.#inputSize; i++) {
+            for (let j = 0; j < this.#inputSize; j++) {
+              let softmaxGrad = 0;
+              for (let k = 0; k < this.#inputSize; k++) {
+                const prob = attentionProbs[h][i][k];
+                softmaxGrad += isValidNumber(prob) && isValidNumber(scoreGrad[h][i][k]) ? prob * (scoreGrad[h][i][j] - (j === k ? scoreGrad[h][i][k] : 0)) : 0;
+              }
+              scoreGrad[h][i][j] = isValidNumber(softmaxGrad) ? softmaxGrad : 0;
+            }
+          }
+        }
+        const qGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const kGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let h = 0; h < this.#numHeads; h++) {
+          for (let i = 0; i < this.#inputSize; i++) {
+            for (let j = 0; j < this.#inputSize; j++) {
+              for (let k = 0; k < headSize; k++) {
+                const scaledScore = isValidNumber(scoreGrad[h][i][j]) ? scoreGrad[h][i][j] / Math.sqrt(headSize) : 0;
+                qGrad[i][h * headSize + k] += isValidNumber(scaledScore) && isValidNumber(K[j][h * headSize + k]) ? scaledScore * K[j][h * headSize + k] : 0;
+                kGrad[j][h * headSize + k] += isValidNumber(scaledScore) && isValidNumber(Q[i][h * headSize + k]) ? scaledScore * Q[i][h * headSize + k] : 0;
+              }
+            }
+          }
+        }
+        const wqGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const wkGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const wvGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        for (let i = 0; i < this.#inputSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+            for (let k = 0; k < this.#hiddenSize; k++) {
+              wqGrad[k][j] += isValidNumber(qGrad[i][j]) && isValidNumber(activations[layer].normX[i][k]) ? qGrad[i][j] * activations[layer].normX[i][k] : 0;
+              wkGrad[k][j] += isValidNumber(kGrad[i][j]) && isValidNumber(activations[layer].normX[i][k]) ? kGrad[i][j] * activations[layer].normX[i][k] : 0;
+              wvGrad[k][j] += isValidNumber(vGrad.reduce((sum, head) => sum + head[i][j % headSize], 0)) && isValidNumber(activations[layer].normX[i][k]) ? vGrad.reduce((sum, head) => sum + head[i][j % headSize], 0) * activations[layer].normX[i][k] : 0;
+            }
+          }
+        }
+        for (let i = 0; i < this.#hiddenSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+            transformer.attentionWeights[layer].Wq[i][j] += this.#learningRate * wqGrad[i][j];
+            transformer.attentionWeights[layer].Wk[i][j] += this.#learningRate * wkGrad[i][j];
+            transformer.attentionWeights[layer].Wv[i][j] += this.#learningRate * wvGrad[i][j];
+            transformer.attentionWeights[layer].Wo[i][j] += this.#learningRate * woGrad[i][j];
+          }
+        }
+        for (let i = 0; i < this.#hiddenSize; i++) {
+          transformer.layerNormWeights[layer].gamma1[i] += this.#learningRate * grad[i];
+          transformer.layerNormWeights[layer].beta1[i] += this.#learningRate * grad[i];
+          transformer.layerNormWeights[layer].gamma2[i] += this.#learningRate * grad[i];
+          transformer.layerNormWeights[layer].beta2[i] += this.#learningRate * grad[i];
+        }
+        grad = qGrad.map((row, i) => row.map((v, j) => v + kGrad[i][j] + vGrad.reduce((sum, head) => sum + head[i][j % headSize], 0)));
+      }
+    });
+  }
+
+  getParameters(idx) {
+    return this.#transformers[idx];
+  }
+
+  setParameters(idx, params) {
+    this.#transformers[idx] = params;
+  }
+
+  getEnsembleWeight(idx) {
+    return this.#ensembleWeights[idx];
+  }
+
+  setEnsembleWeight(idx, weight) {
+    if (isValidNumber(weight) && weight >= 0) {
+      this.#ensembleWeights[idx] = weight;
+      this.#normalizeEnsembleWeights();
     }
   }
 }
@@ -373,71 +601,60 @@ class NeuralSignalEngine {
         close REAL NOT NULL,
         volume REAL NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS transformer_parameters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transformer_id TEXT NOT NULL,
+        parameters TEXT NOT NULL,
+        ensemble_weight REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(transformer_id)
+      );
       CREATE INDEX IF NOT EXISTS idx_bucket_key ON patterns(bucket_key);
       CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
       CREATE INDEX IF NOT EXISTS idx_open_trades_stopLoss ON open_trades(stopLoss);
       CREATE INDEX IF NOT EXISTS idx_candles_timestamp ON candles(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_transformer_id ON transformer_parameters(transformer_id);
     `);
   }
 
-  #saveCompressedFile(filePath, data) {
-    try {
-      const jsonString = JSON.stringify(data);
-      const compressed = zlib.brotliCompressSync(jsonString, {
-        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY }
-      });
-      fs.writeFileSync(filePath, compressed);
-    } catch {}
-  }
-
-  #loadCompressedFile(filePath) {
-    try {
-      const compressed = fs.readFileSync(filePath);
-      const decompressed = zlib.brotliDecompressSync(compressed);
-      return JSON.parse(decompressed.toString('utf8'));
-    } catch {
-      return null;
-    }
-  }
-
   #loadState() {
-    this.#loadNeuralState();
+    const stmt = this.#db.prepare(`SELECT transformer_id, parameters, ensemble_weight FROM transformer_parameters`);
+    const params = stmt.all();
+    if (params.length === 0) {
+      // Initialize with default parameters
+      for (let i = 0; i < 3; i++) {
+        const transformerId = `transformer_${i + 1}`;
+        const parameters = this.#transformer.getParameters(i);
+        const weight = this.#transformer.getEnsembleWeight(i);
+        this.#db.prepare(`
+          INSERT OR REPLACE INTO transformer_parameters (transformer_id, parameters, ensemble_weight, updated_at)
+          VALUES (?, ?, ?, ?)
+        `).run(transformerId, JSON.stringify(parameters), weight, Date.now());
+      }
+    } else {
+        params.forEach(param => {
+          if (/^transformer_[1-3]$/.test(param.transformer_id)) {
+            const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
+            this.#transformer.setParameters(idx, JSON.parse(param.parameters));
+            this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
+          }
+        });
+    }
   }
 
   #saveState() {
-    try {
-      this.#saveNeuralState();
-    } catch {}
-  }
-
-  #saveNeuralState() {
-    const state = {
-      transformer: {
-        weightsQ: this.#transformer.getWeightsQ(),
-        weightsK: this.#transformer.getWeightsK(),
-        weightsV: this.#transformer.getWeightsV(),
-        weightsOut: this.#transformer.getWeightsOut(),
-        biasQ: this.#transformer.getBiasQ(),
-        biasK: this.#transformer.getBiasK(),
-        biasV: this.#transformer.getBiasV(),
-        biasOut: this.#transformer.getBiasOut()
+    const transaction = this.#db.transaction(() => {
+      for (let i = 0; i < 3; i++) {
+        const transformerId = `transformer_${i + 1}`;
+        const parameters = this.#transformer.getParameters(i);
+        const weight = this.#transformer.getEnsembleWeight(i);
+        this.#db.prepare(`
+          INSERT OR REPLACE INTO transformer_parameters (transformer_id, parameters, ensemble_weight, updated_at)
+          VALUES (?, ?, ?, ?)
+        `).run(transformerId, JSON.stringify(parameters), weight, Date.now());
       }
-    };
-    this.#saveCompressedFile(path.join(directoryPath, 'neural_state.json'), state);
-  }
-
-  #loadNeuralState() {
-    const state = this.#loadCompressedFile(path.join(directoryPath, 'neural_state.json'));
-    if (state) {
-      this.#transformer.setWeightsQ(state.transformer?.weightsQ);
-      this.#transformer.setWeightsK(state.transformer?.weightsK);
-      this.#transformer.setWeightsV(state.transformer?.weightsV);
-      this.#transformer.setWeightsOut(state.transformer?.weightsOut);
-      this.#transformer.setBiasQ(state.transformer?.biasQ);
-      this.#transformer.setBiasK(state.transformer?.biasK);
-      this.#transformer.setBiasV(state.transformer?.biasV);
-      this.#transformer.setBiasOut(state.transformer?.biasOut);
-    }
+    });
+    transaction();
   }
 
   #extractFeatures(data) {
@@ -611,10 +828,11 @@ class NeuralSignalEngine {
         }
       });
       transaction();
+      this.#saveState(); // Save transformer parameters after training
     }
   }
 
-  getSignalsAndHealth(candles, saveState = true) {
+  getSignal(candles) {
     if (!Array.isArray(candles) || candles.length === 0) {
       return { error: 'Invalid candle array type or length' };
     }
@@ -691,12 +909,7 @@ class NeuralSignalEngine {
       dynamicThreshold
     );
 
-    if (saveState) {
-      this.#saveState();
-    }
-
-    const totalPatternsStmt = this.#db.prepare(`SELECT COUNT(*) as count FROM patterns`);
-    const totalPatterns = totalPatternsStmt.get().count;
+    this.#saveState();
 
     return {
       currentConfidence: isValidNumber(confidence) ? truncateToDecimals(confidence, 3) : 0,
@@ -705,13 +918,8 @@ class NeuralSignalEngine {
       sellPrice: isValidNumber(sellPrice) ? truncateToDecimals(sellPrice, 2) : 0,
       stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
       expectedReward: truncateToDecimals(expectedReward, 8),
-      suggestedAction: action,
-      activePatterns: totalPatterns
+      suggestedAction: action
     };
-  }
-
-  dumpState() {
-    this.#saveState();
   }
 }
 
