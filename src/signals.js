@@ -432,13 +432,6 @@ class NeuralSignalEngine {
   #bucketPriceRange = 10;
   #maxCandles = 1000;
   #maxTrades = 10000000;
-  #state = {
-    winRate: 0.5,
-    tradeCount: 0,
-    lastUpdate: null,
-    avgReward: 0,
-    signalReliability: 0.5
-  };
   #config = {
     minMultiplier: 1,
     maxMultiplier: 2.5,
@@ -812,14 +805,6 @@ class NeuralSignalEngine {
         this.#autoencoder.train(trade.features);
         this.#stateChanged.neuralState = true;
       }
-
-      this.#state.tradeCount += closedTrades.length;
-      const wins = closedTrades.filter(t => t.outcome > 0).length;
-      const totalReward = closedTrades.reduce((sum, t) => sum + t.reward, 0);
-      const reliableSignals = closedTrades.filter(t => t.confidence > t.dynamicThreshold && t.outcome > 0).length;
-      this.#state.winRate = (this.#state.winRate * this.#trades.length + wins) / (this.#trades.length + closedTrades.length) || 0.5;
-      this.#state.avgReward = (this.#state.avgReward * this.#trades.length + totalReward) / (this.#trades.length + closedTrades.length) || 0;
-      this.#state.signalReliability = (this.#state.signalReliability * this.#trades.length + reliableSignals) / (this.#trades.length + closedTrades.length) || 0.5;
     }
   }
 
@@ -865,7 +850,7 @@ class NeuralSignalEngine {
     const features = this.#extractFeatures(indicators);
     const patternScore = this.#scorePattern(features);
     const confidence = this.#transformer.forward(features)[0] * 100 * (1 + patternScore);
-    const dynamicThreshold = this.#computeDynamicThreshold(indicators, confidence, this.#state.tradeCount < 100 ? 50 : this.#config.baseConfidenceThreshold);
+    const dynamicThreshold = this.#computeDynamicThreshold(indicators, confidence, this.#config.baseConfidenceThreshold);
     const multiplier = this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * Math.max(0, (confidence - dynamicThreshold) / (100 - dynamicThreshold));
     let sellPrice = indicators.lastClose + this.#config.atrFactor * (indicators.atr[indicators.atr.length - 1] || 0);
     let stopLoss = indicators.lastClose - this.#config.stopFactor * (indicators.atr[indicators.atr.length - 1] || 0);
@@ -914,8 +899,6 @@ class NeuralSignalEngine {
     this.#tradeBuckets.stop[stopBucket].add(key);
     this.#stateChanged.openTrades = true;
 
-    this.#state.lastUpdate = Date.now();
-
     if (saveState) {
       this.#saveState();
       this.#stateChanged = {
@@ -937,8 +920,6 @@ class NeuralSignalEngine {
       stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
       expectedReward: truncateToDecimals(expectedReward, 8),
       suggestedAction: action,
-      lastUpdate: this.#state.lastUpdate ? new Date(this.#state.lastUpdate).toLocaleString() : 'N/A',
-      signalReliability: truncateToDecimals(this.#state.signalReliability, 4),
       activePatterns: totalPatterns
     };
   }
