@@ -100,6 +100,10 @@ async function runBacktest(runNumber) {
                 if (totalCandles % 1000 === 0) {
                     console.log(`Run ${runNumber} Progress: ${totalCandles} candles`);
                 }
+                if (totalCandles % 10000 === 0) {
+                    console.log(signal)
+                    process.exit()
+                }
 
                 if (batchBuffer.length >= batchSize && cache.length >= minCacheSize) {
                     try {

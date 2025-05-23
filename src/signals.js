@@ -439,16 +439,6 @@ class NeuralSignalEngine {
     avgReward: 0,
     signalReliability: 0.5
   };
-  #lifetimeState = {
-    totalTrades: 0,
-    totalWins: 0,
-    totalAccuracy: 50
-  };
-  #performanceBaseline = {
-    avgWinRate: 0.5,
-    avgReward: 0,
-    avgConfidence: 50
-  };
   #config = {
     minMultiplier: 1,
     maxMultiplier: 2.5,
@@ -459,8 +449,6 @@ class NeuralSignalEngine {
   };
   #longTermBuffer = [];
   #stateChanged = {
-    lifetimeState: false,
-    performanceBaseline: false,
     neuralState: false,
     learningState: false,
     openTrades: false,
@@ -516,35 +504,6 @@ class NeuralSignalEngine {
   }
 
   #loadState() {
-    const state = this.#loadCompressedFile(path.join(directoryPath, 'lifetime_state.json'));
-    if (
-      state &&
-      isValidNumber(state.totalTrades) &&
-      state.totalTrades >= 0 &&
-      isValidNumber(state.totalWins) &&
-      state.totalWins >= 0 &&
-      state.totalWins <= state.totalTrades &&
-      isValidNumber(state.totalAccuracy) &&
-      state.totalAccuracy >= 0 &&
-      state.totalAccuracy <= 100
-    ) {
-      this.#lifetimeState.totalTrades = state.totalTrades;
-      this.#lifetimeState.totalWins = state.totalWins;
-      this.#lifetimeState.totalAccuracy = state.totalAccuracy;
-    }
-
-    const baseline = this.#loadCompressedFile(path.join(directoryPath, 'performance_summary.json'));
-    if (
-      baseline &&
-      isValidNumber(baseline.avgWinRate) &&
-      isValidNumber(baseline.avgReward) &&
-      isValidNumber(baseline.avgConfidence)
-    ) {
-      this.#performanceBaseline.avgWinRate = baseline.avgWinRate;
-      this.#performanceBaseline.avgReward = baseline.avgReward;
-      this.#performanceBaseline.avgConfidence = baseline.avgConfidence;
-    }
-
     this.#loadNeuralState();
     this.#loadOpenTrades();
     this.#loadCandleEmbeddings();
@@ -552,12 +511,6 @@ class NeuralSignalEngine {
 
   #saveState(force = false) {
     try {
-      if (force || this.#stateChanged.lifetimeState) {
-        this.#saveCompressedFile(path.join(directoryPath, 'lifetime_state.json'), this.#lifetimeState);
-      }
-      if (force || this.#stateChanged.performanceBaseline) {
-        this.#saveCompressedFile(path.join(directoryPath, 'performance_summary.json'), this.#performanceBaseline);
-      }
       if (force || this.#stateChanged.neuralState) {
         this.#saveNeuralState();
       }
@@ -867,14 +820,6 @@ class NeuralSignalEngine {
       this.#state.winRate = (this.#state.winRate * this.#trades.length + wins) / (this.#trades.length + closedTrades.length) || 0.5;
       this.#state.avgReward = (this.#state.avgReward * this.#trades.length + totalReward) / (this.#trades.length + closedTrades.length) || 0;
       this.#state.signalReliability = (this.#state.signalReliability * this.#trades.length + reliableSignals) / (this.#trades.length + closedTrades.length) || 0.5;
-      this.#lifetimeState.totalTrades += closedTrades.length;
-      this.#lifetimeState.totalWins += wins;
-      this.#lifetimeState.totalAccuracy = this.#lifetimeState.totalTrades > 0 ? (this.#lifetimeState.totalWins / this.#lifetimeState.totalTrades) * 100 : 50;
-      this.#performanceBaseline.avgWinRate = (this.#performanceBaseline.avgWinRate * 0.9 + this.#state.winRate * 0.1);
-      this.#performanceBaseline.avgReward = (this.#performanceBaseline.avgReward * 0.9 + this.#state.avgReward * 0.1);
-      this.#performanceBaseline.avgConfidence = (this.#performanceBaseline.avgConfidence * 0.9 + (closedTrades.reduce((sum, t) => sum + t.confidence, 0) / closedTrades.length || 0) * 0.1);
-      this.#stateChanged.lifetimeState = true;
-      this.#stateChanged.performanceBaseline = true;
     }
   }
 
@@ -974,8 +919,6 @@ class NeuralSignalEngine {
     if (saveState) {
       this.#saveState();
       this.#stateChanged = {
-        lifetimeState: false,
-        performanceBaseline: false,
         neuralState: false,
         learningState: false,
         openTrades: false,
@@ -994,10 +937,6 @@ class NeuralSignalEngine {
       stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
       expectedReward: truncateToDecimals(expectedReward, 8),
       suggestedAction: action,
-      totalTrades: this.#lifetimeState.totalTrades,
-      totalAccuracy: truncateToDecimals(this.#lifetimeState.totalAccuracy, 4),
-      performanceWinRate: truncateToDecimals(this.#performanceBaseline.avgWinRate * 100, 4),
-      performanceAvgReward: truncateToDecimals(this.#performanceBaseline.avgReward, 8),
       lastUpdate: this.#state.lastUpdate ? new Date(this.#state.lastUpdate).toLocaleString() : 'N/A',
       signalReliability: truncateToDecimals(this.#state.signalReliability, 4),
       activePatterns: totalPatterns
