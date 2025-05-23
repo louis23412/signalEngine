@@ -18,8 +18,6 @@ const isValidNumber = (value) => {
 
 const sigmoid = (x) => isValidNumber(x) ? 1 / (1 + Math.exp(-Math.min(Math.max(x, -100), 100))) : 0;
 
-const relu = (x) => isValidNumber(x) ? Math.max(0, x) : 0;
-
 const softmax = (arr) => {
   if (!arr.every(isValidNumber)) return arr.map(() => 1 / arr.length);
   const max = Math.max(...arr);
@@ -27,103 +25,6 @@ const softmax = (arr) => {
   const sum = exp.reduce((a, b) => a + b, 0) || 1;
   return exp.map(x => x / sum);
 };
-
-class AutoEncoder {
-  #inputSize = 6;
-  #hiddenSize = 3;
-  #weightsEncode;
-  #weightsDecode;
-  #biasEncode;
-  #biasDecode;
-  #learningRate = 0.01;
-
-  constructor() {
-    const xavierInit = (rows, cols) => Array(rows).fill().map(() => Array(cols).fill().map(() => (Math.random() - 0.5) * Math.sqrt(2 / (rows + cols))));
-    this.#weightsEncode = xavierInit(this.#inputSize, this.#hiddenSize);
-    this.#weightsDecode = xavierInit(this.#hiddenSize, this.#inputSize);
-    this.#biasEncode = Array(this.#hiddenSize).fill(0);
-    this.#biasDecode = Array(this.#inputSize).fill(0);
-  }
-
-  getWeightsEncode() { return this.#weightsEncode; }
-  getWeightsDecode() { return this.#weightsDecode; }
-  getBiasEncode() { return this.#biasEncode; }
-  getBiasDecode() { return this.#biasDecode; }
-
-  setWeightsEncode(weights) {
-    if (this.#isValidMatrix(weights, this.#inputSize, this.#hiddenSize)) this.#weightsEncode = weights;
-  }
-  setWeightsDecode(weights) {
-    if (this.#isValidMatrix(weights, this.#hiddenSize, this.#inputSize)) this.#weightsDecode = weights;
-  }
-  setBiasEncode(bias) {
-    if (this.#isValidArray(bias, this.#hiddenSize)) this.#biasEncode = bias;
-  }
-  setBiasDecode(bias) {
-    if (this.#isValidArray(bias, this.#inputSize)) this.#biasDecode = bias;
-  }
-
-  #isValidMatrix(matrix, rows, cols) {
-    return Array.isArray(matrix) &&
-           matrix.length === rows &&
-           matrix.every(row => Array.isArray(row) && row.length === cols && row.every(isValidNumber));
-  }
-
-  #isValidArray(arr, len) {
-    return Array.isArray(arr) && arr.length === len && arr.every(isValidNumber);
-  }
-
-  encode(inputs) {
-    if (inputs.length !== this.#inputSize || !inputs.every(isValidNumber)) return Array(this.#hiddenSize).fill(0);
-    const hidden = Array(this.#hiddenSize).fill(0);
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        hidden[j] += inputs[i] * this.#weightsEncode[i][j];
-      }
-    }
-    return hidden.map((x, j) => relu(x + this.#biasEncode[j]));
-  }
-
-  decode(hidden) {
-    if (hidden.length !== this.#hiddenSize || !hidden.every(isValidNumber)) return Array(this.#inputSize).fill(0);
-    const output = Array(this.#inputSize).fill(0);
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      for (let j = 0; j < this.#inputSize; j++) {
-        output[j] += hidden[i] * this.#weightsDecode[i][j];
-      }
-    }
-    return output.map((x, j) => x + this.#biasDecode[j]);
-  }
-
-  train(inputs) {
-    if (inputs.length !== this.#inputSize || !inputs.every(isValidNumber)) return;
-    const hidden = this.encode(inputs);
-    const output = this.decode(hidden);
-    const errors = inputs.map((x, i) => x - output[i]);
-    const hiddenErrors = Array(this.#hiddenSize).fill(0);
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      for (let j = 0; j < this.#inputSize; j++) {
-        hiddenErrors[i] += errors[j] * this.#weightsDecode[i][j];
-      }
-    }
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      for (let j = 0; j < this.#inputSize; j++) {
-        this.#weightsDecode[i][j] += this.#learningRate * errors[j] * hidden[i];
-      }
-    }
-    for (let j = 0; j < this.#inputSize; j++) {
-      this.#biasDecode[j] += this.#learningRate * errors[j];
-    }
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        this.#weightsEncode[i][j] += this.#learningRate * hiddenErrors[j] * inputs[i];
-      }
-    }
-    for (let j = 0; j < this.#hiddenSize; j++) {
-      this.#biasEncode[j] += this.#learningRate * hiddenErrors[j];
-    }
-  }
-}
 
 class Transformer {
   #inputSize = 6;
@@ -419,7 +320,6 @@ class IndicatorProcessor {
 
 class NeuralSignalEngine {
   #transformer = new Transformer();
-  #autoencoder = new AutoEncoder();
   #indicators = new IndicatorProcessor();
   #db;
   #candles = [];
@@ -440,11 +340,9 @@ class NeuralSignalEngine {
     stopFactor: 2.5,
     learningRate: 0.25
   };
-  #longTermBuffer = [];
   #stateChanged = {
     neuralState: false,
-    openTrades: false,
-    candleEmbeddings: false
+    openTrades: false
   };
 
   constructor() {
@@ -498,7 +396,6 @@ class NeuralSignalEngine {
   #loadState() {
     this.#loadNeuralState();
     this.#loadOpenTrades();
-    this.#loadCandleEmbeddings();
   }
 
   #saveState(force = false) {
@@ -509,20 +406,11 @@ class NeuralSignalEngine {
       if (force || this.#stateChanged.openTrades) {
         this.#saveOpenTrades();
       }
-      if (force || this.#stateChanged.candleEmbeddings) {
-        this.#saveCandleEmbeddings();
-      }
     } catch {}
   }
 
   #saveNeuralState() {
     const state = {
-      autoEncoder: {
-        weightsEncode: this.#autoencoder.getWeightsEncode(),
-        weightsDecode: this.#autoencoder.getWeightsDecode(),
-        biasEncode: this.#autoencoder.getBiasEncode(),
-        biasDecode: this.#autoencoder.getBiasDecode()
-      },
       transformer: {
         weightsQ: this.#transformer.getWeightsQ(),
         weightsK: this.#transformer.getWeightsK(),
@@ -540,10 +428,6 @@ class NeuralSignalEngine {
   #loadNeuralState() {
     const state = this.#loadCompressedFile(path.join(directoryPath, 'neural_state.json'));
     if (state) {
-      this.#autoencoder.setWeightsEncode(state.autoEncoder?.weightsEncode);
-      this.#autoencoder.setWeightsDecode(state.autoEncoder?.weightsDecode);
-      this.#autoencoder.setBiasEncode(state.autoEncoder?.biasEncode);
-      this.#autoencoder.setBiasDecode(state.autoEncoder?.biasDecode);
       this.#transformer.setWeightsQ(state.transformer?.weightsQ);
       this.#transformer.setWeightsK(state.transformer?.weightsK);
       this.#transformer.setWeightsV(state.transformer?.weightsV);
@@ -584,41 +468,6 @@ class NeuralSignalEngine {
           stmt.run(trade.stateKey);
         });
     }
-  }
-
-  #saveCandleEmbeddings() {
-    const state = { longTermBuffer: this.#longTermBuffer.slice(-this.#maxCandles / 2) };
-    this.#saveCompressedFile(path.join(directoryPath, 'candle_embeddings.json'), state);
-  }
-
-  #loadCandleEmbeddings() {
-    const state = this.#loadCompressedFile(path.join(directoryPath, 'candle_embeddings.json'));
-    if (state && Array.isArray(state.longTermBuffer)) {
-      this.#longTermBuffer = state.longTermBuffer
-        .filter(embedding => Array.isArray(embedding) && embedding.every(isValidNumber))
-        .slice(-this.#maxCandles);
-    }
-  }
-
-  #compressCandles() {
-    if (this.#candles.length < 100) return;
-    const toCompress = this.#candles.slice(0, -50);
-    const features = toCompress.map(c => [
-      c.close,
-      c.high - c.low,
-      c.volume,
-      c.close > c.open ? 1 : 0,
-      isValidNumber(c.close) && isValidNumber(c.open) ? Math.abs(c.close - c.open) / c.close : 0,
-      c.timestamp
-    ]);
-    const embeddings = features.map(f => this.#autoencoder.encode(f));
-    this.#longTermBuffer.push(...embeddings.slice(-this.#maxCandles));
-    this.#longTermBuffer = this.#longTermBuffer.slice(-this.#maxCandles);
-    this.#candles = this.#candles.slice(-50);
-    for (const candle of toCompress) {
-      this.#candlesTimestamps.delete(candle.timestamp);
-    }
-    this.#stateChanged.candleEmbeddings = true;
   }
 
   #extractFeatures(data) {
@@ -800,7 +649,6 @@ class NeuralSignalEngine {
         updateQTableStmt.run(trade.stateKey, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.stateKey);
         
         this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
-        this.#autoencoder.train(trade.features);
         this.#stateChanged.neuralState = true;
       }
     }
@@ -833,11 +681,17 @@ class NeuralSignalEngine {
     this.#candles.push(...newCandles);
     for (const candle of newCandles) {
       this.#candlesTimestamps.add(candle.timestamp);
-      this.#stateChanged.candleEmbeddings = true;
     }
     this.#candles = this.#candles.slice(-this.#maxCandles);
 
-    this.#compressCandles();
+    if (this.#candles.length > 100) {
+      const toRemove = this.#candles.slice(0, -100);
+      this.#candles = this.#candles.slice(-100);
+      for (const candle of toRemove) {
+        this.#candlesTimestamps.delete(candle.timestamp);
+      }
+    }
+
     const indicators = this.#indicators.compute(this.#candles.slice(-100));
     if (indicators.error) {
       return {
@@ -901,8 +755,7 @@ class NeuralSignalEngine {
       this.#saveState();
       this.#stateChanged = {
         neuralState: false,
-        openTrades: false,
-        candleEmbeddings: false
+        openTrades: false
       };
     }
 
