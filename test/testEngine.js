@@ -101,6 +101,7 @@ async function runBacktest(runNumber) {
                     console.log(`Run ${runNumber} Progress: ${totalCandles} candles`);
                 }
                 if (totalCandles % 10000 === 0) {
+                    engine.dumpState()
                     console.log(signal)
                     process.exit()
                 }

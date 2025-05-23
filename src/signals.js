@@ -443,7 +443,6 @@ class NeuralSignalEngine {
   #longTermBuffer = [];
   #stateChanged = {
     neuralState: false,
-    learningState: false,
     openTrades: false,
     candleEmbeddings: false
   };
@@ -794,7 +793,6 @@ class NeuralSignalEngine {
       `);
 
       for (const trade of closedTrades) {
-        const pattern = { features: trade.features, score: trade.reward };
         const key = this.#generateFeatureKey(trade.features);
         insertPatternStmt.run(key, JSON.stringify(trade.features), trade.reward);
 
@@ -903,7 +901,6 @@ class NeuralSignalEngine {
       this.#saveState();
       this.#stateChanged = {
         neuralState: false,
-        learningState: false,
         openTrades: false,
         candleEmbeddings: false
       };
