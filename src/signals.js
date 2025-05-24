@@ -227,7 +227,7 @@ class Transformer {
               for (let k = 0; k < headSize; k++) {
                 sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k]) ? Q[i][h * headSize + k] * K[j][h * headSize + k] : 0;
               }
-              attentionScores[h][i][j] = isValidNumber(sum) ? sum / Math.sqrt(headSize) : 0;
+              attentionScores[h][i][j] = isValidNumber(sum) ? Math.min(Math.max(sum / Math.sqrt(headSize), -100), 100) : 0;
             }
           }
           attentionProbs[h] = attentionScores[h].map(row => softmax(row));
@@ -318,14 +318,23 @@ class Transformer {
               }
             }
           }
+          // Recompute softmax probabilities from attentionScores for numerical stability
+          const recomputedProbs = attentionScores[h].map(row => {
+            if (!row.every(isValidNumber)) return row.map(() => 1 / row.length);
+            const max = Math.max(...row);
+            const exp = row.map(x => Math.exp(Math.min(Math.max(x - max, -100), 100)));
+            const sum = exp.reduce((a, b) => a + b, 0) || 1;
+            return exp.map(x => x / sum);
+          });
           for (let i = 0; i < this.#inputSize; i++) {
             for (let j = 0; j < this.#inputSize; j++) {
               let softmaxGrad = 0;
               for (let k = 0; k < this.#inputSize; k++) {
-                const prob = attentionProbs[h][i][k];
-                softmaxGrad += isValidNumber(prob) && isValidNumber(scoreGrad[h][i][k]) ? prob * (scoreGrad[h][i][j] - (j === k ? scoreGrad[h][i][k] : 0)) : 0;
+                const prob = recomputedProbs[i][k];
+                const delta = (j === k ? 1 : 0);
+                softmaxGrad += isValidNumber(prob) && isValidNumber(scoreGrad[h][i][k]) ? prob * (delta - prob) * scoreGrad[h][i][k] : 0;
               }
-              scoreGrad[h][i][j] = isValidNumber(softmaxGrad) ? softmaxGrad : 0;
+              scoreGrad[h][i][j] = isValidNumber(softmaxGrad) ? Math.min(Math.max(softmaxGrad, -1), 1) : 0;
             }
           }
         }
@@ -935,8 +944,6 @@ class NeuralSignalEngine {
       stateKey,
       dynamicThreshold
     );
-
-    this.#saveState();
 
     return {
       currentConfidence: isValidNumber(confidence) ? truncateToDecimals(confidence, 3) : 0,
