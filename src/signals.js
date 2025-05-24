@@ -34,7 +34,7 @@ class Transformer {
   #feedForwardSize = 32;
   #dropoutRate = 0.1;
   #learningRate = 0.0005;
-  #ensembleSize = 3;
+  #ensembleSize = 5;
   #transformers = [];
   #ensembleWeights = [];
 
@@ -658,7 +658,7 @@ class NeuralSignalEngine {
     const params = stmt.all();
     if (params.length === 0) {
       // Initialize with default parameters
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 5; i++) {
         const transformerId = `transformer_${i + 1}`;
         const parameters = this.#transformer.getParameters(i);
         const weight = this.#transformer.getEnsembleWeight(i);
@@ -669,7 +669,7 @@ class NeuralSignalEngine {
       }
     } else {
         params.forEach(param => {
-          if (/^transformer_[1-3]$/.test(param.transformer_id)) {
+          if (/^transformer_[1-5]$/.test(param.transformer_id)) {
             const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
             this.#transformer.setParameters(idx, JSON.parse(param.parameters));
             this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
@@ -680,7 +680,7 @@ class NeuralSignalEngine {
 
   #saveState() {
     const transaction = this.#db.transaction(() => {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 5; i++) {
         const transformerId = `transformer_${i + 1}`;
         const parameters = this.#transformer.getParameters(i);
         const weight = this.#transformer.getEnsembleWeight(i);

@@ -4,7 +4,7 @@
 NeuralSignalEngine is a JavaScript-based tool for generating simulated trading signals using an ensemble of transformer neural networks and technical indicators. It processes financial market candlestick data to compute indicators, train its model, and produce buy/hold signals with confidence levels, target prices, and stop-loss levels. All trades are simulated and not executed in real markets.
 
 ## Features
-- **Transformer Ensemble**: Uses three transformer models with multi-head attention for robust signal prediction.
+- **Transformer Ensemble**: Uses five transformer models with multi-head attention for robust signal prediction.
 - **Technical Indicators**: Calculates RSI, MACD, ATR, and volume metrics for market analysis.
 - **Q-Learning**: Optimizes trading decisions using a Q-table based on historical patterns.
 - **SQLite Database**: Stores transformer parameters, trading patterns, simulated trades, and candlestick data for persistence across sessions.
