@@ -1,14 +1,14 @@
 # NeuralSignalEngine
 
 ## Overview
-NeuralSignalEngine is a JavaScript-based tool for generating simulated trading signals using an ensemble of transformer neural networks and technical indicators. It processes financial market candlestick data to compute indicators, train its model, and produce buy/hold signals with confidence levels, target prices, and stop-loss levels. All trades are simulated and not executed in real markets.
+NeuralSignalEngine is a JavaScript-based tool for generating simulated trading signals using an ensemble of 64 shallow transformer neural networks, collectively named `HiveMind`, alongside technical indicators and Q-learning. It processes financial market candlestick data to compute indicators, train its model, and produce buy/hold signals with confidence levels, target prices, and stop-loss levels. All trades are simulated and not executed in real markets.
 
 ## Features
-- **Transformer Ensemble**: Uses five transformer models with multi-head attention for robust signal prediction.
-- **Technical Indicators**: Calculates RSI, MACD, ATR, and volume metrics for market analysis.
+- **HiveMind Ensemble**: Employs 64 shallow transformer models with multi-head attention, collaborating via weight sharing to predict robust trading signals.
+- **Technical Indicators**: Calculates RSI, MACD, ATR, and volume Z-score for comprehensive market analysis.
 - **Q-Learning**: Optimizes trading decisions using a Q-table based on historical patterns.
-- **SQLite Database**: Stores transformer parameters, trading patterns, simulated trades, and candlestick data for persistence across sessions.
-- **Dynamic Thresholding**: Adapts confidence thresholds based on market volatility.
+- **SQLite Database**: Persists `HiveMind` parameters, trading patterns, simulated trades, and candlestick data across sessions.
+- **Dynamic Thresholding**: Adapts confidence thresholds based on market volatility and conditions.
 
 ## Requirements
 - **Node.js**: Version 16 or higher.
@@ -27,7 +27,7 @@ NeuralSignalEngine is a JavaScript-based tool for generating simulated trading s
    ```
 
 ## Project Structure
-- **`src/signals.js`**: Core logic with `Transformer`, `IndicatorProcessor`, and `NeuralSignalEngine` classes.
+- **`src/signals.js`**: Core logic with `HiveMind`, `IndicatorProcessor`, and `NeuralSignalEngine` classes.
 - **`test/`**:
   - `testEngine.js`: Script for training and testing the engine.
   - `candles.jsonl`: Input file with candlestick data (must be created).
@@ -35,9 +35,9 @@ NeuralSignalEngine is a JavaScript-based tool for generating simulated trading s
 - **`README.md`**: Project documentation.
 
 ## Training and Testing
-The `testEngine.js` script trains the model and tests signal generation using candlestick data from `test/candles.jsonl`. Training requires at least 10,000 candles covering varied market conditions for reliable signals. The model learns incrementally as it processes data and updates its transformer weights and Q-table.
+The `testEngine.js` script trains the `HiveMind` ensemble and tests signal generation using candlestick data from `test/candles.jsonl`. Training requires at least 10,000 candles covering varied market conditions for reliable signals. The `HiveMind` learns incrementally as it processes data, updating transformer weights, ensemble weights, and the Q-table based on simulated trade outcomes.
 
-The script maintains a sliding window of the latest 100 candles, mimicking real-world usage where the engine is called with each new candle received to generate a signal. This fixed window ensures efficient processing by focusing on recent market data.
+The script maintains a sliding window of the latest 100 candles, mimicking real-world usage where the engine is called with each new candle to generate a signal. This fixed window ensures efficient processing by focusing on recent market data.
 
 ### Steps
 1. **Prepare `test/candles.jsonl`**:
@@ -67,7 +67,8 @@ The script maintains a sliding window of the latest 100 candles, mimicking real-
      ```
 
 3. **Training Process**:
-   - The engine trains incrementally as it processes candles, updating transformer weights and the Q-table based on simulated trade outcomes.
+   - The `HiveMind` trains incrementally as simulated trades are closed, adjusting weights based on trade outcomes (positive: 1, negative: 0).
+   - The 64 transformers share weights periodically to enhance collaboration, with high-performing models contributing more.
    - Use large datasets (10,000+ candles) for better signal accuracy.
    - **Note**: At least 11 candles are required to compute technical indicators (e.g., RSI, MACD, ATR).
 
@@ -108,7 +109,7 @@ The SQLite database (`state/neural_engine.db`) ensures persistence of learned pa
 - **`patterns`**: Trading patterns (`bucket_key`, `features`, `score`).
 - **`open_trades`**: Simulated trades (`timestamp`, `sellPrice`, `stopLoss`, `entryPrice`, `confidence`, `candlesHeld`, `strategy`, `patternScore`, `features`, `stateKey`, `dynamicThreshold`).
 - **`candles`**: Historical candles (`timestamp`, `open`, `high`, `low`, `close`, `volume`).
-- **`transformer_parameters`**: Transformer weights (`transformer_id`, `parameters`, `ensemble_weight`, `updated_at`).
+- **`transformer_parameters`**: `HiveMind` transformer weights (`transformer_id`, `parameters`, `ensemble_weight`, `performance_score`, `agreement_score`, `updated_at`).
 
 ## Performance Tips
 - **Data Size**: Use 10,000+ candles for robust training to improve signal accuracy.
@@ -126,7 +127,7 @@ The SQLite database (`state/neural_engine.db`) ensures persistence of learned pa
 - Requires at least 11 candles for indicator calculations.
 - Signals improve with more training data.
 - Ensure sufficient disk space for `neural_engine.db`.
-- The SQLite database persists transformer weights and Q-table, allowing the model to resume learning across sessions.
+- The SQLite database persists `HiveMind` weights and Q-table, allowing the model to resume learning across sessions.
 
 ## Disclaimer
 This tool is for educational and research purposes only. It generates simulated signals, not real trades. Signals may not predict future market performance. Use at your own risk and consult a financial advisor before making decisions. The author is not liable for any losses.
