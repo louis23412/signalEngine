@@ -1294,6 +1294,7 @@ class NeuralSignalEngine {
     }
 
     const action = qValues.buy > qValues.hold ? 'buy' : 'hold';
+    const suggestedAction = (action === 'buy' && isValidNumber(confidence) && isValidNumber(dynamicThreshold) && confidence >= 0.75 * dynamicThreshold) ? 'buy' : 'hold';
     const entryPrice = indicators.lastClose;
     const key = Date.now().toString();
 
@@ -1316,13 +1317,12 @@ class NeuralSignalEngine {
     );
 
     return {
-      currentConfidence: isValidNumber(confidence) ? truncateToDecimals(confidence, 3) : 0,
-      suggestedConfidence: isValidNumber(dynamicThreshold) ? truncateToDecimals(dynamicThreshold, 3) : 0,
+      suggestedAction,
       multiplier: isValidNumber(multiplier) ? truncateToDecimals(multiplier, 3) : this.#config.minMultiplier,
+      entryPrice,
       sellPrice: isValidNumber(sellPrice) ? truncateToDecimals(sellPrice, 2) : 0,
       stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
-      expectedReward: truncateToDecimals(expectedReward, 8),
-      suggestedAction: action
+      expectedReward: truncateToDecimals(expectedReward, 8)
     };
   }
 }
