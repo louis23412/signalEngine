@@ -25,19 +25,19 @@ const softmax = (arr) => {
   return exp.map(x => x / sum);
 };
 
-class Transformer {
+class HiveMind {
   #inputSize = 6;
-  #hiddenSize = 24;
+  #hiddenSize = 16;
   #outputSize = 1;
   #numHeads = 4;
-  #numLayers = 4;
-  #feedForwardSize = 48;
+  #numLayers = 2;
+  #feedForwardSize = 32;
   #dropoutRate = 0.15;
-  #learningRate = 0.0005;
-  #ensembleSize = 10;
+  #learningRate = 0.001;
+  #ensembleSize = 64;
   #transformers = [];
   #ensembleWeights = [];
-  #communicationFrequency = 15;
+  #communicationFrequency = 10;
   #weightSharingRate = 0.05;
   #performanceScores = Array(this.#ensembleSize).fill(0);
   #agreementScores = Array(this.#ensembleSize).fill(0);
@@ -948,7 +948,7 @@ class IndicatorProcessor {
 }
 
 class NeuralSignalEngine {
-  #transformer = new Transformer();
+  #transformer = new HiveMind();
   #indicators = new IndicatorProcessor();
   #db;
   #config = {
@@ -1024,7 +1024,7 @@ class NeuralSignalEngine {
     const stmt = this.#db.prepare(`SELECT transformer_id, parameters, ensemble_weight, performance_score, agreement_score FROM transformer_parameters`);
     const params = stmt.all();
     if (params.length === 0) {
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 64; i++) {
         const transformerId = `transformer_${i + 1}`;
         const parameters = this.#transformer.getParameters(i);
         const weight = this.#transformer.getEnsembleWeight(i);
@@ -1035,7 +1035,7 @@ class NeuralSignalEngine {
       }
     } else {
       params.forEach(param => {
-        if (/^transformer_[1-10]$/.test(param.transformer_id)) {
+        if (/^transformer_[1-64]$/.test(param.transformer_id)) {
           const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
           this.#transformer.setParameters(idx, JSON.parse(param.parameters));
           this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
@@ -1048,7 +1048,7 @@ class NeuralSignalEngine {
 
   #saveState() {
     const transaction = this.#db.transaction(() => {
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 64; i++) {
         const transformerId = `transformer_${i + 1}`;
         const parameters = this.#transformer.getParameters(i);
         const weight = this.#transformer.getEnsembleWeight(i);
