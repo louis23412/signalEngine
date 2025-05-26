@@ -699,10 +699,10 @@ class NeuralSignalEngine {
       return Math.min(1, Math.max(0, (value - min) / (max - min)));
     };
     return [
-      normalize(data.rsi[data.rsi.length - 1], data.rsiMin, data.rsiMax),
-      normalize(data.macd[data.macd.length - 1].MACD - data.macd[data.macd.length - 1].signal, data.macdMin, data.macdMax),
-      normalize(data.atr[data.atr.length - 1], data.atrMin, data.atrMax),
-      Math.min(1, Math.max(-1, data.volumeZScore / 3)),
+      truncateToDecimals(normalize(data.rsi[data.rsi.length - 1], data.rsiMin, data.rsiMax), 6),
+      truncateToDecimals(normalize(data.macd[data.macd.length - 1].MACD - data.macd[data.macd.length - 1].signal, data.macdMin, data.macdMax), 6),
+      truncateToDecimals(normalize(data.atr[data.atr.length - 1], data.atrMin, data.atrMax), 6),
+      truncateToDecimals(Math.min(1, Math.max(-1, data.volumeZScore / 3)), 6),
       data.isTrending,
       data.isRanging
     ];
@@ -743,7 +743,7 @@ class NeuralSignalEngine {
 
   #generateFeatureKey(features) {
     if (!Array.isArray(features) || features.length !== 6) return 'default';
-    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000000) / 1000000 : 0);
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000) / 1000 : 0);
     return quantized.join('|');
   }
 
