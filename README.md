@@ -1,14 +1,15 @@
 # NeuralSignalEngine
 
 ## Overview
-NeuralSignalEngine is a JavaScript-based tool for generating simulated trading signals using an ensemble of 64 shallow transformer neural networks, collectively named `HiveMind`, alongside technical indicators and Q-learning. It processes financial market candlestick data to compute indicators, train its model, and produce buy/hold signals with confidence levels, target prices, and stop-loss levels. All trades are simulated and not executed in real markets.
+NeuralSignalEngine is a JavaScript-based tool for generating simulated trading signals using an ensemble of 64 shallow transformer neural networks, collectively named `HiveMind`, alongside technical indicators and Q-learning. It processes financial market candlestick data to compute indicators, train its model, and produce buy/hold signals with trade sizing, target prices, stop-loss levels, and entry prices. All trades are simulated and not executed in real markets.
 
 ## Features
 - **HiveMind Ensemble**: Employs 64 shallow transformer models with multi-head attention, collaborating via weight sharing to predict robust trading signals.
 - **Technical Indicators**: Calculates RSI, MACD, ATR, and volume Z-score for comprehensive market analysis.
 - **Q-Learning**: Optimizes trading decisions using a Q-table based on historical patterns.
 - **SQLite Database**: Persists `HiveMind` parameters, trading patterns, simulated trades, and candlestick data across sessions.
-- **Dynamic Thresholding**: Adapts confidence thresholds based on market volatility and conditions.
+- **Dynamic Thresholding**: Adapts confidence thresholds based on market volatility and conditions, using a 75% threshold to determine buy signals.
+- **Signal Output**: Generates a single `suggestedAction` ("buy" or "hold") based on model confidence and Q-table action, with an `entryPrice` for trade execution.
 
 ## Requirements
 - **Node.js**: Version 16 or higher.
@@ -56,13 +57,12 @@ The script maintains a sliding window of the latest 100 candles, mimicking real-
    - Example output:
      ```javascript
      {
-       currentConfidence: 75.123, // Confidence in the signal (0-100)
-       suggestedConfidence: 60.456, // Dynamic threshold
+       suggestedAction: 'buy', // 'buy' or 'hold'
        multiplier: 1.789, // Trade sizing multiplier
+       entryPrice: 102.00, // Entry price (last closing price)
        sellPrice: 105.23, // Target sell price
        stopLoss: 98.45, // Stop-loss price
-       expectedReward: 0.029, // Expected reward ratio
-       suggestedAction: 'buy' // 'buy' or 'hold'
+       expectedReward: 0.029 // Expected reward ratio
      }
      ```
 
