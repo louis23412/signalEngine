@@ -80,18 +80,33 @@ class Transformer {
 
   #shareWeights() {
     const validateArray = (arr, defaultValue) => arr.map(val => isValidNumber(val) ? val : defaultValue);
-    const avgWeights = (weights) => {
+
+    // Compute normalized performance scores for weighted contribution
+    const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
+    const normalizedPerformance = this.#performanceScores.map(score => (isValidNumber(score) ? score : 0) / performanceSum);
+
+    // Calculate dynamic weight sharing rates based on performance
+    const maxPerformance = Math.max(...this.#performanceScores.filter(isValidNumber));
+    const minPerformance = Math.min(...this.#performanceScores.filter(isValidNumber));
+    const performanceGap = maxPerformance - minPerformance || 1;
+    const dynamicSharingRates = this.#performanceScores.map(score => {
+      if (!isValidNumber(score)) return this.#weightSharingRate;
+      // Lower performers get higher sharing rates to learn more from high performers
+      return this.#weightSharingRate + (0.1 * (maxPerformance - score) / performanceGap);
+    });
+
+    const avgWeights = (weights, performanceWeights) => {
       const result = weights[0].map(row => row.map(() => 0));
       for (let i = 0; i < result.length; i++) {
         for (let j = 0; j < result[i].length; j++) {
-          let sum = 0, count = 0;
-          for (const w of weights) {
-            if (isValidNumber(w[i][j])) {
-              sum += w[i][j];
-              count++;
+          let weightedSum = 0, totalWeight = 0;
+          for (let t = 0; t < weights.length; t++) {
+            if (isValidNumber(weights[t][i][j]) && isValidNumber(performanceWeights[t])) {
+              weightedSum += weights[t][i][j] * performanceWeights[t];
+              totalWeight += performanceWeights[t];
             }
           }
-          result[i][j] = count > 0 ? sum / count : 0;
+          result[i][j] = totalWeight > 0 ? weightedSum / totalWeight : 0;
         }
       }
       return result;
@@ -107,51 +122,58 @@ class Transformer {
       const allB1 = this.#transformers.map(t => t.ffnWeights[layer].b1);
       const allB2 = this.#transformers.map(t => t.ffnWeights[layer].b2);
 
-      const avgWq = avgWeights(allWq);
-      const avgWk = avgWeights(allWk);
-      const avgWv = avgWeights(allWv);
-      const avgWo = avgWeights(allWo);
-      const avgW1 = avgWeights(allW1);
-      const avgW2 = avgWeights(allW2);
-      const avgB1 = validateArray(allB1.reduce((sum, b) => sum.map((v, i) => v + (isValidNumber(b[i]) ? b[i] : 0)), Array(allB1[0].length).fill(0)).map(v => v / allB1.length), 0);
-      const avgB2 = validateArray(allB2.reduce((sum, b) => sum.map((v, i) => v + (isValidNumber(b[i]) ? b[i] : 0)), Array(allB2[0].length).fill(0)).map(v => v / allB2.length), 0);
+      const avgWq = avgWeights(allWq, normalizedPerformance);
+      const avgWk = avgWeights(allWk, normalizedPerformance);
+      const avgWv = avgWeights(allWv, normalizedPerformance);
+      const avgWo = avgWeights(allWo, normalizedPerformance);
+      const avgW1 = avgWeights(allW1, normalizedPerformance);
+      const avgW2 = avgWeights(allW2, normalizedPerformance);
+      const avgB1 = validateArray(
+        allB1.reduce((sum, b) => sum.map((v, i) => v + (isValidNumber(b[i]) ? b[i] * normalizedPerformance[allB1.indexOf(b)] : 0)), Array(allB1[0].length).fill(0))
+          .map(v => v / (normalizedPerformance.reduce((sum, p) => sum + p, 0) || 1)), 0
+      );
+      const avgB2 = validateArray(
+        allB2.reduce((sum, b) => sum.map((v, i) => v + (isValidNumber(b[i]) ? b[i] * normalizedPerformance[allB2.indexOf(b)] : 0)), Array(allB2[0].length).fill(0))
+          .map(v => v / (normalizedPerformance.reduce((sum, p) => sum + p, 0) || 1)), 0
+      );
 
-      this.#transformers.forEach(t => {
+      this.#transformers.forEach((t, idx) => {
+        const sharingRate = dynamicSharingRates[idx];
         for (let i = 0; i < t.attentionWeights[layer].Wq.length; i++) {
           for (let j = 0; j < t.attentionWeights[layer].Wq[i].length; j++) {
             t.attentionWeights[layer].Wq[i][j] = isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
-              ? (1 - this.#weightSharingRate) * t.attentionWeights[layer].Wq[i][j] + this.#weightSharingRate * avgWq[i][j]
+              ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j]
               : t.attentionWeights[layer].Wq[i][j];
             t.attentionWeights[layer].Wk[i][j] = isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
-              ? (1 - this.#weightSharingRate) * t.attentionWeights[layer].Wk[i][j] + this.#weightSharingRate * avgWk[i][j]
+              ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j]
               : t.attentionWeights[layer].Wk[i][j];
             t.attentionWeights[layer].Wv[i][j] = isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
-              ? (1 - this.#weightSharingRate) * t.attentionWeights[layer].Wv[i][j] + this.#weightSharingRate * avgWv[i][j]
+              ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j]
               : t.attentionWeights[layer].Wv[i][j];
             t.attentionWeights[layer].Wo[i][j] = isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
-              ? (1 - this.#weightSharingRate) * t.attentionWeights[layer].Wo[i][j] + this.#weightSharingRate * avgWo[i][j]
+              ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j]
               : t.attentionWeights[layer].Wo[i][j];
           }
         }
         for (let i = 0; i < t.ffnWeights[layer].W1.length; i++) {
           for (let j = 0; j < t.ffnWeights[layer].W1[i].length; j++) {
             t.ffnWeights[layer].W1[i][j] = isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
-              ? (1 - this.#weightSharingRate) * t.ffnWeights[layer].W1[i][j] + this.#weightSharingRate * avgW1[i][j]
+              ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j]
               : t.ffnWeights[layer].W1[i][j];
           }
         }
         for (let i = 0; i < t.ffnWeights[layer].W2.length; i++) {
           for (let j = 0; j < t.ffnWeights[layer].W2[i].length; j++) {
             t.ffnWeights[layer].W2[i][j] = isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
-              ? (1 - this.#weightSharingRate) * t.ffnWeights[layer].W2[i][j] + this.#weightSharingRate * avgW2[i][j]
+              ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j]
               : t.ffnWeights[layer].W2[i][j];
           }
         }
         t.ffnWeights[layer].b1 = t.ffnWeights[layer].b1.map((v, i) => isValidNumber(v) && isValidNumber(avgB1[i])
-          ? (1 - this.#weightSharingRate) * v + this.#weightSharingRate * avgB1[i]
+          ? (1 - sharingRate) * v + sharingRate * avgB1[i]
           : v);
         t.ffnWeights[layer].b2 = t.ffnWeights[layer].b2.map((v, i) => isValidNumber(v) && isValidNumber(avgB2[i])
-          ? (1 - this.#weightSharingRate) * v + this.#weightSharingRate * avgB2[i]
+          ? (1 - sharingRate) * v + sharingRate * avgB2[i]
           : v);
       });
     }
