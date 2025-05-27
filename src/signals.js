@@ -299,12 +299,13 @@ class HiveMind {
     return [ensembleOutputs.reduce((sum, output, idx) => sum + (isValidNumber(output) ? output * this.#ensembleWeights[idx] : 0), 0)];
   }
 
-  train(inputs, target) {
-    if (inputs.length !== this.#inputSize || !inputs.every(isValidNumber) || !isValidNumber(target)) return;
+  train(inputs, target, winRate = 0.5) {
+    if (inputs.length !== this.#inputSize || !inputs.every(isValidNumber) || !isValidNumber(target) || !isValidNumber(winRate)) return;
     this.#trainingStepCount++;
     const output = this.forward(inputs)[0];
     const error = target - output;
-    const delta = Math.min(Math.max(error * output * (1 - output), -1), 1);
+    const adjustedLearningRate = this.#learningRate * (0.5 + 0.5 * winRate); // Scale learning rate by win rate
+    const delta = Math.min(Math.max(error * output * (1 - output) * adjustedLearningRate, -1), 1);
     const individualOutputs = this.#transformers.map((transformer, idx) => {
       let x = inputs.map((val, i) => transformer.positionalEncoding[i].map(pos => isValidNumber(val) && isValidNumber(pos) ? val + pos : 0));
       const layerOutputs = [x];
@@ -475,10 +476,10 @@ class HiveMind {
       let outputGrad = Array(this.#hiddenSize).fill(0);
       for (let i = 0; i < this.#hiddenSize; i++) {
         outputGrad[i] = isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) && isValidNumber(transformer.outputWeights[i][0]) ? delta * this.#ensembleWeights[idx] * transformer.outputWeights[i][0] : 0;
-        sharedGradients.outputWeights[idx][i][0] = isValidNumber(this.#learningRate) && isValidNumber(outputGrad[i]) && isValidNumber(x[x.length - 1][i]) ? this.#learningRate * outputGrad[i] * x[x.length - 1][i] : 0;
+        sharedGradients.outputWeights[idx][i][0] = isValidNumber(adjustedLearningRate) && isValidNumber(outputGrad[i]) && isValidNumber(x[x.length - 1][i]) ? adjustedLearningRate * outputGrad[i] * x[x.length - 1][i] : 0;
         transformer.outputWeights[i][0] += sharedGradients.outputWeights[idx][i][0];
       }
-      sharedGradients.outputBias[idx][0] = isValidNumber(this.#learningRate) && isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) ? this.#learningRate * delta * this.#ensembleWeights[idx] : 0;
+      sharedGradients.outputBias[idx][0] = isValidNumber(adjustedLearningRate) && isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) ? adjustedLearningRate * delta * this.#ensembleWeights[idx] : 0;
       transformer.outputBias[0] += sharedGradients.outputBias[idx][0];
       let grad = outputGrad;
       for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
@@ -490,10 +491,10 @@ class HiveMind {
           }
           ffnGrad = isValidNumber(ffnGrad) ? ffnGrad * this.#geluDerivative(ffnInput[ffnInput.length - 1][j]) : 0;
           for (let i = 0; i < this.#hiddenSize; i++) {
-            sharedGradients.ffnWeights[idx][layer].W1[i][j] = isValidNumber(this.#learningRate) && isValidNumber(ffnGrad) && isValidNumber(ffnInput[ffnInput.length - 1][i]) ? this.#learningRate * ffnGrad * ffnInput[ffnInput.length - 1][i] : 0;
+            sharedGradients.ffnWeights[idx][layer].W1[i][j] = isValidNumber(adjustedLearningRate) && isValidNumber(ffnGrad) && isValidNumber(ffnInput[ffnInput.length - 1][i]) ? adjustedLearningRate * ffnGrad * ffnInput[ffnInput.length - 1][i] : 0;
             transformer.ffnWeights[layer].W1[i][j] += sharedGradients.ffnWeights[idx][layer].W1[i][j];
           }
-          sharedGradients.ffnWeights[idx][layer].b1[j] = isValidNumber(this.#learningRate) && isValidNumber(ffnGrad) ? this.#learningRate * ffnGrad : 0;
+          sharedGradients.ffnWeights[idx][layer].b1[j] = isValidNumber(adjustedLearningRate) && isValidNumber(ffnGrad) ? adjustedLearningRate * ffnGrad : 0;
           transformer.ffnWeights[layer].b1[j] += sharedGradients.ffnWeights[idx][layer].b1[j];
         }
         const w2Grad = Array(this.#hiddenSize).fill(0);
@@ -501,7 +502,7 @@ class HiveMind {
           for (let i = 0; i < this.#feedForwardSize; i++) {
             const activatedInput = this.#gelu(ffnInput[ffnInput.length - 1][i] + (isValidNumber(transformer.ffnWeights[layer].b1[i]) ? transformer.ffnWeights[layer].b1[i] : 0));
             w2Grad[j] += isValidNumber(grad[j]) && isValidNumber(activatedInput) ? grad[j] * activatedInput : 0;
-            sharedGradients.ffnWeights[idx][layer].W2[i][j] = isValidNumber(this.#learningRate) && isValidNumber(grad[j]) && isValidNumber(activatedInput) ? this.#learningRate * grad[j] * activatedInput : 0;
+            sharedGradients.ffnWeights[idx][layer].W2[i][j] = isValidNumber(adjustedLearningRate) && isValidNumber(grad[j]) && isValidNumber(activatedInput) ? adjustedLearningRate * grad[j] * activatedInput : 0;
             transformer.ffnWeights[layer].W2[i][j] += sharedGradients.ffnWeights[idx][layer].W2[i][j];
           }
         }
@@ -581,10 +582,10 @@ class HiveMind {
         }
         for (let i = 0; i < this.#hiddenSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
-            sharedGradients.attentionWeights[idx][layer].Wq[i][j] = isValidNumber(this.#learningRate) && isValidNumber(wqGrad[i][j]) ? this.#learningRate * wqGrad[i][j] : 0;
-            sharedGradients.attentionWeights[idx][layer].Wk[i][j] = isValidNumber(this.#learningRate) && isValidNumber(wkGrad[i][j]) ? this.#learningRate * wkGrad[i][j] : 0;
-            sharedGradients.attentionWeights[idx][layer].Wv[i][j] = isValidNumber(this.#learningRate) && isValidNumber(wvGrad[i][j]) ? this.#learningRate * wvGrad[i][j] : 0;
-            sharedGradients.attentionWeights[idx][layer].Wo[i][j] = isValidNumber(this.#learningRate) && isValidNumber(woGrad[i][j]) ? this.#learningRate * woGrad[i][j] : 0;
+            sharedGradients.attentionWeights[idx][layer].Wq[i][j] = isValidNumber(adjustedLearningRate) && isValidNumber(wqGrad[i][j]) ? adjustedLearningRate * wqGrad[i][j] : 0;
+            sharedGradients.attentionWeights[idx][layer].Wk[i][j] = isValidNumber(adjustedLearningRate) && isValidNumber(wkGrad[i][j]) ? adjustedLearningRate * wkGrad[i][j] : 0;
+            sharedGradients.attentionWeights[idx][layer].Wv[i][j] = isValidNumber(adjustedLearningRate) && isValidNumber(wvGrad[i][j]) ? adjustedLearningRate * wvGrad[i][j] : 0;
+            sharedGradients.attentionWeights[idx][layer].Wo[i][j] = isValidNumber(adjustedLearningRate) && isValidNumber(woGrad[i][j]) ? adjustedLearningRate * woGrad[i][j] : 0;
             transformer.attentionWeights[layer].Wq[i][j] += sharedGradients.attentionWeights[idx][layer].Wq[i][j];
             transformer.attentionWeights[layer].Wk[i][j] += sharedGradients.attentionWeights[idx][layer].Wk[i][j];
             transformer.attentionWeights[layer].Wv[i][j] += sharedGradients.attentionWeights[idx][layer].Wv[i][j];
@@ -593,10 +594,10 @@ class HiveMind {
         }
         for (let i = 0; i < this.#hiddenSize; i++) {
           grad[i] = isValidNumber(grad[i]) ? Math.min(Math.max(grad[i], -1), 1) : 0;
-          sharedGradients.layerNormWeights[idx][layer].gamma1[i] = isValidNumber(this.#learningRate) && isValidNumber(grad[i]) ? this.#learningRate * grad[i] : 0;
-          sharedGradients.layerNormWeights[idx][layer].beta1[i] = isValidNumber(this.#learningRate) && isValidNumber(grad[i]) ? this.#learningRate * grad[i] : 0;
-          sharedGradients.layerNormWeights[idx][layer].gamma2[i] = isValidNumber(this.#learningRate) && isValidNumber(grad[i]) ? this.#learningRate * grad[i] : 0;
-          sharedGradients.layerNormWeights[idx][layer].beta2[i] = isValidNumber(this.#learningRate) && isValidNumber(grad[i]) ? this.#learningRate * grad[i] : 0;
+          sharedGradients.layerNormWeights[idx][layer].gamma1[i] = isValidNumber(adjustedLearningRate) && isValidNumber(grad[i]) ? adjustedLearningRate * grad[i] : 0;
+          sharedGradients.layerNormWeights[idx][layer].beta1[i] = isValidNumber(adjustedLearningRate) && isValidNumber(grad[i]) ? adjustedLearningRate * grad[i] : 0;
+          sharedGradients.layerNormWeights[idx][layer].gamma2[i] = isValidNumber(adjustedLearningRate) && isValidNumber(grad[i]) ? adjustedLearningRate * grad[i] : 0;
+          sharedGradients.layerNormWeights[idx][layer].beta2[i] = isValidNumber(adjustedLearningRate) && isValidNumber(grad[i]) ? adjustedLearningRate * grad[i] : 0;
           transformer.layerNormWeights[layer].gamma1[i] += sharedGradients.layerNormWeights[idx][layer].gamma1[i];
           transformer.layerNormWeights[layer].beta1[i] += sharedGradients.layerNormWeights[idx][layer].beta1[i];
           transformer.layerNormWeights[layer].gamma2[i] += sharedGradients.layerNormWeights[idx][layer].gamma2[i];
@@ -718,7 +719,7 @@ class HiveMind {
     const agreementWeight = 0.3;
     this.#ensembleWeights = this.#performanceScores.map((p, idx) => {
       const combinedScore = performanceWeight * p + agreementWeight * this.#agreementScores[idx];
-      return Math.max(0.1, Math.min(1, combinedScore)); // Ensure weights stay balanced
+      return Math.max(0.1, Math.min(1, combinedScore));
     });
     this.#normalizeEnsembleWeights();
 
@@ -978,6 +979,8 @@ class NeuralSignalEngine {
         bucket_key TEXT NOT NULL,
         features TEXT NOT NULL,
         score REAL NOT NULL,
+        usage_count INTEGER NOT NULL DEFAULT 0,
+        win_count INTEGER NOT NULL DEFAULT 0,
         UNIQUE(bucket_key, features)
       );
       CREATE TABLE IF NOT EXISTS open_trades (
@@ -1139,21 +1142,27 @@ class NeuralSignalEngine {
 
   #scorePattern(features) {
     const key = this.#generateFeatureKey(features);
-    const stmt = this.#db.prepare(`SELECT score, features FROM patterns WHERE bucket_key = ?`);
+    const stmt = this.#db.prepare(`SELECT score, features, usage_count, win_count FROM patterns WHERE bucket_key = ?`);
     const patterns = stmt.all(key);
     if (!patterns || patterns.length === 0) return 0;
     let totalScore = 0, matchCount = 0;
     for (const pattern of patterns) {
       const patternFeatures = JSON.parse(pattern.features);
       if (features.every((f, i) => isValidNumber(f) && isValidNumber(patternFeatures[i]) && Math.abs(f - patternFeatures[i]) < 0.1)) {
-        totalScore += pattern.score;
+        // Pseudo-counts used for scoring only, not affecting database usage_count
+        const pseudoWins = 1;
+        const pseudoUses = 2;
+        const winRate = isValidNumber(pattern.usage_count) && pattern.usage_count > 0
+          ? (pattern.win_count + pseudoWins) / (pattern.usage_count + pseudoUses)
+          : 0.5;
+        totalScore += pattern.score * (0.5 + 0.5 * winRate);
         matchCount++;
       }
     }
     return matchCount > 0 ? totalScore / matchCount : 0;
   }
 
-  #computeDynamicThreshold(data, confidence, baseThreshold = this.#config.baseConfidenceThreshold) {
+  #computeDynamicThreshold(data, confidence, baseThreshold = this.#config.baseConfidenceThreshold, winRate = 0.5) {
     const normalize = (value, min, max) => {
       if (!isValidNumber(value) || !isValidNumber(min) || !isValidNumber(max) || max === min) return 0.5;
       return Math.min(1, Math.max(0, (value - min) / (max - min)));
@@ -1163,7 +1172,7 @@ class NeuralSignalEngine {
     const volumeNorm = isValidNumber(data.volumeZScore) ? Math.abs(data.volumeZScore) / 3 : 0;
     const volatilityScore = (atrNorm + volumeNorm + rsiNorm * 0.5) / 2.5;
     const marketCondition = data.isTrending ? 0.8 : data.isRanging ? 1.2 : 1.0;
-    let dynamicThreshold = baseThreshold * volatilityScore * marketCondition;
+    let dynamicThreshold = baseThreshold * volatilityScore * marketCondition * (1 - 0.2 * winRate); // Lower threshold for high win rates
     dynamicThreshold = Math.max(40, Math.min(80, isValidNumber(dynamicThreshold) ? dynamicThreshold : 60));
     if (!isValidNumber(confidence)) return parseFloat(dynamicThreshold.toFixed(3));
     const confidenceProximity = Math.abs(confidence - dynamicThreshold) / 100;
@@ -1192,30 +1201,13 @@ class NeuralSignalEngine {
       for (const candle of candles) {
         if (!candle || !isValidNumber(candle.high) || !isValidNumber(candle.low)) continue;
 
-        if (candle.high >= trade.sellPrice) {
-          const outcome = (trade.sellPrice - trade.entryPrice) / trade.entryPrice;
+        if (candle.high >= trade.sellPrice || candle.low <= trade.stopLoss) {
+          const exitPrice = candle.high >= trade.sellPrice ? trade.sellPrice : trade.stopLoss;
+          const outcome = (exitPrice - trade.entryPrice) / trade.entryPrice;
           closedTrades.push({
             timestamp: Date.now(),
             entryPrice: trade.entryPrice,
-            exitPrice: trade.sellPrice,
-            confidence: trade.confidence,
-            outcome: Math.min(Math.max(outcome, -1), 1),
-            reward: outcome * (trade.confidence / 100),
-            strategy: trade.strategy,
-            patternScore: trade.patternScore,
-            candlesHeld: trade.candlesHeld + candles.length,
-            features,
-            stateKey: trade.stateKey,
-            dynamicThreshold: trade.dynamicThreshold
-          });
-          keysToDelete.add(trade.timestamp);
-          break;
-        } else if (candle.low <= trade.stopLoss) {
-          const outcome = (trade.stopLoss - trade.entryPrice) / trade.entryPrice;
-          closedTrades.push({
-            timestamp: Date.now(),
-            entryPrice: trade.entryPrice,
-            exitPrice: trade.stopLoss,
+            exitPrice,
             confidence: trade.confidence,
             outcome: Math.min(Math.max(outcome, -1), 1),
             reward: outcome * (trade.confidence / 100),
@@ -1234,18 +1226,30 @@ class NeuralSignalEngine {
 
     if (closedTrades.length > 0) {
       const transaction = this.#db.transaction(() => {
-        const insertPatternStmt = this.#db.prepare(`INSERT OR REPLACE INTO patterns (bucket_key, features, score) VALUES (?, ?, ?)`);
-        const updateQTableStmt = this.#db.prepare(`INSERT OR REPLACE INTO qtable (state_key, buy, hold) VALUES (?, ?, COALESCE((SELECT hold FROM qtable WHERE state_key = ?), 0))`);
+        const patternStmt = this.#db.prepare(`SELECT score, usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
+        const insertPatternStmt = this.#db.prepare(`
+          INSERT OR REPLACE INTO patterns (bucket_key, features, score, usage_count, win_count)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        const updateQTableStmt = this.#db.prepare(`
+          INSERT OR REPLACE INTO qtable (state_key, buy, hold)
+          VALUES (?, ?, COALESCE((SELECT hold FROM qtable WHERE state_key = ?), 0))
+        `);
         const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
 
         for (const trade of closedTrades) {
           const key = this.#generateFeatureKey(trade.features);
-          insertPatternStmt.run(key, JSON.stringify(trade.features), trade.reward);
+          const pattern = patternStmt.get(key, JSON.stringify(trade.features));
+          const isWin = trade.outcome > 0 ? 1 : 0;
+          const usageCount = pattern ? pattern.usage_count + 1 : 1;
+          const winCount = pattern ? pattern.win_count + isWin : isWin;
+          insertPatternStmt.run(key, JSON.stringify(trade.features), trade.reward, usageCount, winCount);
 
           const existingQ = this.#db.prepare(`SELECT buy, hold FROM qtable WHERE state_key = ?`).get(trade.stateKey) || { buy: 0, hold: 0 };
           updateQTableStmt.run(trade.stateKey, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.stateKey);
 
-          this.#transformer.train(trade.features, trade.outcome > 0 ? 1 : 0);
+          const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
+          this.#transformer.train(trade.features, trade.outcome > 0 ? (0.5 + 0.5 * winRate) : 0);
         }
 
         for (const key of keysToDelete) {
@@ -1273,7 +1277,17 @@ class NeuralSignalEngine {
     const features = this.#extractFeatures(indicators);
     const patternScore = this.#scorePattern(features);
     const confidence = this.#transformer.forward(features)[0] * 100 * (1 + patternScore);
-    const dynamicThreshold = this.#computeDynamicThreshold(indicators, confidence, this.#config.baseConfidenceThreshold);
+
+    const key = this.#generateFeatureKey(features);
+    const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
+    const pattern = patternStmt.get(key, JSON.stringify(features));
+    const pseudoWins = 1;
+    const pseudoUses = 2;
+    const winRate = pattern && pattern.usage_count > 0
+      ? (pattern.win_count + pseudoWins) / (pattern.usage_count + pseudoUses)
+      : 0.5;
+
+    const dynamicThreshold = this.#computeDynamicThreshold(indicators, confidence, this.#config.baseConfidenceThreshold, winRate);
     const multiplier = this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * Math.max(0, (confidence - dynamicThreshold) / (100 - dynamicThreshold));
     let sellPrice = indicators.lastClose + this.#config.atrFactor * (indicators.atr[indicators.atr.length - 1] || 0);
     let stopLoss = indicators.lastClose - this.#config.stopFactor * (indicators.atr[indicators.atr.length - 1] || 0);
@@ -1297,14 +1311,23 @@ class NeuralSignalEngine {
     const action = qValues.buy > qValues.hold ? 'buy' : 'hold';
     const suggestedAction = (action === 'buy' && isValidNumber(confidence) && isValidNumber(dynamicThreshold) && confidence >= 0.75 * dynamicThreshold) ? 'buy' : 'hold';
     const entryPrice = indicators.lastClose;
-    const key = Date.now().toString();
+    const timestamp = Date.now().toString();
+
+    // Insert pattern with usage_count = 0 if it doesn't exist
+    if (!pattern) {
+      const insertPatternStmt = this.#db.prepare(`
+        INSERT OR IGNORE INTO patterns (bucket_key, features, score, usage_count, win_count)
+        VALUES (?, ?, ?, 0, 0)
+      `);
+      insertPatternStmt.run(key, JSON.stringify(features), patternScore);
+    }
 
     const insertTradeStmt = this.#db.prepare(`
       INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, candlesHeld, strategy, patternScore, features, stateKey, dynamicThreshold)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     insertTradeStmt.run(
-      key,
+      timestamp,
       truncateToDecimals(sellPrice, 2),
       truncateToDecimals(stopLoss, 2),
       entryPrice,
