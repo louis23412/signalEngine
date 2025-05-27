@@ -81,17 +81,14 @@ class HiveMind {
   #shareWeights() {
     const validateArray = (arr, defaultValue) => arr.map(val => isValidNumber(val) ? val : defaultValue);
 
-    // Compute normalized performance scores for weighted contribution
     const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
     const normalizedPerformance = this.#performanceScores.map(score => (isValidNumber(score) ? score : 0) / performanceSum);
 
-    // Calculate dynamic weight sharing rates based on performance
     const maxPerformance = Math.max(...this.#performanceScores.filter(isValidNumber));
     const minPerformance = Math.min(...this.#performanceScores.filter(isValidNumber));
     const performanceGap = maxPerformance - minPerformance || 1;
     const dynamicSharingRates = this.#performanceScores.map(score => {
       if (!isValidNumber(score)) return this.#weightSharingRate;
-      // Lower performers get higher sharing rates to learn more from high performers
       return this.#weightSharingRate + (0.1 * (maxPerformance - score) / performanceGap);
     });
 
@@ -304,7 +301,7 @@ class HiveMind {
     this.#trainingStepCount++;
     const output = this.forward(inputs)[0];
     const error = target - output;
-    const adjustedLearningRate = this.#learningRate * (0.5 + 0.5 * winRate); // Scale learning rate by win rate
+    const adjustedLearningRate = this.#learningRate * (0.5 + 0.5 * winRate);
     const delta = Math.min(Math.max(error * output * (1 - output) * adjustedLearningRate, -1), 1);
     const individualOutputs = this.#transformers.map((transformer, idx) => {
       let x = inputs.map((val, i) => transformer.positionalEncoding[i].map(pos => isValidNumber(val) && isValidNumber(pos) ? val + pos : 0));
@@ -377,7 +374,6 @@ class HiveMind {
       return sigmoid(finalOutput[0] + (isValidNumber(transformer.outputBias[0]) ? transformer.outputBias[0] : 0));
     });
 
-    // Update performance and agreement scores
     this.#performanceScores = this.#performanceScores.map((score, idx) => {
       const individualError = Math.abs(target - individualOutputs[idx]);
       return 0.9 * score + 0.1 * (1 - individualError);
@@ -387,7 +383,6 @@ class HiveMind {
       return 0.9 * score + 0.1 * agreement;
     });
 
-    // Compute shared gradients
     const sharedGradients = {
       outputWeights: Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill().map(() => Array(this.#outputSize).fill(0))),
       outputBias: Array(this.#ensembleSize).fill().map(() => Array(this.#outputSize).fill(0)),
@@ -607,7 +602,6 @@ class HiveMind {
       }
     });
 
-    // Average gradients across transformers
     const avgGradients = {
       outputWeights: Array(this.#hiddenSize).fill().map(() => Array(this.#outputSize).fill(0)),
       outputBias: Array(this.#outputSize).fill(0),
@@ -671,7 +665,6 @@ class HiveMind {
       }
     }
 
-    // Apply averaged gradients with a communication factor
     const communicationFactor = 0.15;
     this.#transformers.forEach((transformer, idx) => {
       for (let i = 0; i < this.#hiddenSize; i++) {
@@ -714,7 +707,6 @@ class HiveMind {
       }
     });
 
-    // Update ensemble weights based on performance and agreement
     const performanceWeight = 0.7;
     const agreementWeight = 0.3;
     this.#ensembleWeights = this.#performanceScores.map((p, idx) => {
@@ -723,7 +715,6 @@ class HiveMind {
     });
     this.#normalizeEnsembleWeights();
 
-    // Trigger weight sharing every communicationFrequency steps
     if (this.#trainingStepCount % this.#communicationFrequency === 0) {
       this.#shareWeights();
     }
@@ -989,8 +980,6 @@ class NeuralSignalEngine {
         stopLoss REAL NOT NULL,
         entryPrice REAL NOT NULL,
         confidence REAL NOT NULL,
-        candlesHeld INTEGER NOT NULL,
-        strategy TEXT NOT NULL,
         patternScore REAL NOT NULL,
         features TEXT NOT NULL,
         stateKey TEXT NOT NULL,
@@ -1070,7 +1059,6 @@ class NeuralSignalEngine {
       return { error: 'Invalid candle array type or length', candles: [] };
     }
 
-    // Validate new candles
     const newCandles = candles.filter(c =>
       isValidNumber(c.timestamp) &&
       isValidNumber(c.open) &&
@@ -1081,10 +1069,8 @@ class NeuralSignalEngine {
       c.volume >= 0
     );
 
-    // Insert new candles and fetch recent ones in a single transaction
     let recentCandles = [];
     const transaction = this.#db.transaction(() => {
-      // Insert valid new candles
       if (newCandles.length > 0) {
         const insertCandleStmt = this.#db.prepare(`
           INSERT OR IGNORE INTO candles (timestamp, open, high, low, close, volume)
@@ -1102,11 +1088,9 @@ class NeuralSignalEngine {
         }
       }
 
-      // Fetch up to 1000 recent candles in ascending order
       const fetchCandlesStmt = this.#db.prepare(`SELECT * FROM candles ORDER BY timestamp ASC LIMIT 1000`);
       recentCandles = fetchCandlesStmt.all();
 
-      // Cleanup old candles
       const cleanupStmt = this.#db.prepare(`DELETE FROM candles WHERE timestamp NOT IN (SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT 1000)`);
       cleanupStmt.run();
     });
@@ -1149,7 +1133,6 @@ class NeuralSignalEngine {
     for (const pattern of patterns) {
       const patternFeatures = JSON.parse(pattern.features);
       if (features.every((f, i) => isValidNumber(f) && isValidNumber(patternFeatures[i]) && Math.abs(f - patternFeatures[i]) < 0.1)) {
-        // Pseudo-counts used for scoring only, not affecting database usage_count
         const pseudoWins = 1;
         const pseudoUses = 2;
         const winRate = isValidNumber(pattern.usage_count) && pattern.usage_count > 0
@@ -1172,7 +1155,7 @@ class NeuralSignalEngine {
     const volumeNorm = isValidNumber(data.volumeZScore) ? Math.abs(data.volumeZScore) / 3 : 0;
     const volatilityScore = (atrNorm + volumeNorm + rsiNorm * 0.5) / 2.5;
     const marketCondition = data.isTrending ? 0.8 : data.isRanging ? 1.2 : 1.0;
-    let dynamicThreshold = baseThreshold * volatilityScore * marketCondition * (1 - 0.2 * winRate); // Lower threshold for high win rates
+    let dynamicThreshold = baseThreshold * volatilityScore * marketCondition * (1 - 0.2 * winRate);
     dynamicThreshold = Math.max(40, Math.min(80, isValidNumber(dynamicThreshold) ? dynamicThreshold : 60));
     if (!isValidNumber(confidence)) return parseFloat(dynamicThreshold.toFixed(3));
     const confidenceProximity = Math.abs(confidence - dynamicThreshold) / 100;
@@ -1187,7 +1170,7 @@ class NeuralSignalEngine {
     if (!isValidNumber(minLow) || !isValidNumber(maxHigh)) return;
 
     const tradesStmt = this.#db.prepare(`
-      SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, candlesHeld, strategy, patternScore, features, stateKey, dynamicThreshold
+      SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, dynamicThreshold
       FROM open_trades
       WHERE sellPrice BETWEEN ? AND ? OR stopLoss BETWEEN ? AND ?
     `);
@@ -1211,9 +1194,7 @@ class NeuralSignalEngine {
             confidence: trade.confidence,
             outcome: Math.min(Math.max(outcome, -1), 1),
             reward: outcome * (trade.confidence / 100),
-            strategy: trade.strategy,
             patternScore: trade.patternScore,
-            candlesHeld: trade.candlesHeld + candles.length,
             features,
             stateKey: trade.stateKey,
             dynamicThreshold: trade.dynamicThreshold
@@ -1313,7 +1294,6 @@ class NeuralSignalEngine {
     const entryPrice = indicators.lastClose;
     const timestamp = Date.now().toString();
 
-    // Insert pattern with usage_count = 0 if it doesn't exist
     if (!pattern) {
       const insertPatternStmt = this.#db.prepare(`
         INSERT OR IGNORE INTO patterns (bucket_key, features, score, usage_count, win_count)
@@ -1323,8 +1303,8 @@ class NeuralSignalEngine {
     }
 
     const insertTradeStmt = this.#db.prepare(`
-      INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, candlesHeld, strategy, patternScore, features, stateKey, dynamicThreshold)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, dynamicThreshold)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     insertTradeStmt.run(
       timestamp,
@@ -1332,8 +1312,6 @@ class NeuralSignalEngine {
       truncateToDecimals(stopLoss, 2),
       entryPrice,
       confidence,
-      0,
-      action,
       patternScore,
       JSON.stringify(features),
       stateKey,
