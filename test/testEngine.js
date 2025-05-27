@@ -35,6 +35,13 @@ const countLines = () => {
     });
 };
 
+// Format signal values into a single-line display
+const formatSignal = (signal) => {
+    return `Signal => Action: ${signal.suggestedAction}, Multiplier: ${signal.multiplier.toFixed(3)}, ` +
+           `Entry: ${signal.entryPrice.toFixed(2)}, Sell: ${signal.sellPrice.toFixed(2)}, ` +
+           `Stop: ${signal.stopLoss.toFixed(2)}, Reward: ${signal.expectedReward.toFixed(3)}`;
+};
+
 // Process candles
 const processCandles = () => {
     const rd = readline.createInterface({
@@ -70,14 +77,21 @@ const processCandles = () => {
                 const remainingCandles = totalLines - totalCandles;
                 const estimatedTimeSec = remainingCandles * avgSignalTime;
 
-                process.stdout.clearLine(0); // Clear current line
-                process.stdout.cursorTo(0); // Move cursor to start of line
-                process.stdout.write(
-                    `Progress: ${totalCandles}/${totalLines} candles (${((totalCandles / totalLines) * 100).toFixed(6)}%), ` +
-                    `Time: ${durationSec.toFixed(3)}s, ` +
-                    `Avg Time: ${(avgSignalTime * 1000).toFixed(3)}ms, ` +
-                    `ETA: ${formatTime(estimatedTimeSec)}`
-                );
+                // Clear previous output (move to top of display area and clear down)
+                process.stdout.write('\x1B[?25l'); // Hide cursor
+                process.stdout.cursorTo(0, 0); // Move to top-left
+                process.stdout.write('\x1B[0J'); // Clear from cursor to end of screen
+
+                // Prepare progress and signal output
+                const progressLine = `Progress => ${totalCandles}/${totalLines} candles (${((totalCandles / totalLines) * 100).toFixed(6)}%), ` +
+                                    `Time: ${durationSec.toFixed(3)}s, ` +
+                                    `Avg Time: ${(avgSignalTime * 1000).toFixed(3)}ms, ` +
+                                    `ETA: ${formatTime(estimatedTimeSec)}`;
+                const signalOutput = formatSignal(signal);
+
+                // Write progress and signal
+                process.stdout.write(`${progressLine}\n${signalOutput}\n`);
+                process.stdout.write('\x1B[?25h'); // Show cursor
             } catch (e) {
                 console.log(e);
                 process.exit();
@@ -87,7 +101,7 @@ const processCandles = () => {
 
     rd.on('close', () => {
         console.log(`\nCompleted. Total Candles: ${totalCandles}`);
-        console.log(signal);
+        console.log(formatSignal(signal));
     });
 };
 
