@@ -808,10 +808,9 @@ class IndicatorProcessor {
     const low = validCandles.map(c => Number(c.low));
     const volume = validCandles.map(c => Number(c.volume));
     const lastClose = close[close.length - 1];
-    const volumeLast100 = volume.slice(-100);
-    const volumeMean = volumeLast100.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / volumeLast100.length || 1;
+    const volumeMean = volume.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / volume.length || 1;
     const volumeStd = Math.sqrt(
-      volumeLast100.reduce((sum, v) => sum + (isValidNumber(v) ? (v - volumeMean) ** 2 : 0), 0) / volumeLast100.length
+      volume.reduce((sum, v) => sum + (isValidNumber(v) ? (v - volumeMean) ** 2 : 0), 0) / volume.length
     ) || 1;
     const volumeZScore = isValidNumber(volume[volume.length - 1])
       ? (volume[volume.length - 1] - volumeMean) / volumeStd
@@ -835,12 +834,12 @@ class IndicatorProcessor {
     indicators.isTrending = lastMacd && isValidNumber(lastMacd.MACD) && isValidNumber(lastMacd.signal) && lastMacd.MACD > lastMacd.signal ? 1 : 0;
     indicators.isRanging = isValidNumber(lastRsi) && lastRsi > 30 && lastRsi < 70 ? 1 : 0;
     indicators.marketPhase = indicators.isTrending ? 'trending' : indicators.isRanging ? 'ranging' : 'volatile';
-    indicators.rsiMin = Math.min(...indicators.rsi.slice(-50).filter(isValidNumber)) || 0;
-    indicators.rsiMax = Math.max(...indicators.rsi.slice(-50).filter(isValidNumber)) || 100;
+    indicators.rsiMin = Math.min(...indicators.rsi.filter(isValidNumber)) || 0;
+    indicators.rsiMax = Math.max(...indicators.rsi.filter(isValidNumber)) || 100;
     indicators.macdMin = Math.min(...indicators.macd.map(m => m.MACD - m.signal).filter(isValidNumber)) || -1;
     indicators.macdMax = Math.max(...indicators.macd.map(m => m.MACD - m.signal).filter(isValidNumber)) || 1;
-    indicators.atrMin = Math.min(...indicators.atr.slice(-50).filter(isValidNumber)) || 0;
-    indicators.atrMax = Math.max(...indicators.atr.slice(-50).filter(isValidNumber)) || 1;
+    indicators.atrMin = Math.min(...indicators.atr.filter(isValidNumber)) || 0;
+    indicators.atrMax = Math.max(...indicators.atr.filter(isValidNumber)) || 1;
     return indicators;
   }
 
@@ -1063,6 +1062,60 @@ class NeuralSignalEngine {
     transaction();
   }
 
+  #getRecentCandles(candles) {
+    if (!Array.isArray(candles) || candles.length === 0) {
+      return { error: 'Invalid candle array type or length', candles: [] };
+    }
+
+    // Validate new candles
+    const newCandles = candles.filter(c =>
+      isValidNumber(c.timestamp) &&
+      isValidNumber(c.open) &&
+      isValidNumber(c.high) &&
+      isValidNumber(c.low) &&
+      isValidNumber(c.close) &&
+      isValidNumber(c.volume) &&
+      c.volume >= 0
+    );
+
+    // Insert new candles and fetch recent ones in a single transaction
+    let recentCandles = [];
+    const transaction = this.#db.transaction(() => {
+      // Insert valid new candles
+      if (newCandles.length > 0) {
+        const insertCandleStmt = this.#db.prepare(`
+          INSERT OR IGNORE INTO candles (timestamp, open, high, low, close, volume)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        for (const candle of newCandles) {
+          insertCandleStmt.run(
+            candle.timestamp,
+            candle.open,
+            candle.high,
+            candle.low,
+            candle.close,
+            candle.volume
+          );
+        }
+      }
+
+      // Fetch up to 1000 recent candles in ascending order
+      const fetchCandlesStmt = this.#db.prepare(`SELECT * FROM candles ORDER BY timestamp ASC LIMIT 1000`);
+      recentCandles = fetchCandlesStmt.all();
+
+      // Cleanup old candles
+      const cleanupStmt = this.#db.prepare(`DELETE FROM candles WHERE timestamp NOT IN (SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT 1000)`);
+      cleanupStmt.run();
+    });
+    transaction();
+
+    if (recentCandles.length === 0) {
+      return { error: 'No valid candles available', candles: [] };
+    }
+
+    return { error: null, candles: recentCandles };
+  }
+
   #extractFeatures(data) {
     const normalize = (value, min, max) => {
       if (!isValidNumber(value) || !isValidNumber(min) || !isValidNumber(max) || max === min) return 0;
@@ -1076,6 +1129,12 @@ class NeuralSignalEngine {
       data.isTrending,
       data.isRanging
     ];
+  }
+
+  #generateFeatureKey(features) {
+    if (!Array.isArray(features) || features.length !== 6) return 'default';
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 10000) / 10000 : 0);
+    return quantized.join('|');
   }
 
   #scorePattern(features) {
@@ -1111,51 +1170,11 @@ class NeuralSignalEngine {
     return parseFloat((dynamicThreshold * (1 - 0.1 * confidenceProximity)).toFixed(3));
   }
 
-  #generateFeatureKey(features) {
-    if (!Array.isArray(features) || features.length !== 6) return 'default';
-    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 10000) / 10000 : 0);
-    return quantized.join('|');
-  }
-
   #updateOpenTrades(candles) {
     if (!Array.isArray(candles) || candles.length === 0) return;
 
-    const insertCandleStmt = this.#db.prepare(`
-      INSERT OR IGNORE INTO candles (timestamp, open, high, low, close, volume)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    const newCandles = candles.filter(c => 
-      isValidNumber(c.timestamp) &&
-      isValidNumber(c.open) &&
-      isValidNumber(c.high) &&
-      isValidNumber(c.low) &&
-      isValidNumber(c.close) &&
-      isValidNumber(c.volume) &&
-      c.volume >= 0
-    );
-
-    const transaction = this.#db.transaction(() => {
-      for (const candle of newCandles) {
-        insertCandleStmt.run(
-          candle.timestamp,
-          candle.open,
-          candle.high,
-          candle.low,
-          candle.close,
-          candle.volume
-        );
-      }
-    });
-    transaction();
-
-    // Cleanup: Keep only the 1000 most recent candles
-    const cleanupStmt = this.#db.prepare(`DELETE FROM candles WHERE timestamp NOT IN (SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT 1000)`);
-    cleanupStmt.run();
-
-    if (newCandles.length === 0) return;
-
-    const minLow = Math.min(...newCandles.map(c => isValidNumber(c.low) ? c.low : Infinity));
-    const maxHigh = Math.max(...newCandles.map(c => isValidNumber(c.high) ? c.high : -Infinity));
+    const minLow = Math.min(...candles.map(c => isValidNumber(c.low) ? c.low : Infinity));
+    const maxHigh = Math.max(...candles.map(c => isValidNumber(c.high) ? c.high : -Infinity));
     if (!isValidNumber(minLow) || !isValidNumber(maxHigh)) return;
 
     const tradesStmt = this.#db.prepare(`
@@ -1170,7 +1189,7 @@ class NeuralSignalEngine {
 
     for (const trade of trades) {
       const features = JSON.parse(trade.features);
-      for (const candle of newCandles) {
+      for (const candle of candles) {
         if (!candle || !isValidNumber(candle.high) || !isValidNumber(candle.low)) continue;
 
         if (candle.high >= trade.sellPrice) {
@@ -1184,7 +1203,7 @@ class NeuralSignalEngine {
             reward: outcome * (trade.confidence / 100),
             strategy: trade.strategy,
             patternScore: trade.patternScore,
-            candlesHeld: trade.candlesHeld + newCandles.length,
+            candlesHeld: trade.candlesHeld + candles.length,
             features,
             stateKey: trade.stateKey,
             dynamicThreshold: trade.dynamicThreshold
@@ -1202,7 +1221,7 @@ class NeuralSignalEngine {
             reward: outcome * (trade.confidence / 100),
             strategy: trade.strategy,
             patternScore: trade.patternScore,
-            candlesHeld: trade.candlesHeld + newCandles.length,
+            candlesHeld: trade.candlesHeld + candles.length,
             features,
             stateKey: trade.stateKey,
             dynamicThreshold: trade.dynamicThreshold
@@ -1234,37 +1253,19 @@ class NeuralSignalEngine {
         }
       });
       transaction();
-      this.#saveState(); // Save transformer parameters after training
+      this.#saveState();
     }
   }
 
   getSignal(candles) {
-    if (!Array.isArray(candles) || candles.length === 0) {
-      return { error: 'Invalid candle array type or length' };
+    const { error, candles: recentCandles } = this.#getRecentCandles(candles);
+    if (error) {
+      return { error };
     }
 
-    this.#updateOpenTrades(candles);
+    this.#updateOpenTrades(recentCandles);
 
-    const timestampStmt = this.#db.prepare(`SELECT timestamp FROM candles WHERE timestamp IN (${candles.map(() => '?').join(',')})`);
-    const existingTimestamps = new Set(timestampStmt.all(...candles.map(c => c.timestamp)).map(row => row.timestamp));
-    const newCandles = candles.filter(c =>
-      isValidNumber(c.timestamp) &&
-      isValidNumber(c.open) &&
-      isValidNumber(c.high) &&
-      isValidNumber(c.low) &&
-      isValidNumber(c.close) &&
-      isValidNumber(c.volume) &&
-      c.volume >= 0 &&
-      !existingTimestamps.has(c.timestamp)
-    );
-
-    const fetchCandlesStmt = this.#db.prepare(`SELECT * FROM candles ORDER BY timestamp DESC LIMIT 100`);
-    const recentCandles = newCandles.length > 0 ? [...newCandles, ...fetchCandlesStmt.all().filter(c => !newCandles.some(nc => nc.timestamp === c.timestamp))] : fetchCandlesStmt.all();
-    if (recentCandles.length === 0) {
-      return { error: 'Invalid candle array type or length' };
-    }
-
-    const indicators = this.#indicators.compute(recentCandles.slice(-100));
+    const indicators = this.#indicators.compute(recentCandles);
     if (indicators.error) {
       return { error: 'Indicators error' };
     }
