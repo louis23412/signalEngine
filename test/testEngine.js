@@ -39,7 +39,7 @@ const countLines = () => {
 const formatSignal = (signal) => {
     return `Signal => Action: ${signal.suggestedAction}, Multiplier: ${signal.multiplier.toFixed(3)}, ` +
            `Entry: ${signal.entryPrice.toFixed(2)}, Sell: ${signal.sellPrice.toFixed(2)}, ` +
-           `Stop: ${signal.stopLoss.toFixed(2)}, Reward: ${signal.expectedReward.toFixed(3)}`;
+           `Stop: ${signal.stopLoss.toFixed(2)}, Reward: ${signal.expectedReward}`;
 };
 
 // Process candles
