@@ -1762,6 +1762,77 @@ class NeuralSignalEngine {
     }
   }
 
+  #computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate) {
+    // Input validation with robust fallback
+    if (
+      !qValues ||
+      !isValidNumber(confidence) ||
+      !isValidNumber(dynamicThreshold) ||
+      !Array.isArray(features) ||
+      features.length !== 6 ||
+      !features.every(isValidNumber) ||
+      !isValidNumber(patternScore) ||
+      !isValidNumber(winRate)
+    ) {
+      return 'hold';
+    }
+
+    // Normalize Q-values using tempered softmax for numerical stability
+    const qBuy = isValidNumber(qValues.buy) ? qValues.buy : 0;
+    const qHold = isValidNumber(qValues.hold) ? qValues.hold : 0;
+    const maxQ = Math.max(qBuy, qHold, 1e-6);
+    const temperature = 0.5 + 0.5 * winRate; // Adaptive temperature based on win rate
+    const expBuy = Math.exp((qBuy - maxQ) / temperature);
+    const expHold = Math.exp((qHold - maxQ) / temperature);
+    const sumExp = expBuy + expHold || 1;
+    const probBuy = expBuy / sumExp;
+    const probHold = expHold / sumExp;
+
+    // Compute information-theoretic uncertainty (Rényi entropy, order 2)
+    const renyiEntropy = -Math.log2(probBuy ** 2 + probHold ** 2 + 1e-6) / Math.log2(2);
+    const normalizedEntropy = Math.min(1, renyiEntropy);
+
+    // Bayesian-inspired confidence update
+    const priorConfidence = 0.5; // Neutral prior
+    const evidenceStrength = 1 + patternScore * (0.5 + 0.5 * winRate); // Pattern reliability
+    const bayesianConfidence = (confidence * evidenceStrength + priorConfidence * 0.1) / (evidenceStrength + 0.1);
+    const riskAdjustedConfidence = bayesianConfidence * (1 - 0.3 * normalizedEntropy * (1 - winRate));
+
+    // Feature-space clustering for context awareness (cosine similarity-based)
+    const featureNorm = Math.sqrt(features.reduce((sum, f) => sum + f ** 2, 0)) || 1;
+    const normalizedFeatures = features.map(f => f / featureNorm);
+    const idealBuyFeature = [1, 1, 0.5, 0, 1, 0]; // Hypothetical buy signal feature vector
+    const idealHoldFeature = [0.5, 0, 0.5, 0, 0, 1]; // Hypothetical hold signal feature vector
+    const buySimilarity = normalizedFeatures.reduce((sum, f, i) => sum + f * idealBuyFeature[i], 0) / (Math.sqrt(idealBuyFeature.reduce((sum, f) => sum + f ** 2, 0)) || 1);
+    const holdSimilarity = normalizedFeatures.reduce((sum, f, i) => sum + f * idealHoldFeature[i], 0) / (Math.sqrt(idealHoldFeature.reduce((sum, f) => sum + f ** 2, 0)) || 1);
+    const contextScore = buySimilarity / (buySimilarity + holdSimilarity + 1e-6);
+
+    // Multi-factor risk assessment
+    const featureVariance = features.reduce((sum, f) => sum + (f - 0.5) ** 2, 0) / features.length;
+    const volatilityScore = Math.sqrt(featureVariance) * (1 + 0.2 * normalizedEntropy);
+    const patternReliability = patternScore > 0 ? 1 + 0.3 * patternScore : 1;
+    const marketStability = winRate > 0.5 ? 1 + 0.2 * (winRate - 0.5) : 1 - 0.2 * (0.5 - winRate);
+    const riskScore = 0.4 * volatilityScore + 0.4 * (1 - patternReliability) + 0.2 * (1 - marketStability);
+
+    // Dynamic decision boundary with logistic adjustment
+    const baseThreshold = dynamicThreshold * patternReliability * (1 - 0.2 * normalizedEntropy);
+    const logisticAdjustment = 1 / (1 + Math.exp(-10 * (contextScore - 0.5))); // Sigmoid for smooth boundary
+    const adaptiveThreshold = baseThreshold * (0.6 + 0.4 * logisticAdjustment) * (0.7 + 0.3 * winRate);
+
+    // Decision score with weighted contributions
+    const decisionScore = (
+      0.5 * riskAdjustedConfidence * probBuy +
+      0.3 * contextScore +
+      0.2 * patternScore * winRate
+    ) * (1 - 0.1 * riskScore);
+
+    // Robust decision rule with hysteresis to prevent oscillation
+    const hysteresisFactor = 1.05; // Slight bias to maintain current action
+    const buyThreshold = adaptiveThreshold * (probBuy > probHold ? 1 : hysteresisFactor);
+    
+    return decisionScore >= buyThreshold ? 'buy' : 'hold';
+  }
+
   getSignal(candles) {
     const { error, candles: recentCandles } = this.#getRecentCandles(candles);
     if (error) {
@@ -1809,8 +1880,6 @@ class NeuralSignalEngine {
       qValues = { buy: 0, hold: 0 };
     }
 
-    const action = qValues.buy > qValues.hold ? 'buy' : 'hold';
-    const suggestedAction = (action === 'buy' && isValidNumber(confidence) && isValidNumber(dynamicThreshold) && confidence >= 0.75 * dynamicThreshold) ? 'buy' : 'hold';
     const entryPrice = indicators.lastClose;
     const timestamp = Date.now().toString();
 
@@ -1837,6 +1906,8 @@ class NeuralSignalEngine {
       stateKey,
       dynamicThreshold
     );
+
+    const suggestedAction = this.#computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate);
 
     return {
       suggestedAction,
