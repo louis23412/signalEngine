@@ -33,12 +33,11 @@ class HiveMind {
   #numLayers = 2;
   #feedForwardSize = 32;
   #dropoutRate = 0.15;
-  #learningRate = 0.001;
+  #learningRate = 0.005;
   #ensembleSize = 128;
   #transformers = [];
   #ensembleWeights = [];
-  #communicationFrequency = 10;
-  #weightSharingRate = 0.05;
+  #weightSharingRate = 0.1;
   #performanceScores = Array(this.#ensembleSize).fill(0);
   #agreementScores = Array(this.#ensembleSize).fill(0);
   #trainingStepCount = 0;
@@ -67,13 +66,13 @@ class HiveMind {
   }));
   #attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill(0));
   #attentionBias = Array(this.#hiddenSize).fill(0);
-  #diversityWeight = 0.1;
+  #diversityWeight = 0.2;
   #maxPerformanceHistory = 100;
   #contextWindow = 10;
-  #knowledgeDistillationLoss = 0.05;
+  #knowledgeDistillationLoss = 0.1;
   #attentionScalingFactor = 1.0;
-  #gradientClippingThreshold = 1.0;
-  #swarmIntelligenceFactor = 0.2;
+  #gradientClippingThreshold = 2.0;
+  #swarmIntelligenceFactor = 0.3;
   #adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
   #trustScoresHistory = Array(this.#ensembleSize).fill().map(() => []);
   #maxTrustHistory = 50;
@@ -157,7 +156,7 @@ class HiveMind {
     const validateArray = (arr, defaultValue) => arr.map(val => isValidNumber(val) ? val : defaultValue);
     const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
     const trustScores = this.#performanceScores.map(score => (isValidNumber(score) ? score : 0) / performanceSum);
-    const momentumFactor = 0.9;
+    const momentumFactor = 0.7;
 
     const avgWeights = (weights, trustWeights) => {
       const result = weights[0].map(row => row.map(() => 0));
@@ -450,7 +449,7 @@ class HiveMind {
     const performanceStd = Math.sqrt(
       this.#performanceScores.reduce((sum, score) => sum + (score - this.#performanceScores.reduce((s, v) => s + v, 0) / this.#ensembleSize) ** 2, 0) / this.#ensembleSize
     );
-    const progress = Math.min(this.#trainingStepCount / 1000, 1);
+    const progress = Math.min(this.#trainingStepCount / 5000, 1);
     const threshold = 0.1 * (1 - progress) + 0.05;
     return isValidNumber(performanceStd) && performanceStd > threshold;
   }
@@ -498,7 +497,7 @@ class HiveMind {
       return history;
     });
 
-    const trustMomentum = 0.8;
+    const trustMomentum = 0.6;
     this.#performanceScores = this.#performanceScores.map((score, idx) => {
       const recentTrust = this.#trustScoresHistory[idx].slice(-5);
       const avgTrust = recentTrust.length > 0 
