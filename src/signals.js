@@ -1166,36 +1166,149 @@ class HiveMind {
   }
 
   getParameters(idx) {
-    return this.#transformers[idx];
+    return {
+      positionalEncoding: this.#transformers[idx].positionalEncoding,
+      attentionWeights: this.#transformers[idx].attentionWeights,
+      ffnWeights: this.#transformers[idx].ffnWeights,
+      layerNormWeights: this.#transformers[idx].layerNormWeights,
+      outputWeights: this.#transformers[idx].outputWeights,
+      outputBias: this.#transformers[idx].outputBias,
+      momentumWeights: this.#momentumWeights[idx],
+      attentionWeightMatrix: this.#attentionWeightMatrix[idx],
+      attentionBias: this.#attentionBias,
+      adaptiveLearningRate: this.#adaptiveLearningRate[idx],
+      attentionMemory: this.#attentionMemory[idx],
+      gradientAccumulation: this.#gradientAccumulation[idx],
+      specializationWeights: this.#specializationWeights[idx]
+    };
   }
 
   setParameters(idx, params) {
-    const validateArray = (arr, defaultValue) => arr.map(val => isValidNumber(val) ? val : defaultValue);
+    const validateArray = (arr, defaultValue) => {
+      if (!Array.isArray(arr)) return Array(16).fill(defaultValue); // Default to array of 16 zeros if not an array
+      return arr.map(val => isValidNumber(val) ? val : defaultValue);
+    };
+    const validateNestedArray = (arr, depth, defaultValue) => {
+      if (!Array.isArray(arr)) {
+        // Create default nested array based on depth
+        if (depth === 1) return Array(16).fill(defaultValue);
+        if (depth === 2) return Array(128).fill().map(() => Array(16).fill(defaultValue));
+        if (depth === 3) return Array(128).fill().map(() => Array(10).fill().map(() => Array(16).fill(defaultValue)));
+        return arr; // Fallback for unexpected depth
+      }
+      if (depth === 1) return validateArray(arr, defaultValue);
+      return arr.map(subArr => validateNestedArray(subArr, depth - 1, defaultValue));
+    };
+    const validateGradientAccumulation = (gradAcc) => {
+      if (!gradAcc || typeof gradAcc !== 'object') {
+        return {
+          outputWeights: Array(16).fill().map(() => Array(1).fill(0)),
+          outputBias: Array(1).fill(0),
+          attentionWeights: Array(2).fill().map(() => ({
+            Wq: Array(16).fill().map(() => Array(16).fill(0)),
+            Wk: Array(16).fill().map(() => Array(16).fill(0)),
+            Wv: Array(16).fill().map(() => Array(16).fill(0)),
+            Wo: Array(16).fill().map(() => Array(16).fill(0))
+          })),
+          ffnWeights: Array(2).fill().map(() => ({
+            W1: Array(16).fill().map(() => Array(32).fill(0)),
+            W2: Array(32).fill().map(() => Array(16).fill(0)),
+            b1: Array(32).fill(0),
+            b2: Array(16).fill(0)
+          })),
+          layerNormWeights: Array(2).fill().map(() => ({
+            gamma1: Array(16).fill(0),
+            beta1: Array(16).fill(0),
+            gamma2: Array(16).fill(0),
+            beta2: Array(16).fill(0)
+          }))
+        };
+      }
+      return {
+        outputWeights: validateNestedArray(gradAcc.outputWeights || Array(16).fill().map(() => Array(1).fill(0)), 2, 0),
+        outputBias: validateArray(gradAcc.outputBias || Array(1).fill(0), 0),
+        attentionWeights: (gradAcc.attentionWeights || Array(2).fill().map(() => ({
+          Wq: Array(16).fill().map(() => Array(16).fill(0)),
+          Wk: Array(16).fill().map(() => Array(16).fill(0)),
+          Wv: Array(16).fill().map(() => Array(16).fill(0)),
+          Wo: Array(16).fill().map(() => Array(16).fill(0))
+        }))).map(layer => ({
+          Wq: validateNestedArray(layer.Wq, 2, 0),
+          Wk: validateNestedArray(layer.Wk, 2, 0),
+          Wv: validateNestedArray(layer.Wv, 2, 0),
+          Wo: validateNestedArray(layer.Wo, 2, 0)
+        })),
+        ffnWeights: (gradAcc.ffnWeights || Array(2).fill().map(() => ({
+          W1: Array(16).fill().map(() => Array(32).fill(0)),
+          W2: Array(32).fill().map(() => Array(16).fill(0)),
+          b1: Array(32).fill(0),
+          b2: Array(16).fill(0)
+        }))).map(layer => ({
+          W1: validateNestedArray(layer.W1, 2, 0),
+          W2: validateNestedArray(layer.W2, 2, 0),
+          b1: validateArray(layer.b1, 0),
+          b2: validateArray(layer.b2, 0)
+        })),
+        layerNormWeights: (gradAcc.layerNormWeights || Array(2).fill().map(() => ({
+          gamma1: Array(16).fill(0),
+          beta1: Array(16).fill(0),
+          gamma2: Array(16).fill(0),
+          beta2: Array(16).fill(0)
+        }))).map(layer => ({
+          gamma1: validateArray(layer.gamma1, 0),
+          beta1: validateArray(layer.beta1, 0),
+          gamma2: validateArray(layer.gamma2, 0),
+          beta2: validateArray(layer.beta2, 0)
+        }))
+      };
+    };
+
     const validatedParams = {
-      ...params,
-      ffnWeights: params.ffnWeights.map(layer => ({
-        W1: layer.W1.map(row => validateArray(row, 0)),
-        W2: layer.W2.map(row => validateArray(row, 0)),
+      positionalEncoding: validateNestedArray(params.positionalEncoding || this.#transformers[idx].positionalEncoding, 2, 0),
+      attentionWeights: (params.attentionWeights || this.#transformers[idx].attentionWeights).map(layer => ({
+        Wq: validateNestedArray(layer.Wq, 2, 0),
+        Wk: validateNestedArray(layer.Wk, 2, 0),
+        Wv: validateNestedArray(layer.Wv, 2, 0),
+        Wo: validateNestedArray(layer.Wo, 2, 0)
+      })),
+      ffnWeights: (params.ffnWeights || this.#transformers[idx].ffnWeights).map(layer => ({
+        W1: validateNestedArray(layer.W1, 2, 0),
+        W2: validateNestedArray(layer.W2, 2, 0),
         b1: validateArray(layer.b1, 0),
         b2: validateArray(layer.b2, 0)
       })),
-      layerNormWeights: params.layerNormWeights.map(layer => ({
+      layerNormWeights: (params.layerNormWeights || this.#transformers[idx].layerNormWeights).map(layer => ({
         gamma1: validateArray(layer.gamma1, 1),
         beta1: validateArray(layer.beta1, 0),
         gamma2: validateArray(layer.gamma2, 1),
         beta2: validateArray(layer.beta2, 0)
       })),
-      attentionWeights: params.attentionWeights.map(layer => ({
-        Wq: layer.Wq.map(row => validateArray(row, 0)),
-        Wk: layer.Wk.map(row => validateArray(row, 0)),
-        Wv: layer.Wv.map(row => validateArray(row, 0)),
-        Wo: layer.Wo.map(row => validateArray(row, 0))
-      })),
-      positionalEncoding: params.positionalEncoding.map(row => validateArray(row, 0)),
-      outputWeights: params.outputWeights.map(row => validateArray(row, 0)),
-      outputBias: validateArray(params.outputBias, 0)
+      outputWeights: validateNestedArray(params.outputWeights || this.#transformers[idx].outputWeights, 2, 0),
+      outputBias: validateArray(params.outputBias || this.#transformers[idx].outputBias, 0),
+      momentumWeights: validateNestedArray(params.momentumWeights || this.#momentumWeights[idx], 3, 0),
+      attentionWeightMatrix: validateNestedArray(params.attentionWeightMatrix || this.#attentionWeightMatrix[idx], 2, 0),
+      attentionBias: validateArray(params.attentionBias || this.#attentionBias, 0),
+      adaptiveLearningRate: isValidNumber(params.adaptiveLearningRate) ? params.adaptiveLearningRate : this.#adaptiveLearningRate[idx],
+      attentionMemory: validateNestedArray(params.attentionMemory || this.#attentionMemory[idx], 3, 0),
+      gradientAccumulation: validateGradientAccumulation(params.gradientAccumulation || this.#gradientAccumulation[idx]),
+      specializationWeights: validateNestedArray(params.specializationWeights || this.#specializationWeights[idx], 3, 0)
     };
-    this.#transformers[idx] = validatedParams;
+
+    this.#transformers[idx] = {
+      positionalEncoding: validatedParams.positionalEncoding,
+      attentionWeights: validatedParams.attentionWeights,
+      ffnWeights: validatedParams.ffnWeights,
+      layerNormWeights: validatedParams.layerNormWeights,
+      outputWeights: validatedParams.outputWeights,
+      outputBias: validatedParams.outputBias
+    };
+    this.#momentumWeights[idx] = validatedParams.momentumWeights;
+    this.#attentionWeightMatrix[idx] = validatedParams.attentionWeightMatrix;
+    this.#attentionBias = validatedParams.attentionBias;
+    this.#adaptiveLearningRate[idx] = validatedParams.adaptiveLearningRate;
+    this.#attentionMemory[idx] = validatedParams.attentionMemory;
+    this.#gradientAccumulation[idx] = validatedParams.gradientAccumulation;
+    this.#specializationWeights[idx] = validatedParams.specializationWeights;
   }
 
   getEnsembleWeight(idx) {
@@ -1253,6 +1366,16 @@ class HiveMind {
 
   setSpecializationScore(idx, value) {
     this.#specializationScores[idx] = value;
+  }
+
+  getTrainingStepCount() {
+    return this.#trainingStepCount;
+  }
+
+  setTrainingStepCount(count) {
+    if (isValidNumber(count) && count >= 0) {
+      this.#trainingStepCount = count;
+    }
   }
 }
 
@@ -1474,8 +1597,20 @@ class NeuralSignalEngine {
         historical_performance TEXT NOT NULL,
         trust_scores TEXT NOT NULL,
         specialization_score REAL NOT NULL,
+        momentum_weights TEXT NOT NULL,
+        attention_weight_matrix TEXT NOT NULL,
+        attention_bias TEXT NOT NULL,
+        adaptive_learning_rate REAL NOT NULL,
+        attention_memory TEXT NOT NULL,
+        gradient_accumulation TEXT NOT NULL,
+        specialization_weights TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         UNIQUE(transformer_id)
+      );
+      CREATE TABLE IF NOT EXISTS hivemind_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        training_step_count INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_bucket_key ON patterns(bucket_key);
       CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
@@ -1488,47 +1623,142 @@ class NeuralSignalEngine {
   #loadState() {
     const stmt = this.#db.prepare(`
       SELECT transformer_id, parameters, ensemble_weight, performance_score, 
-            agreement_score, historical_performance, trust_scores, specialization_score 
+            agreement_score, historical_performance, trust_scores, specialization_score,
+            momentum_weights, attention_weight_matrix, attention_bias, adaptive_learning_rate,
+            attention_memory, gradient_accumulation, specialization_weights
       FROM transformer_parameters
     `);
     const params = stmt.all();
     
+    const hivemindStmt = this.#db.prepare(`SELECT training_step_count FROM hivemind_state ORDER BY updated_at DESC LIMIT 1`);
+    const hivemindState = hivemindStmt.get();
+    
+    const safeParse = (str, defaultValue) => {
+      try {
+        if (!str) return defaultValue;
+        const parsed = JSON.parse(str);
+        return parsed && typeof parsed === 'object' ? parsed : defaultValue;
+      } catch (e) {
+        return defaultValue;
+      }
+    };
+
     if (params.length === 0) {
       for (let i = 0; i < 128; i++) {
         const transformerId = `transformer_${i + 1}`;
         const parameters = this.#transformer.getParameters(i);
         const weight = this.#transformer.getEnsembleWeight(i);
+        const performanceScore = this.#transformer.getPerformanceScore(i);
+        const agreementScore = this.#transformer.getAgreementScore(i);
+        const historicalPerformance = JSON.stringify(this.#transformer.getHistoricalPerformance(i));
+        const trustScores = JSON.stringify(this.#transformer.getTrustScoresHistory(i));
+        const specializationScore = this.#transformer.getSpecializationScore(i);
+        const momentumWeights = JSON.stringify(this.#transformer.getParameters(i).momentumWeights || Array(16).fill().map(() => Array(1).fill(0)));
+        const attentionWeightMatrix = JSON.stringify(Array(128).fill().map(() => Array(16).fill(0)));
+        const attentionBias = JSON.stringify(Array(16).fill(0));
+        const adaptiveLearningRate = this.#transformer.getParameters(i).adaptiveLearningRate || 0.005;
+        const attentionMemory = JSON.stringify(Array(128).fill().map(() => Array(10).fill().map(() => Array(16).fill(0))));
+        const gradientAccumulation = JSON.stringify({
+          outputWeights: Array(16).fill().map(() => Array(1).fill(0)),
+          outputBias: Array(1).fill(0),
+          attentionWeights: Array(2).fill().map(() => ({
+            Wq: Array(16).fill().map(() => Array(16).fill(0)),
+            Wk: Array(16).fill().map(() => Array(16).fill(0)),
+            Wv: Array(16).fill().map(() => Array(16).fill(0)),
+            Wo: Array(16).fill().map(() => Array(16).fill(0))
+          })),
+          ffnWeights: Array(2).fill().map(() => ({
+            W1: Array(16).fill().map(() => Array(32).fill(0)),
+            W2: Array(32).fill().map(() => Array(16).fill(0)),
+            b1: Array(32).fill(0),
+            b2: Array(16).fill(0)
+          })),
+          layerNormWeights: Array(2).fill().map(() => ({
+            gamma1: Array(16).fill(0),
+            beta1: Array(16).fill(0),
+            gamma2: Array(16).fill(0),
+            beta2: Array(16).fill(0)
+          }))
+        });
+        const specializationWeights = JSON.stringify(Array(128).fill().map(() => Array(16).fill().map(() => Array(16).fill(0))));
         this.#db.prepare(`
           INSERT OR REPLACE INTO transformer_parameters (
             transformer_id, parameters, ensemble_weight, performance_score, 
-            agreement_score, historical_performance, trust_scores, specialization_score, updated_at
+            agreement_score, historical_performance, trust_scores, specialization_score,
+            momentum_weights, attention_weight_matrix, attention_bias, adaptive_learning_rate,
+            attention_memory, gradient_accumulation, specialization_weights, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           transformerId, 
           JSON.stringify(parameters), 
           weight, 
-          0, 
-          0, 
-          JSON.stringify([0]), 
-          JSON.stringify([0]), 
-          0, 
+          performanceScore, 
+          agreementScore, 
+          historicalPerformance, 
+          trustScores, 
+          specializationScore,
+          momentumWeights,
+          attentionWeightMatrix,
+          attentionBias,
+          adaptiveLearningRate,
+          attentionMemory,
+          gradientAccumulation,
+          specializationWeights,
           Date.now()
         );
       }
+      this.#db.prepare(`
+        INSERT OR REPLACE INTO hivemind_state (training_step_count, updated_at)
+        VALUES (?, ?)
+      `).run(0, Date.now());
     } else {
       params.forEach(param => {
         if (/^transformer_[1-128]$/.test(param.transformer_id)) {
           const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
-          this.#transformer.setParameters(idx, JSON.parse(param.parameters));
+          this.#transformer.setParameters(idx, safeParse(param.parameters, this.#transformer.getParameters(idx)));
           this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
           this.#transformer.setPerformanceScore(idx, param.performance_score);
           this.#transformer.setAgreementScore(idx, param.agreement_score);
-          this.#transformer.setHistoricalPerformance(idx, JSON.parse(param.historical_performance));
-          this.#transformer.setTrustScoresHistory(idx, JSON.parse(param.trust_scores));
+          this.#transformer.setHistoricalPerformance(idx, safeParse(param.historical_performance, this.#transformer.getHistoricalPerformance(idx)));
+          this.#transformer.setTrustScoresHistory(idx, safeParse(param.trust_scores, this.#transformer.getTrustScoresHistory(idx)));
           this.#transformer.setSpecializationScore(idx, param.specialization_score);
+          this.#transformer.setParameters(idx, {
+            ...this.#transformer.getParameters(idx),
+            momentumWeights: safeParse(param.momentum_weights, Array(16).fill().map(() => Array(1).fill(0))),
+            attentionWeightMatrix: safeParse(param.attention_weight_matrix, Array(128).fill().map(() => Array(16).fill(0))),
+            attentionBias: safeParse(param.attention_bias, Array(16).fill(0)),
+            adaptiveLearningRate: isValidNumber(param.adaptive_learning_rate) ? param.adaptive_learning_rate : 0.005,
+            attentionMemory: safeParse(param.attention_memory, Array(128).fill().map(() => Array(10).fill().map(() => Array(16).fill(0)))),
+            gradientAccumulation: safeParse(param.gradient_accumulation, {
+              outputWeights: Array(16).fill().map(() => Array(1).fill(0)),
+              outputBias: Array(1).fill(0),
+              attentionWeights: Array(2).fill().map(() => ({
+                Wq: Array(16).fill().map(() => Array(16).fill(0)),
+                Wk: Array(16).fill().map(() => Array(16).fill(0)),
+                Wv: Array(16).fill().map(() => Array(16).fill(0)),
+                Wo: Array(16).fill().map(() => Array(16).fill(0))
+              })),
+              ffnWeights: Array(2).fill().map(() => ({
+                W1: Array(16).fill().map(() => Array(32).fill(0)),
+                W2: Array(32).fill().map(() => Array(16).fill(0)),
+                b1: Array(32).fill(0),
+                b2: Array(16).fill(0)
+              })),
+              layerNormWeights: Array(2).fill().map(() => ({
+                gamma1: Array(16).fill(0),
+                beta1: Array(16).fill(0),
+                gamma2: Array(16).fill(0),
+                beta2: Array(16).fill(0)
+              }))
+            }),
+            specializationWeights: safeParse(param.specialization_weights, Array(128).fill().map(() => Array(16).fill().map(() => Array(16).fill(0))))
+          });
         }
       });
+      if (hivemindState && isValidNumber(hivemindState.training_step_count)) {
+        this.#transformer.setTrainingStepCount(hivemindState.training_step_count);
+      }
     }
   }
 
@@ -1543,20 +1773,43 @@ class NeuralSignalEngine {
         const historicalPerformance = JSON.stringify(this.#transformer.getHistoricalPerformance(i));
         const trustScores = JSON.stringify(this.#transformer.getTrustScoresHistory(i));
         const specializationScore = this.#transformer.getSpecializationScore(i);
+        const momentumWeights = JSON.stringify(parameters.momentumWeights || Array(16).fill().map(() => Array(1).fill(0)));
+        const attentionWeightMatrix = JSON.stringify(parameters.attentionWeightMatrix || Array(128).fill().map(() => Array(16).fill(0)));
+        const attentionBias = JSON.stringify(parameters.attentionBias || Array(16).fill(0));
+        const adaptiveLearningRate = parameters.adaptiveLearningRate || 0.005;
+        const attentionMemory = JSON.stringify(parameters.attentionMemory || Array(128).fill().map(() => Array(10).fill().map(() => Array(16).fill(0))));
+        const gradientAccumulation = JSON.stringify(parameters.gradientAccumulation || {
+          outputWeights: Array(16).fill().map(() => Array(1).fill(0)),
+          outputBias: Array(1).fill(0),
+          attentionWeights: Array(2).fill().map(() => ({
+            Wq: Array(16).fill().map(() => Array(16).fill(0)),
+            Wk: Array(16).fill().map(() => Array(16).fill(0)),
+            Wv: Array(16).fill().map(() => Array(16).fill(0)),
+            Wo: Array(16).fill().map(() => Array(16).fill(0))
+          })),
+          ffnWeights: Array(2).fill().map(() => ({
+            W1: Array(16).fill().map(() => Array(32).fill(0)),
+            W2: Array(32).fill().map(() => Array(16).fill(0)),
+            b1: Array(32).fill(0),
+            b2: Array(16).fill(0)
+          })),
+          layerNormWeights: Array(2).fill().map(() => ({
+            gamma1: Array(16).fill(0),
+            beta1: Array(16).fill(0),
+            gamma2: Array(16).fill(0),
+            beta2: Array(16).fill(0)
+          }))
+        });
+        const specializationWeights = JSON.stringify(parameters.specializationWeights || Array(128).fill().map(() => Array(16).fill().map(() => Array(16).fill(0))));
         
         this.#db.prepare(`
           INSERT OR REPLACE INTO transformer_parameters (
-            transformer_id, 
-            parameters, 
-            ensemble_weight, 
-            performance_score, 
-            agreement_score, 
-            historical_performance, 
-            trust_scores, 
-            specialization_score, 
-            updated_at
+            transformer_id, parameters, ensemble_weight, performance_score, 
+            agreement_score, historical_performance, trust_scores, specialization_score,
+            momentum_weights, attention_weight_matrix, attention_bias, adaptive_learning_rate,
+            attention_memory, gradient_accumulation, specialization_weights, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           transformerId, 
           JSON.stringify(parameters), 
@@ -1565,10 +1818,21 @@ class NeuralSignalEngine {
           agreementScore, 
           historicalPerformance, 
           trustScores, 
-          specializationScore, 
+          specializationScore,
+          momentumWeights,
+          attentionWeightMatrix,
+          attentionBias,
+          adaptiveLearningRate,
+          attentionMemory,
+          gradientAccumulation,
+          specializationWeights,
           Date.now()
         );
       }
+      this.#db.prepare(`
+        INSERT OR REPLACE INTO hivemind_state (training_step_count, updated_at)
+        VALUES (?, ?)
+      `).run(this.#transformer.getTrainingStepCount() || 0, Date.now());
     });
     transaction();
   }
