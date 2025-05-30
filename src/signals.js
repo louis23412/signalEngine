@@ -32,13 +32,13 @@ class HiveMind {
   #numHeads = 4;
   #numLayers = 2;
   #feedForwardSize = 32;
-  #dropoutRate = 0.15;
-  #learningRate = 0.001;
+  #dropoutRate = 0.1;
+  #learningRate = 0.005;
   #ensembleSize = 64;
   #transformers = [];
   #ensembleWeights = [];
-  #communicationFrequency = 10;
-  #weightSharingRate = 0.05;
+  #communicationFrequency = 5;
+  #weightSharingRate = 0.1;
   #performanceScores = Array(this.#ensembleSize).fill(0);
   #agreementScores = Array(this.#ensembleSize).fill(0);
   #trainingStepCount = 0;
@@ -707,8 +707,8 @@ class HiveMind {
       }
     });
 
-    const performanceWeight = 0.7;
-    const agreementWeight = 0.3;
+    const performanceWeight = 0.8;
+    const agreementWeight = 0.2;
     this.#ensembleWeights = this.#performanceScores.map((p, idx) => {
       const combinedScore = performanceWeight * p + agreementWeight * this.#agreementScores[idx];
       return Math.max(0.1, Math.min(1, combinedScore));
