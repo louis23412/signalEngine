@@ -39,7 +39,7 @@ const countLines = () => {
 const formatSignal = (signal) => {
     return `Signal => Action: ${signal.suggestedAction}, Multiplier: ${signal.multiplier.toFixed(3)}, ` +
            `Entry: ${signal.entryPrice.toFixed(2)}, Sell: ${signal.sellPrice.toFixed(2)}, ` +
-           `Stop: ${signal.stopLoss.toFixed(2)}, Reward: ${signal.expectedReward.toFixed(3)}`;
+           `Stop: ${signal.stopLoss.toFixed(2)}, Reward: ${signal.expectedReward}`;
 };
 
 // Process candles
@@ -90,7 +90,7 @@ const processCandles = () => {
                 const signalOutput = formatSignal(signal);
 
                 // Write progress and signal
-                process.stdout.write(`${progressLine}\n${signalOutput}\n`);
+                process.stdout.write(`-----------------\n${progressLine}\n${signalOutput}\n-----------------`);
                 process.stdout.write('\x1B[?25h'); // Show cursor
             } catch (e) {
                 console.log(e);
