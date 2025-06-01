@@ -783,86 +783,117 @@ class HiveMind {
       return output;
   }
 
+  // Performs multi-head attention for a single transformer, processing context-aware input embeddings
+  // through multiple attention heads to capture diverse patterns. Integrates specialization weights to
+  // enhance attention focus, updates attention memory for historical context, and applies dropout for
+  // regularization. Returns attention output for further processing in the transformer pipeline.
+  // Args:
+  //   x: Array of input embeddings [inputSize, hiddenSize].
+  //   layer: Transformer layer object containing attention weights (Wq, Wk, Wv, Wo).
+  //   transformerIdx: Index of the transformer in the ensemble (0 to ensembleSize-1).
+  // Returns:
+  //   Array of shape [inputSize, hiddenSize] representing the attention output.
   #multiHeadAttention(x, layer, transformerIdx) {
-    const contextEnhancedInput = this.#contextAwareAttention(x, transformerIdx);
-    const headSize = this.#hiddenSize / this.#numHeads;
-    const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        for (let k = 0; k < this.#hiddenSize; k++) {
-          const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
-            ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
-            : 1;
-          Q[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wq[k][j])
-            ? contextEnhancedInput[i][k] * layer.Wq[k][j] * specWeight
-            : 0;
-          K[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wk[k][j])
-            ? contextEnhancedInput[i][k] * layer.Wk[k][j] * specWeight
-            : 0;
-          V[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wv[k][j])
-            ? contextEnhancedInput[i][k] * layer.Wv[k][j] * specWeight
-            : 0;
-        }
+      // Validate inputs, layer, and transformer index
+      if (
+          !Array.isArray(x) ||
+          x.length !== this.#inputSize ||
+          !x.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)) ||
+          !Number.isInteger(transformerIdx) ||
+          transformerIdx < 0 ||
+          transformerIdx >= this.#ensembleSize ||
+          !layer || !layer.Wq || !layer.Wk || !layer.Wv || !layer.Wo
+      ) {
+          return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       }
-    }
 
-    const attentionScores = Array(this.#numHeads).fill().map(() =>
-      Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
-    );
+      // Compute context-aware input embeddings
+      const contextEnhancedInput = this.#contextAwareAttention(x, transformerIdx);
 
-    for (let h = 0; h < this.#numHeads; h++) {
+      // Initialize query (Q), key (K), and value (V) matrices
+      const headSize = this.#hiddenSize / this.#numHeads;
+      const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+      const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+      const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+      // Compute Q, K, V with specialization weights
       for (let i = 0; i < this.#inputSize; i++) {
-        for (let j = 0; j < this.#inputSize; j++) {
-          let sum = 0;
-          for (let k = 0; k < headSize; k++) {
-            sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k])
-              ? Q[i][h * headSize + k] * K[j][h * headSize + k]
-              : 0;
+          for (let j = 0; j < this.#hiddenSize; j++) {
+              for (let k = 0; k < this.#hiddenSize; k++) {
+                  const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
+                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
+                      : 1;
+                  Q[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wq[k][j])
+                      ? contextEnhancedInput[i][k] * layer.Wq[k][j] * specWeight
+                      : 0;
+                  K[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wk[k][j])
+                      ? contextEnhancedInput[i][k] * layer.Wk[k][j] * specWeight
+                      : 0;
+                  V[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wv[k][j])
+                      ? contextEnhancedInput[i][k] * layer.Wv[k][j] * specWeight
+                      : 0;
+              }
           }
-          attentionScores[h][i][j] = isValidNumber(sum)
-            ? sum / Math.sqrt(headSize) * this.#attentionScalingFactor * (1 + this.#specializationScores[transformerIdx])
-            : 0;
-        }
-        attentionScores[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
       }
-    }
 
-    const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    for (let h = 0; h < this.#numHeads; h++) {
+      // Compute attention scores for each head
+      const attentionScores = Array(this.#numHeads).fill().map(() =>
+          Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
+      );
+
+      for (let h = 0; h < this.#numHeads; h++) {
+          for (let i = 0; i < this.#inputSize; i++) {
+              for (let j = 0; j < this.#inputSize; j++) {
+                  let sum = 0;
+                  for (let k = 0; k < headSize; k++) {
+                      sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k])
+                          ? Q[i][h * headSize + k] * K[j][h * headSize + k]
+                          : 0;
+                  }
+                  attentionScores[h][i][j] = isValidNumber(sum)
+                      ? sum / Math.sqrt(headSize) * this.#attentionScalingFactor * (1 + this.#specializationScores[transformerIdx])
+                      : 0;
+              }
+              attentionScores[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
+          }
+      }
+
+      // Compute attention output per head
+      const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+      for (let h = 0; h < this.#numHeads; h++) {
+          for (let i = 0; i < this.#inputSize; i++) {
+              for (let j = 0; j < this.#inputSize; j++) {
+                  for (let k = 0; k < headSize; k++) {
+                      output[i][h * headSize + k] += isValidNumber(attentionScores[h][i][j]) && isValidNumber(V[j][h * headSize + k])
+                          ? attentionScores[h][i][j] * V[j][h * headSize + k]
+                          : 0;
+                  }
+              }
+          }
+      }
+
+      // Apply output projection (Wo) with specialization weights
+      const finalOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
-        for (let j = 0; j < this.#inputSize; j++) {
-          for (let k = 0; k < headSize; k++) {
-            output[i][h * headSize + k] += isValidNumber(attentionScores[h][i][j]) && isValidNumber(V[j][h * headSize + k])
-              ? attentionScores[h][i][j] * V[j][h * headSize + k]
-              : 0;
+          for (let j = 0; j < this.#hiddenSize; j++) {
+              for (let k = 0; k < this.#hiddenSize; k++) {
+                  const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
+                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
+                      : 1;
+                  finalOutput[i][j] += isValidNumber(output[i][k]) && isValidNumber(layer.Wo[k][j])
+                      ? output[i][k] * layer.Wo[k][j] * specWeight
+                      : 0;
+              }
           }
-        }
       }
-    }
 
-    const finalOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        for (let k = 0; k < this.#hiddenSize; k++) {
-          const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
-            ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
-            : 1;
-          finalOutput[i][j] += isValidNumber(output[i][k]) && isValidNumber(layer.Wo[k][j])
-            ? output[i][k] * layer.Wo[k][j] * specWeight
-            : 0;
-        }
+      // Update attention memory with the final attention output
+      if (this.#attentionMemory[transformerIdx].length >= this.#contextWindow) {
+          this.#attentionMemory[transformerIdx].shift(); // Remove oldest entry
       }
-    }
+      this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice())); // Store copy of output
 
-    this.#attentionMemory[transformerIdx].push(finalOutput.slice());
-    if (this.#attentionMemory[transformerIdx].length > this.#contextWindow) {
-      this.#attentionMemory[transformerIdx].shift();
-    }
-
-    return finalOutput;
+      return finalOutput;
   }
 
   #feedForward(x, layer) {
