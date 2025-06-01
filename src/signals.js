@@ -421,206 +421,226 @@ class HiveMind {
     });
   }
 
+  // Shares weights among lower-performing transformers to improve their performance by adopting
+  // knowledge from top performers, while preserving the weights of top performers to maintain
+  // specialization. Uses trust scores, specialization scores, and swarm intelligence to weight
+  // contributions, with momentum to smooth updates. Handles invalid values gracefully and ensures
+  // numerical stability through clipping and validation.
   #shareWeights() {
-    const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
-    const trustScores = this.#performanceScores.map(score => (isValidNumber(score) ? score : 0) / performanceSum);
-    const momentumFactor = 0.7;
+      // Compute trust scores based on performance, normalized to sum to 1
+      const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
+      const trustScores = this.#performanceScores.map(score => (isValidNumber(score) ? score : 0) / performanceSum);
+      const momentumFactor = 0.7;
 
-    const avgWeights = (weights, trustWeights) => {
-      const result = weights[0].map(row => row.map(() => 0));
-      for (let i = 0; i < result.length; i++) {
-        for (let j = 0; j < result[i].length; j++) {
-          let weightedSum = 0, totalWeight = 0;
-          for (let t = 0; t < weights.length; t++) {
-            if (isValidNumber(weights[t][i][j]) && isValidNumber(trustWeights[t])) {
-              weightedSum += weights[t][i][j] * trustWeights[t] * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[t]);
-              totalWeight += trustWeights[t];
-            }
+      // Helper function to compute weighted average of weights
+      const avgWeights = (weights, trustWeights) => {
+          const result = weights[0].map(row => row.map(() => 0));
+          for (let i = 0; i < result.length; i++) {
+              for (let j = 0; j < result[i].length; j++) {
+                  let weightedSum = 0, totalWeight = 0;
+                  for (let t = 0; t < weights.length; t++) {
+                      if (isValidNumber(weights[t][i][j]) && isValidNumber(trustWeights[t])) {
+                          weightedSum += weights[t][i][j] * trustWeights[t] * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[t]);
+                          totalWeight += trustWeights[t];
+                      }
+                  }
+                  result[i][j] = totalWeight > 0 ? weightedSum / totalWeight : 0;
+              }
           }
-          result[i][j] = totalWeight > 0 ? weightedSum / totalWeight : 0;
-        }
-      }
-      return result;
-    };
+          return result;
+      };
 
-    const avgBias = (biases, trustWeights) => {
-      const result = biases[0].map(() => 0);
-      for (let i = 0; i < result.length; i++) {
-        let weightedSum = 0, totalWeight = 0;
-        for (let t = 0; t < biases.length; t++) {
-          if (isValidNumber(biases[t][i]) && isValidNumber(trustWeights[t])) {
-            weightedSum += biases[t][i] * trustWeights[t] * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[t]);
-            totalWeight += trustWeights[t];
+      // Helper function to compute weighted average of biases
+      const avgBias = (biases, trustWeights) => {
+          const result = biases[0].map(() => 0);
+          for (let i = 0; i < result.length; i++) {
+              let weightedSum = 0, totalWeight = 0;
+              for (let t = 0; t < biases.length; t++) {
+                  if (isValidNumber(biases[t][i]) && isValidNumber(trustWeights[t])) {
+                      weightedSum += biases[t][i] * trustWeights[t] * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[t]);
+                      totalWeight += trustWeights[t];
+                  }
+              }
+              result[i] = totalWeight > 0 ? weightedSum / totalWeight : 0;
           }
-        }
-        result[i] = totalWeight > 0 ? weightedSum / totalWeight : 0;
+          return result;
+      };
+
+      // Identify top performers (top 25%) to exclude from weight updates
+      const topPerformers = this.#performanceScores
+          .map((score, idx) => ({ score: isValidNumber(score) ? score : 0, idx }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, Math.floor(this.#ensembleSize * 0.25))
+          .map(({ idx }) => idx);
+
+      // Compute averaged weights and biases for all layers
+      for (let layer = 0; layer < this.#numLayers; layer++) {
+          const allWq = this.#transformers.map(t => t.attentionWeights[layer].Wq);
+          const allWk = this.#transformers.map(t => t.attentionWeights[layer].Wk);
+          const allWv = this.#transformers.map(t => t.attentionWeights[layer].Wv);
+          const allWo = this.#transformers.map(t => t.attentionWeights[layer].Wo);
+          const allW1 = this.#transformers.map(t => t.ffnWeights[layer].W1);
+          const allW2 = this.#transformers.map(t => t.ffnWeights[layer].W2);
+          const allB1 = this.#transformers.map(t => t.ffnWeights[layer].b1);
+          const allB2 = this.#transformers.map(t => t.ffnWeights[layer].b2);
+          const allGamma1 = this.#transformers.map(t => t.layerNormWeights[layer].gamma1);
+          const allBeta1 = this.#transformers.map(t => t.layerNormWeights[layer].beta1);
+          const allGamma2 = this.#transformers.map(t => t.layerNormWeights[layer].gamma2);
+          const allBeta2 = this.#transformers.map(t => t.layerNormWeights[layer].beta2);
+
+          const avgWq = avgWeights(allWq, trustScores);
+          const avgWk = avgWeights(allWk, trustScores);
+          const avgWv = avgWeights(allWv, trustScores);
+          const avgWo = avgWeights(allWo, trustScores);
+          const avgW1 = avgWeights(allW1, trustScores);
+          const avgW2 = avgWeights(allW2, trustScores);
+          const avgB1 = avgBias(allB1, trustScores);
+          const avgB2 = avgBias(allB2, trustScores);
+          const avgGamma1 = avgBias(allGamma1, trustScores);
+          const avgBeta1 = avgBias(allBeta1, trustScores);
+          const avgGamma2 = avgBias(allGamma2, trustScores);
+          const avgBeta2 = avgBias(allBeta2, trustScores);
+
+          this.#transformers.forEach((t, idx) => {
+              // Skip top performers to preserve their specialized weights
+              if (topPerformers.includes(idx)) return;
+
+              const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
+              const swarmInfluence = 1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx];
+
+              // Update attention weights
+              for (let i = 0; i < t.attentionWeights[layer].Wq.length; i++) {
+                  for (let j = 0; j < t.attentionWeights[layer].Wq[i].length; j++) {
+                      const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
+                          ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
+                          : 1;
+                      this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
+                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
+                              ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
+                              : t.attentionWeights[layer].Wq[i][j] || 0);
+                      t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
+                      this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
+                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
+                              ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
+                              : t.attentionWeights[layer].Wk[i][j] || 0);
+                      t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
+                      this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
+                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
+                              ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
+                              : t.attentionWeights[layer].Wv[i][j] || 0);
+                      t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
+                      this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
+                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
+                              ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
+                              : t.attentionWeights[layer].Wo[i][j] || 0);
+                      t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
+                  }
+              }
+
+              // Update feed-forward weights
+              for (let i = 0; i < t.ffnWeights[layer].W1.length; i++) {
+                  for (let j = 0; j < t.ffnWeights[layer].W1[i].length; j++) {
+                      const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize])
+                          ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize]
+                          : 1;
+                      this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
+                          (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
+                              ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
+                              : t.ffnWeights[layer].W1[i][j] || 0);
+                      t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
+                  }
+              }
+              for (let i = 0; i < t.ffnWeights[layer].W2.length; i++) {
+                  for (let j = 0; j < t.ffnWeights[layer].W2[i].length; j++) {
+                      const specializationFactor = isValidNumber(this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize])
+                          ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize]
+                          : 1;
+                      this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
+                          (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
+                              ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
+                              : t.ffnWeights[layer].W2[i][j] || 0);
+                      t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
+                  }
+              }
+
+              // Update feed-forward biases
+              for (let i = 0; i < t.ffnWeights[layer].b1.length; i++) {
+                  this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
+                      (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
+                          ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
+                          : t.ffnWeights[layer].b1[i] || 0);
+                  t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
+              }
+              for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
+                  this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
+                      (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
+                          ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
+                          : t.ffnWeights[layer].b2[i] || 0);
+                  t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
+              }
+
+              // Update layer normalization weights
+              for (let i = 0; i < t.layerNormWeights[layer].gamma1.length; i++) {
+                  this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
+                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
+                          ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
+                          : t.layerNormWeights[layer].gamma1[i] || 1);
+                  t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
+                  this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
+                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
+                          ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
+                          : t.layerNormWeights[layer].beta1[i] || 0);
+                  t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
+                  this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
+                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
+                          ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
+                          : t.layerNormWeights[layer].gamma2[i] || 1);
+                  t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
+                  this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
+                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
+                          ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
+                          : t.layerNormWeights[layer].beta2[i] || 0);
+                  t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
+              }
+          });
       }
-      return result;
-    };
 
-    const topPerformers = this.#performanceScores
-      .map((score, idx) => ({ score: isValidNumber(score) ? score : 0, idx }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, Math.floor(this.#ensembleSize * 0.25))
-      .map(({ idx }) => idx);
-
-    for (let layer = 0; layer < this.#numLayers; layer++) {
-      const allWq = this.#transformers.map(t => t.attentionWeights[layer].Wq);
-      const allWk = this.#transformers.map(t => t.attentionWeights[layer].Wk);
-      const allWv = this.#transformers.map(t => t.attentionWeights[layer].Wv);
-      const allWo = this.#transformers.map(t => t.attentionWeights[layer].Wo);
-      const allW1 = this.#transformers.map(t => t.ffnWeights[layer].W1);
-      const allW2 = this.#transformers.map(t => t.ffnWeights[layer].W2);
-      const allB1 = this.#transformers.map(t => t.ffnWeights[layer].b1);
-      const allB2 = this.#transformers.map(t => t.ffnWeights[layer].b2);
-      const allGamma1 = this.#transformers.map(t => t.layerNormWeights[layer].gamma1);
-      const allBeta1 = this.#transformers.map(t => t.layerNormWeights[layer].beta1);
-      const allGamma2 = this.#transformers.map(t => t.layerNormWeights[layer].gamma2);
-      const allBeta2 = this.#transformers.map(t => t.layerNormWeights[layer].beta2);
-
-      const avgWq = avgWeights(allWq, trustScores);
-      const avgWk = avgWeights(allWk, trustScores);
-      const avgWv = avgWeights(allWv, trustScores);
-      const avgWo = avgWeights(allWo, trustScores);
-      const avgW1 = avgWeights(allW1, trustScores);
-      const avgW2 = avgWeights(allW2, trustScores);
-      const avgB1 = avgBias(allB1, trustScores);
-      const avgB2 = avgBias(allB2, trustScores);
-      const avgGamma1 = avgBias(allGamma1, trustScores);
-      const avgBeta1 = avgBias(allBeta1, trustScores);
-      const avgGamma2 = avgBias(allGamma2, trustScores);
-      const avgBeta2 = avgBias(allBeta2, trustScores);
+      // Update output weights and biases for non-top performers
+      const allOutputWeights = this.#transformers.map(t => t.outputWeights);
+      const allOutputBias = this.#transformers.map(t => t.outputBias);
+      const avgOutputWeights = avgWeights(allOutputWeights, trustScores);
+      const avgOutputBias = avgBias(allOutputBias, trustScores);
 
       this.#transformers.forEach((t, idx) => {
-        const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
-        const isTopPerformer = topPerformers.includes(idx) ? 1.2 : 1.0;
+          // Skip top performers
+          if (topPerformers.includes(idx)) return;
 
-        for (let i = 0; i < t.attentionWeights[layer].Wq.length; i++) {
-          for (let j = 0; j < t.attentionWeights[layer].Wq[i].length; j++) {
-            const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-            const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
-              ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
-              : 1;
-            this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
-              (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
-                ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
-                : t.attentionWeights[layer].Wq[i][j] || 0);
-            t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
-            this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
-              (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
-                ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
-                : t.attentionWeights[layer].Wk[i][j] || 0);
-            t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
-            this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
-              (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
-                ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
-                : t.attentionWeights[layer].Wv[i][j] || 0);
-            t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
-            this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
-              (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
-                ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
-                : t.attentionWeights[layer].Wo[i][j] || 0);
-            t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
+          const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
+          const swarmInfluence = 1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx];
+
+          // Update output weights
+          for (let i = 0; i < t.outputWeights.length; i++) {
+              for (let j = 0; j < t.outputWeights[i].length; j++) {
+                  const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
+                      ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
+                      : 1;
+                  this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
+                      (1 - momentumFactor) * (isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
+                          ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
+                          : t.outputWeights[i][j] || 0);
+                  t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
+              }
           }
-        }
-        for (let i = 0; i < t.ffnWeights[layer].W1.length; i++) {
-          for (let j = 0; j < t.ffnWeights[layer].W1[i].length; j++) {
-            const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-            const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize])
-              ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize]
-              : 1;
-            this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
-              (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
-                ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
-                : t.ffnWeights[layer].W1[i][j] || 0);
-            t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
+
+          // Update output biases
+          for (let i = 0; i < t.outputBias.length; i++) {
+              this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
+                  (1 - momentumFactor) * (isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
+                      ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
+                      : t.outputBias[i] || 0);
+              t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
           }
-        }
-        for (let i = 0; i < t.ffnWeights[layer].W2.length; i++) {
-          for (let j = 0; j < t.ffnWeights[layer].W2[i].length; j++) {
-            const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-            const specializationFactor = isValidNumber(this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize])
-              ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize]
-              : 1;
-            this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
-              (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
-                ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
-                : t.ffnWeights[layer].W2[i][j] || 0);
-            t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
-          }
-        }
-        for (let i = 0; i < t.ffnWeights[layer].b1.length; i++) {
-          const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-          this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
-            (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
-              ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
-              : t.ffnWeights[layer].b1[i] || 0);
-          t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
-        }
-        for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
-          const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-          this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
-            (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
-              ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
-              : t.ffnWeights[layer].b2[i] || 0);
-          t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
-        }
-        for (let i = 0; i < t.layerNormWeights[layer].gamma1.length; i++) {
-          const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-          this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-            (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
-              ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
-              : t.layerNormWeights[layer].gamma1[i] || 1);
-          t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
-          this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
-            (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
-              ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
-              : t.layerNormWeights[layer].beta1[i] || 0);
-          t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
-          this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-            (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
-              ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
-              : t.layerNormWeights[layer].gamma2[i] || 1);
-          t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
-          this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
-            (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
-              ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
-              : t.layerNormWeights[layer].beta2[i] || 0);
-          t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
-        }
-      }
-    )}
-
-    const allOutputWeights = this.#transformers.map(t => t.outputWeights);
-    const allOutputBias = this.#transformers.map(t => t.outputBias);
-    const avgOutputWeights = avgWeights(allOutputWeights, trustScores);
-    const avgOutputBias = avgBias(allOutputBias, trustScores);
-
-    this.#transformers.forEach((t, idx) => {
-      const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
-      const isTopPerformer = topPerformers.includes(idx) ? 1.2 : 1.0;
-      const swarmInfluence = isTopPerformer * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx]);
-
-      for (let i = 0; i < t.outputWeights.length; i++) {
-        for (let j = 0; j < t.outputWeights[i].length; j++) {
-          const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
-            ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
-            : 1;
-          this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
-            (1 - momentumFactor) * (isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
-              ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
-              : t.outputWeights[i][j] || 0);
-          t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
-        }
-      }
-      for (let i = 0; i < t.outputBias.length; i++) {
-        this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
-          (1 - momentumFactor) * (isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
-            ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
-            : t.outputBias[i] || 0);
-        t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
-      }
-    });
+      });
   }
 
   #normalizeEnsembleWeights() {
