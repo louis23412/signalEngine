@@ -161,9 +161,9 @@ class HiveMind {
     return isValidNumber(performanceStd) && performanceStd > threshold;
   }
 
-  // Computes ensemble weights for each transformer by integrating attention mechanisms, 
-  // historical performance, trust scores, and specialization scores. Uses input features and 
-  // transformer outputs to calculate attention scores, ensuring robust contextual understanding 
+  // Computes ensemble weights for each transformer by integrating attention mechanisms,
+  // historical performance, trust scores, and specialization scores. Processes input features
+  // and transformer outputs to calculate attention scores, ensuring robust contextual understanding
   // across all input positions and transformers. Returns normalized weights summing to 1.
   // Args:
   //   inputs: Array of input features (length: #inputSize, typically 6).
@@ -171,98 +171,102 @@ class HiveMind {
   // Returns:
   //   Array of ensemble weights (length: #ensembleSize), normalized to sum to 1.
   #computeAttentionWeights(inputs, outputs) {
-    // Validate inputs and outputs to ensure they meet expected format and size
-    if (
-      !Array.isArray(inputs) ||
-      inputs.length !== this.#inputSize ||
-      !inputs.every(isValidNumber) ||
-      !Array.isArray(outputs) ||
-      outputs.length !== this.#ensembleSize ||
-      !outputs.every(isValidNumber)
-    ) {
-      // Return uniform weights as a safe fallback for invalid inputs
-      return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
-    }
-
-    // Transform inputs into feature vectors for attention computation
-    const inputFeatures = inputs.map(x =>
-      Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
-    );
-
-    // Compute attention scores for each transformer
-    const attentionScores = Array(this.#ensembleSize).fill(0);
-    for (let t = 0; t < this.#ensembleSize; t++) {
-      // Compute queries using the transformer-specific attention weight matrix
-      const queries = inputFeatures.map(row =>
-        row.map((val, i) =>
-          Array(this.#hiddenSize).fill().reduce((sum, _, j) =>
-            sum + (
-              isValidNumber(val) && isValidNumber(this.#attentionWeightMatrix[t][j])
-                ? val * this.#attentionWeightMatrix[t][j]
-                : 0
-            ),
-            0
-          )
-        )
-      );
-
-      // Compute keys using the transformer-specific attention weight matrix
-      const keys = outputs.map((output, idx) =>
-        this.#attentionWeightMatrix[t].map(w =>
-          isValidNumber(output) && isValidNumber(w) ? w * output : 0
-        )
-      );
-
-      // Aggregate attention scores across all input positions
-      let score = 0;
-      for (let i = 0; i < this.#inputSize; i++) {
-        for (let j = 0; j < this.#hiddenSize; j++) {
-          score += isValidNumber(queries[i][j]) && isValidNumber(keys[t][j])
-            ? queries[i][j] * keys[t][j]
-            : 0;
-        }
+      // Validate inputs and outputs to ensure they meet expected format and size
+      if (
+          !Array.isArray(inputs) ||
+          inputs.length !== this.#inputSize ||
+          !inputs.every(isValidNumber) ||
+          !Array.isArray(outputs) ||
+          outputs.length !== this.#ensembleSize ||
+          !outputs.every(isValidNumber)
+      ) {
+          // Return uniform weights as a safe fallback for invalid inputs
+          return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
       }
 
-      // Scale score and add bias for numerical stability
-      score = score / Math.sqrt(this.#hiddenSize) * this.#attentionScalingFactor +
-        (isValidNumber(this.#attentionBias[t % this.#hiddenSize]) ? this.#attentionBias[t % this.#hiddenSize] : 0);
-
-      // Incorporate historical performance, trust, and specialization
-      const historicalWeight = this.#historicalPerformance[t].length > 0
-        ? this.#historicalPerformance[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
-          this.#historicalPerformance[t].length
-        : 0;
-      const trustScore = this.#trustScoresHistory[t].length > 0
-        ? this.#trustScoresHistory[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
-          this.#trustScoresHistory[t].length
-        : 0.5;
-      const specializationBoost = 1 + (isValidNumber(this.#specializationScores[t]) ? this.#specializationScores[t] : 0);
-
-      // Combine factors to compute final attention score
-      attentionScores[t] = score * (0.6 + 0.2 * historicalWeight + 0.2 * trustScore * specializationBoost);
-    }
-
-    // Apply softmax to normalize attention scores
-    const weights = softmax(attentionScores);
-
-    // Compute final ensemble weights by combining attention weights with performance, specialization, and trust
-    const finalWeights = weights.map((w, idx) => {
-      const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0;
-      const specializationFactor = 1 + (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] * this.#swarmIntelligenceFactor : 0);
-      const trustScore = this.#trustScoresHistory[idx].length > 0
-        ? this.#trustScoresHistory[idx][this.#trustScoresHistory[idx].length - 1]
-        : 0.5;
-      return (
-        0.4 * w +
-        0.3 * performanceScore +
-        0.2 * specializationFactor +
-        0.1 * trustScore
+      // Transform inputs into feature vectors for attention computation
+      const inputFeatures = inputs.map(x =>
+          Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
       );
-    });
 
-    // Normalize final weights to sum to 1, with fallback for invalid values
-    const sum = finalWeights.reduce((s, w) => s + (isValidNumber(w) ? w : 0), 0) || 1;
-    return finalWeights.map(w => (isValidNumber(w) ? w / sum : 1 / this.#ensembleSize));
+      // Compute attention scores for each transformer
+      const attentionScores = Array(this.#ensembleSize).fill(0);
+      for (let t = 0; t < this.#ensembleSize; t++) {
+          // Compute queries using the transformer-specific attention weight matrix
+          const queries = inputFeatures.map(row =>
+              row.map((val, i) =>
+                  Array(this.#hiddenSize).fill().reduce((sum, _, j) =>
+                      sum + (
+                          isValidNumber(val) && isValidNumber(this.#attentionWeightMatrix[t][j])
+                              ? val * this.#attentionWeightMatrix[t][j]
+                              : 0
+                      ),
+                      0
+                  )
+              )
+          );
+
+          // Compute keys using the transformer-specific attention weight matrix
+          const keys = outputs.map((output, idx) =>
+              this.#attentionWeightMatrix[t].map(w =>
+                  isValidNumber(output) && isValidNumber(w) ? w * output : 0
+              )
+          );
+
+          // Aggregate attention scores across all input positions
+          let score = 0;
+          for (let i = 0; i < this.#inputSize; i++) {
+              for (let j = 0; j < this.#hiddenSize; j++) {
+                  score += isValidNumber(queries[i][j]) && isValidNumber(keys[t][j])
+                      ? queries[i][j] * keys[t][j]
+                      : 0;
+              }
+          }
+
+          // Scale score and add bias for numerical stability, using transformer index to cycle through biases
+          const biasIndex = t % this.#hiddenSize; // Ensure safe indexing within attentionBias
+          score = score / Math.sqrt(this.#hiddenSize) * this.#attentionScalingFactor +
+              (isValidNumber(this.#attentionBias[biasIndex]) ? this.#attentionBias[biasIndex] : 0);
+
+          // Incorporate historical performance, trust, and specialization
+          const historicalWeight = this.#historicalPerformance[t].length > 0
+              ? this.#historicalPerformance[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
+                this.#historicalPerformance[t].length
+              : 0;
+          const trustScore = this.#trustScoresHistory[t].length > 0
+              ? this.#trustScoresHistory[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
+                this.#trustScoresHistory[t].length
+              : 0.5;
+          const specializationBoost = 1 + (isValidNumber(this.#specializationScores[t]) ? this.#specializationScores[t] : 0);
+
+          // Combine factors to compute final attention score
+          attentionScores[t] = score * (0.6 + 0.2 * historicalWeight + 0.2 * trustScore * specializationBoost);
+      }
+
+      // Apply softmax to normalize attention scores
+      const weights = softmax(attentionScores.map(score => isValidNumber(score) ? score : 0));
+
+      // Compute final ensemble weights by combining attention weights with performance, specialization, and trust
+      const finalWeights = weights.map((w, idx) => {
+          const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0;
+          const specializationFactor = 1 + (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] * this.#swarmIntelligenceFactor : 0);
+          const trustScore = this.#trustScoresHistory[idx].length > 0
+              ? this.#trustScoresHistory[idx][this.#trustScoresHistory[idx].length - 1]
+              : 0.5;
+          const weight = 0.4 * w +
+              0.3 * performanceScore +
+              0.2 * specializationFactor +
+              0.1 * trustScore;
+          return isValidNumber(weight) && weight >= 0 ? weight : 1 / this.#ensembleSize;
+      });
+
+      // Normalize final weights to sum to 1, with fallback for invalid values
+      const sum = finalWeights.reduce((s, w) => s + (isValidNumber(w) && w >= 0 ? w : 0), 0);
+      if (sum <= 1e-6) {
+          // Fallback to uniform weights if sum is effectively zero
+          return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
+      }
+      return finalWeights.map(w => (isValidNumber(w) && w >= 0 ? w / sum : 1 / this.#ensembleSize));
   }
 
   #updateTrustScores() {
