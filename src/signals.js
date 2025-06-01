@@ -668,64 +668,86 @@ class HiveMind {
     return x.map((val, i) => isValidNumber(val) && isValidNumber(variance) ? gamma[i] * (val - mean) / Math.sqrt(variance + eps) + beta[i] : 0);
   }
 
-  // Computes context-aware attention by combining current inputs with historical attention outputs from attentionMemory.
-  // This enhances the transformer's ability to capture temporal dependencies across sequences.
+  // Computes context-aware input embeddings by combining current inputs with historical attention outputs
+  // from attentionMemory, enhancing temporal dependencies. Projects inputs to hidden size, adds positional
+  // encodings, blends with historical context, and applies layer normalization. Handles invalid inputs and
+  // transformer indices gracefully, ensuring numerical stability and alignment with the transformer's architecture.
   // Args:
   //   inputs: Array of input values (length: inputSize, typically 6).
   //   transformerIdx: Index of the transformer in the ensemble (0 to ensembleSize-1).
   // Returns:
   //   Array of shape [inputSize, hiddenSize] representing context-enhanced input embeddings.
   #contextAwareAttention(inputs, transformerIdx) {
-    // Validate inputs and transformer index
-    if (!Array.isArray(inputs) || 
-        inputs.length !== this.#inputSize || 
-        !inputs.every(isValidNumber) || 
-        !Number.isInteger(transformerIdx) || 
-        transformerIdx < 0 || 
-        transformerIdx >= this.#ensembleSize) {
-      // Return zero-filled array as a safe fallback
-      return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    }
-
-    // Initialize output array with positional encodings added to inputs
-    const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    const transformer = this.#transformers[transformerIdx];
-    for (let i = 0; i < this.#inputSize; i++) {
-      for (let j = 0; j < this.#hiddenSize; j++) {
-        // Add positional encoding to input to preserve sequence information
-        output[i][j] = inputs[i] + transformer.positionalEncoding[i][j];
+      // Validate inputs and transformer index
+      if (
+          !Array.isArray(inputs) ||
+          inputs.length !== this.#inputSize ||
+          !inputs.every(isValidNumber) ||
+          !Number.isInteger(transformerIdx) ||
+          transformerIdx < 0 ||
+          transformerIdx >= this.#ensembleSize
+      ) {
+          // Return zero-filled array as a safe fallback for invalid inputs or index
+          return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       }
-    }
 
-    // Incorporate historical context from attentionMemory if available
-    if (this.#attentionMemory[transformerIdx].length > 0) {
-      // Use the most recent attention output from memory
-      const recentAttention = this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1];
-      const contextWeight = 0.3; // Weight for blending historical context (tunable)
+      const transformer = this.#transformers[transformerIdx];
       
+      // Project inputs to hidden size to match positional encoding dimensions
+      const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
-        for (let j = 0; j < this.#hiddenSize; j++) {
-          // Blend current input (with positional encoding) with historical attention output
-          const historicalValue = isValidNumber(recentAttention[i][j]) ? recentAttention[i][j] : 0;
-          const specializationFactor = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#inputSize][j])
-            ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#inputSize][j]
-            : 1;
-          // Combine current input and historical context with specialization weighting
-          output[i][j] = (1 - contextWeight) * output[i][j] + contextWeight * historicalValue * specializationFactor;
-        }
+          for (let j = 0; j < this.#hiddenSize; j++) {
+              // Use specialization weights as a projection matrix, mapping input to hidden size
+              const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
+                  ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j]
+                  : 1;
+              inputProjection[i][j] = isValidNumber(inputs[i])
+                  ? inputs[i] * specWeight
+                  : 0;
+          }
       }
-    }
 
-    // Apply layer normalization to stabilize output
-    for (let i = 0; i < this.#inputSize; i++) {
-      output[i] = this.#layerNorm(
-        output[i],
-        transformer.layerNormWeights[0].gamma1,
-        transformer.layerNormWeights[0].beta1
-      );
-    }
+      // Initialize output array by adding positional encodings
+      const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+      for (let i = 0; i < this.#inputSize; i++) {
+          for (let j = 0; j < this.#hiddenSize; j++) {
+              output[i][j] = isValidNumber(inputProjection[i][j]) && isValidNumber(transformer.positionalEncoding[i][j])
+                  ? inputProjection[i][j] + transformer.positionalEncoding[i][j]
+                  : inputProjection[i][j];
+          }
+      }
 
-    return output;
+      // Incorporate historical context from attentionMemory if available
+      if (this.#attentionMemory[transformerIdx].length > 0) {
+          // Use the most recent attention output from memory
+          const recentAttention = this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1];
+          const contextWeight = 0.3; // Weight for blending historical context (tunable)
+          
+          for (let i = 0; i < this.#inputSize; i++) {
+              for (let j = 0; j < this.#hiddenSize; j++) {
+                  // Blend current input (with positional encoding) with historical attention output
+                  const historicalValue = isValidNumber(recentAttention[i][j]) ? recentAttention[i][j] : 0;
+                  const specializationFactor = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
+                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j]
+                      : 1;
+                  // Combine current input and historical context with specialization weighting
+                  output[i][j] = isValidNumber(output[i][j])
+                      ? (1 - contextWeight) * output[i][j] + contextWeight * historicalValue * specializationFactor
+                      : historicalValue * specializationFactor;
+              }
+          }
+      }
+
+      // Apply layer normalization to stabilize output
+      for (let i = 0; i < this.#inputSize; i++) {
+          output[i] = this.#layerNorm(
+              output[i],
+              transformer.layerNormWeights[0].gamma1,
+              transformer.layerNormWeights[0].beta1
+          );
+      }
+
+      return output;
   }
 
   #multiHeadAttention(x, layer, transformerIdx) {
