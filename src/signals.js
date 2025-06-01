@@ -858,12 +858,48 @@ class HiveMind {
     return x.map(val => isValidNumber(val) && Math.random() >= rate ? val / (1 - rate) : 0);
   }
 
+  // Computes the diversity loss for the ensemble to encourage varied transformer outputs,
+  // promoting specialization while maintaining collaboration. Calculates the variance of
+  // transformer outputs and scales it by the diversity weight, incorporating trust scores
+  // to prioritize high-performing transformers. Handles invalid inputs by returning a
+  // fallback loss of 0 to ensure training stability.
+  // Args:
+  //   outputs: Array of transformer outputs (length: #ensembleSize, typically 128).
+  // Returns:
+  //   A single number representing the diversity loss, bounded and numerically stable.
   #computeDiversityLoss(outputs) {
-    if (!outputs.every(isValidNumber)) return 0;
-    const meanOutput = outputs.reduce((sum, val) => sum + val, 0) / outputs.length;
-    const variance = outputs.reduce((sum, val) => sum + (val - meanOutput) ** 2, 0) / outputs.length;
-    const diversityLoss = -this.#diversityWeight * Math.log(variance + 1e-6);
-    return isValidNumber(diversityLoss) ? diversityLoss : 0;
+      // Validate inputs to ensure they are an array of valid numbers
+      if (
+          !Array.isArray(outputs) ||
+          outputs.length !== this.#ensembleSize ||
+          !outputs.every(isValidNumber)
+      ) {
+          return 0; // Return 0 loss for invalid inputs to avoid disrupting training
+      }
+
+      // Compute the mean of transformer outputs
+      const meanOutput = outputs.reduce((sum, val) => sum + val, 0) / this.#ensembleSize;
+
+      // Calculate variance of outputs, weighted by trust scores to emphasize high-performing transformers
+      let variance = 0;
+      let totalTrustWeight = 0;
+      for (let i = 0; i < this.#ensembleSize; i++) {
+          const trustWeight = this.#trustScoresHistory[i].length > 0
+              ? this.#trustScoresHistory[i][this.#trustScoresHistory[i].length - 1]
+              : 0.5; // Default to 0.5 if no trust history
+          const diff = outputs[i] - meanOutput;
+          variance += trustWeight * diff * diff;
+          totalTrustWeight += trustWeight;
+      }
+
+      // Normalize variance by total trust weight, default to 0 if total weight is zero
+      variance = totalTrustWeight > 0 ? variance / totalTrustWeight : 0;
+
+      // Scale variance by diversity weight and apply sigmoid to bound the loss
+      const diversityLoss = this.#diversityWeight * sigmoid(variance);
+
+      // Ensure the loss is a valid number and non-negative
+      return isValidNumber(diversityLoss) && diversityLoss >= 0 ? diversityLoss : 0;
   }
 
   // Performs knowledge distillation to align lower-performing transformers with top performers,
@@ -1848,6 +1884,8 @@ class HiveMind {
     }
   }
 
+  // Getter / Setter methods. Ignore for now:
+  // ---------------------------------------
   getParameters(idx) {
     return this.#transformers[idx];
   }
