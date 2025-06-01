@@ -206,27 +206,60 @@ class HiveMind {
               )
           );
 
-          // Compute keys using the transformer-specific attention weight matrix
-          const keys = outputs.map((output, idx) =>
-              this.#attentionWeightMatrix[t].map(w =>
-                  isValidNumber(output) && isValidNumber(w) ? w * output : 0
+          // Compute keys using input features, not outputs, to align with attention mechanism
+          const keys = inputFeatures.map(row =>
+              row.map((val, i) =>
+                  Array(this.#hiddenSize).fill().reduce((sum, _, j) =>
+                      sum + (
+                          isValidNumber(val) && isValidNumber(this.#attentionWeightMatrix[t][j])
+                              ? val * this.#attentionWeightMatrix[t][j]
+                              : 0
+                      ),
+                      0
+                  )
               )
+          );
+
+          // Compute values using transformer output, broadcast to match hidden size
+          const values = Array(this.#inputSize).fill().map(() =>
+              Array(this.#hiddenSize).fill(isValidNumber(outputs[t]) ? outputs[t] : 0)
           );
 
           // Aggregate attention scores across all input positions
           let score = 0;
           for (let i = 0; i < this.#inputSize; i++) {
-              for (let j = 0; j < this.#hiddenSize; j++) {
-                  score += isValidNumber(queries[i][j]) && isValidNumber(keys[t][j])
-                      ? queries[i][j] * keys[t][j]
-                      : 0;
+              for (let j = 0; j < this.#inputSize; j++) {
+                  let dotProduct = 0;
+                  for (let k = 0; k < this.#hiddenSize; k++) {
+                      dotProduct += isValidNumber(queries[i][k]) && isValidNumber(keys[j][k])
+                          ? queries[i][k] * keys[j][k]
+                          : 0;
+                  }
+                  // Apply softmax to attention scores for each position
+                  const attentionWeight = softmax(
+                      Array(this.#inputSize).fill().map((_, k) => {
+                          let dp = 0;
+                          for (let m = 0; m < this.#hiddenSize; m++) {
+                              dp += isValidNumber(queries[i][m]) && isValidNumber(keys[k][m])
+                                  ? queries[i][m] * keys[k][m]
+                                  : 0;
+                          }
+                          return dp / Math.sqrt(this.#hiddenSize) * this.#attentionScalingFactor;
+                      })
+                  )[j];
+
+                  // Aggregate value contributions
+                  for (let k = 0; k < this.#hiddenSize; k++) {
+                      score += isValidNumber(attentionWeight) && isValidNumber(values[j][k])
+                          ? attentionWeight * values[j][k]
+                          : 0;
+                  }
               }
           }
 
-          // Scale score and add bias for numerical stability, using transformer index to cycle through biases
+          // Scale score and add bias for numerical stability
           const biasIndex = t % this.#hiddenSize; // Ensure safe indexing within attentionBias
-          score = score / Math.sqrt(this.#hiddenSize) * this.#attentionScalingFactor +
-              (isValidNumber(this.#attentionBias[biasIndex]) ? this.#attentionBias[biasIndex] : 0);
+          score = score / this.#inputSize + (isValidNumber(this.#attentionBias[biasIndex]) ? this.#attentionBias[biasIndex] : 0);
 
           // Incorporate historical performance, trust, and specialization
           const historicalWeight = this.#historicalPerformance[t].length > 0
