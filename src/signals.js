@@ -2035,7 +2035,9 @@ class HiveMind {
   }
 
   setTrustScoresHistory(idx, value) {
-    this.#trustScoresHistory[idx] = value;
+    if (Array.isArray(value) && value.every(isValidNumber)) {
+      this.#trustScoresHistory[idx] = value.slice(0, this.#maxTrustHistory);
+    }
   }
 
   getSpecializationScore(idx) {
@@ -2043,7 +2045,83 @@ class HiveMind {
   }
 
   setSpecializationScore(idx, value) {
-    this.#specializationScores[idx] = value;
+    if (isValidNumber(value) && value >= 0 && value <= 1) {
+      this.#specializationScores[idx] = value;
+    }
+  }
+
+  getSpecializationWeights(idx) {
+    return this.#specializationWeights[idx];
+  }
+
+  setSpecializationWeights(idx, weights) {
+    if (
+      Array.isArray(weights) &&
+      weights.length === this.#hiddenSize &&
+      weights.every(
+        w => Array.isArray(w) &&
+        w.length === this.#hiddenSize &&
+        w.every(row => isValidNumber(row))
+      )
+    ) {
+      this.#specializationWeights[idx] = weights.map(row => row.map(val => isValidNumber(val) ? val : 0));
+    }
+  }
+
+  getAttentionWeightMatrix(idx) {
+    return this.#attentionWeightMatrix[idx];
+  }
+
+  setAttentionWeightMatrix(idx, matrix) {
+    if (
+      Array.isArray(matrix) &&
+      matrix.length === this.#hiddenSize &&
+      matrix.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
+    ) {
+      this.#attentionWeightMatrix[idx] = matrix.map(row => row.map(val => isValidNumber(val) ? val : 0));
+    }
+  }
+
+  getAttentionBias() {
+    return this.#attentionBias;
+  }
+
+  setAttentionBias(bias) {
+    if (
+      Array.isArray(bias) &&
+      bias.length === this.#hiddenSize &&
+      bias.every(isValidNumber)
+    ) {
+      this.#attentionBias = bias.map(val => isValidNumber(val) ? val : 0);
+    }
+  }
+
+  getAttentionMemory(idx) {
+    return this.#attentionMemory[idx];
+  }
+
+  setAttentionMemory(idx, memory) {
+    if (
+      Array.isArray(memory) &&
+      memory.length === this.#contextWindow &&
+      memory.every(
+        m => Array.isArray(m) &&
+        m.length === this.#hiddenSize &&
+        m.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
+      )
+    ) {
+      this.#attentionMemory[idx] = memory.map(m => m.map(row => row.map(val => isValidNumber(val) ? val : 0)));
+    }
+  }
+
+  getAdaptiveLearningRate(idx) {
+    return this.#adaptiveLearningRate[idx];
+  }
+
+  setAdaptiveLearningRate(idx, rate) {
+    if (isValidNumber(rate) && rate >= 0) {
+      this.#adaptiveLearningRate[idx] = rate;
+    }
   }
 }
 
@@ -2265,6 +2343,11 @@ class NeuralSignalEngine {
         historical_performance TEXT NOT NULL,
         trust_scores TEXT NOT NULL,
         specialization_score REAL NOT NULL,
+        specialization_weights TEXT NOT NULL,
+        attention_weight_matrix TEXT NOT NULL,
+        attention_bias TEXT NOT NULL,
+        attention_memory TEXT NOT NULL,
+        adaptive_learning_rate REAL NOT NULL,
         updated_at INTEGER NOT NULL,
         UNIQUE(transformer_id)
       );
@@ -2279,7 +2362,9 @@ class NeuralSignalEngine {
   #loadState() {
     const stmt = this.#db.prepare(`
       SELECT transformer_id, parameters, ensemble_weight, performance_score, 
-            agreement_score, historical_performance, trust_scores, specialization_score 
+             agreement_score, historical_performance, trust_scores, specialization_score,
+             specialization_weights, attention_weight_matrix, attention_bias, 
+             attention_memory, adaptive_learning_rate
       FROM transformer_parameters
     `);
     const params = stmt.all();
@@ -2289,21 +2374,38 @@ class NeuralSignalEngine {
         const transformerId = `transformer_${i + 1}`;
         const parameters = this.#transformer.getParameters(i);
         const weight = this.#transformer.getEnsembleWeight(i);
+        const performanceScore = this.#transformer.getPerformanceScore(i);
+        const agreementScore = this.#transformer.getAgreementScore(i);
+        const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
+        const trustScores = this.#transformer.getTrustScoresHistory(i);
+        const specializationScore = this.#transformer.getSpecializationScore(i);
+        const specializationWeights = this.#transformer.getSpecializationWeights(i);
+        const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
+        const attentionBias = this.#transformer.getAttentionBias();
+        const attentionMemory = this.#transformer.getAttentionMemory(i);
+        const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
         this.#db.prepare(`
           INSERT OR REPLACE INTO transformer_parameters (
             transformer_id, parameters, ensemble_weight, performance_score, 
-            agreement_score, historical_performance, trust_scores, specialization_score, updated_at
+            agreement_score, historical_performance, trust_scores, specialization_score,
+            specialization_weights, attention_weight_matrix, attention_bias,
+            attention_memory, adaptive_learning_rate, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           transformerId, 
           JSON.stringify(parameters), 
           weight, 
-          0, 
-          0, 
-          JSON.stringify([0]), 
-          JSON.stringify([0]), 
-          0, 
+          performanceScore, 
+          agreementScore, 
+          JSON.stringify(historicalPerformance), 
+          JSON.stringify(trustScores), 
+          specializationScore,
+          JSON.stringify(specializationWeights),
+          JSON.stringify(attentionWeightMatrix),
+          JSON.stringify(attentionBias),
+          JSON.stringify(attentionMemory),
+          adaptiveLearningRate,
           Date.now()
         );
       }
@@ -2318,6 +2420,11 @@ class NeuralSignalEngine {
           this.#transformer.setHistoricalPerformance(idx, JSON.parse(param.historical_performance));
           this.#transformer.setTrustScoresHistory(idx, JSON.parse(param.trust_scores));
           this.#transformer.setSpecializationScore(idx, param.specialization_score);
+          this.#transformer.setSpecializationWeights(idx, JSON.parse(param.specialization_weights));
+          this.#transformer.setAttentionWeightMatrix(idx, JSON.parse(param.attention_weight_matrix));
+          this.#transformer.setAttentionBias(JSON.parse(param.attention_bias));
+          this.#transformer.setAttentionMemory(idx, JSON.parse(param.attention_memory));
+          this.#transformer.setAdaptiveLearningRate(idx, param.adaptive_learning_rate);
         }
       });
     }
@@ -2331,32 +2438,37 @@ class NeuralSignalEngine {
         const weight = this.#transformer.getEnsembleWeight(i);
         const performanceScore = this.#transformer.getPerformanceScore(i);
         const agreementScore = this.#transformer.getAgreementScore(i);
-        const historicalPerformance = JSON.stringify(this.#transformer.getHistoricalPerformance(i));
-        const trustScores = JSON.stringify(this.#transformer.getTrustScoresHistory(i));
+        const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
+        const trustScores = this.#transformer.getTrustScoresHistory(i);
         const specializationScore = this.#transformer.getSpecializationScore(i);
+        const specializationWeights = this.#transformer.getSpecializationWeights(i);
+        const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
+        const attentionBias = this.#transformer.getAttentionBias();
+        const attentionMemory = this.#transformer.getAttentionMemory(i);
+        const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
         
         this.#db.prepare(`
           INSERT OR REPLACE INTO transformer_parameters (
-            transformer_id, 
-            parameters, 
-            ensemble_weight, 
-            performance_score, 
-            agreement_score, 
-            historical_performance, 
-            trust_scores, 
-            specialization_score, 
-            updated_at
+            transformer_id, parameters, ensemble_weight, performance_score, 
+            agreement_score, historical_performance, trust_scores, specialization_score,
+            specialization_weights, attention_weight_matrix, attention_bias,
+            attention_memory, adaptive_learning_rate, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           transformerId, 
           JSON.stringify(parameters), 
           weight, 
           performanceScore, 
           agreementScore, 
-          historicalPerformance, 
-          trustScores, 
-          specializationScore, 
+          JSON.stringify(historicalPerformance), 
+          JSON.stringify(trustScores), 
+          specializationScore,
+          JSON.stringify(specializationWeights),
+          JSON.stringify(attentionWeightMatrix),
+          JSON.stringify(attentionBias),
+          JSON.stringify(attentionMemory),
+          adaptiveLearningRate,
           Date.now()
         );
       }
