@@ -243,8 +243,6 @@ class HiveMind {
 
         // Compute attention scores for each transformer
         const attentionScores = Array(this.#ensembleSize).fill(0);
-        // FIX: Store bias gradients for each transformer
-        const biasGradients = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         for (let t = 0; t < this.#ensembleSize; t++) {
             // Ensure attention memory is valid
             if (
@@ -316,10 +314,6 @@ class HiveMind {
                         score += isValidNumber(attentionWeight) && isValidNumber(values[j][k])
                             ? attentionWeight * values[j][k]
                             : 0;
-                        // FIX: Accumulate gradient for attention bias
-                        if (isValidNumber(attentionWeight) && isValidNumber(values[j][k])) {
-                            biasGradients[t][k] += attentionWeight * values[j][k]; // Gradient contribution from bias
-                        }
                     }
                 }
             }
@@ -367,14 +361,6 @@ class HiveMind {
         const sum = finalWeights.reduce((s, w) => s + (isValidNumber(w) && w >= 0 ? w : 0), 0);
         if (sum <= 1e-6) {
             return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
-        }
-        // FIX: Store bias gradients in gradient accumulation
-        for (let t = 0; t < this.#ensembleSize; t++) {
-            for (let k = 0; k < this.#hiddenSize; k++) {
-                this.#gradientAccumulation[t].attentionBias[k] = isValidNumber(biasGradients[t][k])
-                    ? Math.min(Math.max(biasGradients[t][k], -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                    : 0;
-            }
         }
         return finalWeights.map(w => (isValidNumber(w) && w >= 0 ? w / sum : 1 / this.#ensembleSize));
     }
@@ -1913,6 +1899,30 @@ class HiveMind {
         );
         const error = target - output;
 
+        // Compute gradient for ensemble weights and attention bias
+        const dL_d_output = error; // Assuming loss aligns with error usage; adjust if using MSE (e.g., -2 * error)
+        const dL_d_w = individualOutputs.map(out => dL_d_output * out);
+
+        // Compute gradient for scores
+        const dL_d_scores = Array(this.#ensembleSize).fill(0);
+        for (let t = 0; t < this.#ensembleSize; t++) {
+            for (let s = 0; s < this.#ensembleSize; s++) {
+                if (s === t) {
+                    dL_d_scores[t] += dL_d_w[s] * ensembleWeights[s] * (1 - ensembleWeights[s]);
+                } else {
+                    dL_d_scores[t] -= dL_d_w[s] * ensembleWeights[s] * ensembleWeights[t];
+                }
+            }
+        }
+
+        // Update attention bias gradients
+        for (let t = 0; t < this.#ensembleSize; t++) {
+            const grad = dL_d_scores[t] / this.#hiddenSize;
+            for (let k = 0; k < this.#hiddenSize; k++) {
+                this.#gradientAccumulation[t].attentionBias[k] += grad;
+            }
+        }
+
         // Update performance and agreement scores
         this.#performanceScores = this.#performanceScores.map((score, idx) => {
             const individualError = Math.abs(target - individualOutputs[idx]);
@@ -2584,122 +2594,127 @@ class NeuralSignalEngine {
     `);
   }
 
-  #loadState() {
-    const stmt = this.#db.prepare(`
-      SELECT transformer_id, parameters, ensemble_weight, performance_score, 
-             agreement_score, historical_performance, trust_scores, specialization_score,
-             specialization_weights, attention_weight_matrix, attention_bias, 
-             attention_memory, adaptive_learning_rate
-      FROM transformer_parameters
-    `);
-    const params = stmt.all();
-    
-    if (params.length === 0) {
-      for (let i = 0; i < 128; i++) {
-        const transformerId = `transformer_${i + 1}`;
-        const parameters = this.#transformer.getParameters(i);
-        const weight = this.#transformer.getEnsembleWeight(i);
-        const performanceScore = this.#transformer.getPerformanceScore(i);
-        const agreementScore = this.#transformer.getAgreementScore(i);
-        const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
-        const trustScores = this.#transformer.getTrustScoresHistory(i);
-        const specializationScore = this.#transformer.getSpecializationScore(i);
-        const specializationWeights = this.#transformer.getSpecializationWeights(i);
-        const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
-        const attentionBias = this.#transformer.getAttentionBias();
-        const attentionMemory = this.#transformer.getAttentionMemory(i);
-        const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
-        this.#db.prepare(`
-          INSERT OR REPLACE INTO transformer_parameters (
-            transformer_id, parameters, ensemble_weight, performance_score, 
-            agreement_score, historical_performance, trust_scores, specialization_score,
-            specialization_weights, attention_weight_matrix, attention_bias,
-            attention_memory, adaptive_learning_rate, updated_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          transformerId, 
-          JSON.stringify(parameters), 
-          weight, 
-          performanceScore, 
-          agreementScore, 
-          JSON.stringify(historicalPerformance), 
-          JSON.stringify(trustScores), 
-          specializationScore,
-          JSON.stringify(specializationWeights),
-          JSON.stringify(attentionWeightMatrix),
-          JSON.stringify(attentionBias),
-          JSON.stringify(attentionMemory),
-          adaptiveLearningRate,
-          Date.now()
-        );
-      }
-    } else {
-      params.forEach(param => {
-        if (/^transformer_[1-128]$/.test(param.transformer_id)) {
-          const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
-          this.#transformer.setParameters(idx, JSON.parse(param.parameters));
-          this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
-          this.#transformer.setPerformanceScore(idx, param.performance_score);
-          this.#transformer.setAgreementScore(idx, param.agreement_score);
-          this.#transformer.setHistoricalPerformance(idx, JSON.parse(param.historical_performance));
-          this.#transformer.setTrustScoresHistory(idx, JSON.parse(param.trust_scores));
-          this.#transformer.setSpecializationScore(idx, param.specialization_score);
-          this.#transformer.setSpecializationWeights(idx, JSON.parse(param.specialization_weights));
-          this.#transformer.setAttentionWeightMatrix(idx, JSON.parse(param.attention_weight_matrix));
-          this.#transformer.setAttentionBias(JSON.parse(param.attention_bias));
-          this.#transformer.setAttentionMemory(idx, JSON.parse(param.attention_memory));
-          this.#transformer.setAdaptiveLearningRate(idx, param.adaptive_learning_rate);
-        }
-      });
-    }
-  }
-
-  #saveState() {
-    const transaction = this.#db.transaction(() => {
-      for (let i = 0; i < 128; i++) {
-        const transformerId = `transformer_${i + 1}`;
-        const parameters = this.#transformer.getParameters(i);
-        const weight = this.#transformer.getEnsembleWeight(i);
-        const performanceScore = this.#transformer.getPerformanceScore(i);
-        const agreementScore = this.#transformer.getAgreementScore(i);
-        const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
-        const trustScores = this.#transformer.getTrustScoresHistory(i);
-        const specializationScore = this.#transformer.getSpecializationScore(i);
-        const specializationWeights = this.#transformer.getSpecializationWeights(i);
-        const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
-        const attentionBias = this.#transformer.getAttentionBias();
-        const attentionMemory = this.#transformer.getAttentionMemory(i);
-        const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
+    #loadState() {
+        const stmt = this.#db.prepare(`
+        SELECT transformer_id, parameters, ensemble_weight, performance_score, 
+                agreement_score, historical_performance, trust_scores, specialization_score,
+                specialization_weights, attention_weight_matrix, attention_bias, 
+                attention_memory, adaptive_learning_rate
+        FROM transformer_parameters
+        `);
+        const params = stmt.all();
         
-        this.#db.prepare(`
-          INSERT OR REPLACE INTO transformer_parameters (
-            transformer_id, parameters, ensemble_weight, performance_score, 
-            agreement_score, historical_performance, trust_scores, specialization_score,
-            specialization_weights, attention_weight_matrix, attention_bias,
-            attention_memory, adaptive_learning_rate, updated_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          transformerId, 
-          JSON.stringify(parameters), 
-          weight, 
-          performanceScore, 
-          agreementScore, 
-          JSON.stringify(historicalPerformance), 
-          JSON.stringify(trustScores), 
-          specializationScore,
-          JSON.stringify(specializationWeights),
-          JSON.stringify(attentionWeightMatrix),
-          JSON.stringify(attentionBias),
-          JSON.stringify(attentionMemory),
-          adaptiveLearningRate,
-          Date.now()
-        );
-      }
-    });
-    transaction();
-  }
+        if (params.length === 0) {
+        for (let i = 0; i < 128; i++) {
+            const transformerId = `transformer_${i + 1}`;
+            const parameters = this.#transformer.getParameters(i);
+            const weight = this.#transformer.getEnsembleWeight(i);
+            const performanceScore = this.#transformer.getPerformanceScore(i);
+            const agreementScore = this.#transformer.getAgreementScore(i);
+            const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
+            const trustScores = this.#transformer.getTrustScoresHistory(i);
+            const specializationScore = this.#transformer.getSpecializationScore(i);
+            const specializationWeights = this.#transformer.getSpecializationWeights(i);
+            const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
+            const attentionBias = this.#transformer.getAttentionBias(i); // FIX: Get attention bias for specific transformer
+            const attentionMemory = this.#transformer.getAttentionMemory(i);
+            const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
+            this.#db.prepare(`
+            INSERT OR REPLACE INTO transformer_parameters (
+                transformer_id, parameters, ensemble_weight, performance_score, 
+                agreement_score, historical_performance, trust_scores, specialization_score,
+                specialization_weights, attention_weight_matrix, attention_bias,
+                attention_memory, adaptive_learning_rate, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+            transformerId, 
+            JSON.stringify(parameters), 
+            weight, 
+            performanceScore, 
+            agreementScore, 
+            JSON.stringify(historicalPerformance), 
+            JSON.stringify(trustScores), 
+            specializationScore,
+            JSON.stringify(specializationWeights),
+            JSON.stringify(attentionWeightMatrix),
+            JSON.stringify(attentionBias),
+            JSON.stringify(attentionMemory),
+            adaptiveLearningRate,
+            Date.now()
+            );
+        }
+        } else {
+        params.forEach(param => {
+            if (/^transformer_[1-128]$/.test(param.transformer_id)) {
+            const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
+            this.#transformer.setParameters(idx, JSON.parse(param.parameters));
+            this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
+            this.#transformer.setPerformanceScore(idx, param.performance_score);
+            this.#transformer.setAgreementScore(idx, param.agreement_score);
+            this.#transformer.setHistoricalPerformance(idx, JSON.parse(param.historical_performance));
+            this.#transformer.setTrustScoresHistory(idx, JSON.parse(param.trust_scores));
+            this.#transformer.setSpecializationScore(idx, param.specialization_score);
+            this.#transformer.setSpecializationWeights(idx, JSON.parse(param.specialization_weights));
+            this.#transformer.setAttentionWeightMatrix(idx, JSON.parse(param.attention_weight_matrix));
+            this.#transformer.setAttentionBias(idx, JSON.parse(param.attention_bias)); // FIX: Set attention bias for specific transformer
+            this.#transformer.setAttentionMemory(idx, JSON.parse(param.attention_memory));
+            this.#transformer.setAdaptiveLearningRate(idx, param.adaptive_learning_rate);
+            }
+        });
+        }
+    }
+
+    #saveState() {
+        const transaction = this.#db.transaction(() => {
+        for (let i = 0; i < 128; i++) {
+            const transformerId = `transformer_${i + 1}`;
+            const parameters = this.#transformer.getParameters(i);
+            const weight = this.#transformer.getEnsembleWeight(i);
+            const performanceScore = this.#transformer.getPerformanceScore(i);
+            const agreementScore = this.#transformer.getAgreementScore(i);
+            const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
+            const trustScores = this.#transformer.getTrustScoresHistory(i);
+            const specializationScore = this.#transformer.getSpecializationScore(i);
+            const specializationWeights = this.#transformer.getSpecializationWeights(i);
+            const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
+            const attentionBias = this.#transformer.getAttentionBias(i); // FIX: Get attention bias for specific transformer
+            const attentionMemory = this.#transformer.getAttentionMemory(i);
+            const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
+            
+            // FIX: Validate attention bias before saving to prevent storing invalid values
+            const validatedAttentionBias = Array.isArray(attentionBias) && attentionBias.length === this.#transformer.getAttentionBias(i).length && attentionBias.every(isValidNumber)
+                ? attentionBias
+                : Array(this.#transformer.getAttentionBias(i).length).fill(0).map(() => (Math.random() - 0.5) * Math.sqrt(2 / this.#transformer.getAttentionBias(i).length));
+
+            this.#db.prepare(`
+            INSERT OR REPLACE INTO transformer_parameters (
+                transformer_id, parameters, ensemble_weight, performance_score, 
+                agreement_score, historical_performance, trust_scores, specialization_score,
+                specialization_weights, attention_weight_matrix, attention_bias,
+                attention_memory, adaptive_learning_rate, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+            transformerId, 
+            JSON.stringify(parameters), 
+            weight, 
+            performanceScore, 
+            agreementScore, 
+            JSON.stringify(historicalPerformance), 
+            JSON.stringify(trustScores), 
+            specializationScore,
+            JSON.stringify(specializationWeights),
+            JSON.stringify(attentionWeightMatrix),
+            JSON.stringify(validatedAttentionBias), // FIX: Use validated attention bias
+            JSON.stringify(attentionMemory),
+            adaptiveLearningRate,
+            Date.now()
+            );
+        }
+        });
+        transaction();
+    }
 
   #getRecentCandles(candles) {
     if (!Array.isArray(candles) || candles.length === 0) {
