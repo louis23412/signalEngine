@@ -788,18 +788,19 @@ class HiveMind {
       return output;
   }
 
-  // Performs multi-head attention for a single transformer, processing context-aware input embeddings
-  // through multiple attention heads to capture diverse patterns. Integrates specialization weights to
-  // enhance attention focus, updates attention memory for historical context, and applies dropout for
-  // regularization. Returns attention output for further processing in the transformer pipeline.
-  // Args:
-  //   x: Array of input embeddings [inputSize, hiddenSize].
-  //   layer: Transformer layer object containing attention weights (Wq, Wk, Wv, Wo).
-  //   transformerIdx: Index of the transformer in the ensemble (0 to ensembleSize-1).
-  // Returns:
-  //   Array of shape [inputSize, hiddenSize] representing the attention output.
+  /**
+   * Performs multi-head attention for a single transformer layer.
+   * Processes the input embeddings through multiple attention heads to capture diverse patterns.
+   * Integrates specialization weights to enhance attention focus and updates attention memory for historical context.
+   * Applies dropout for regularization during training.
+   *
+   * @param {number[][]} x - Input embeddings of shape [inputSize, hiddenSize], already enhanced with context.
+   * @param {object} layer - Transformer layer object containing attention weights (Wq, Wk, Wv, Wo).
+   * @param {number} transformerIdx - Index of the transformer in the ensemble (0 to ensembleSize-1).
+   * @returns {number[][]} Attention output of shape [inputSize, hiddenSize].
+   */
   #multiHeadAttention(x, layer, transformerIdx) {
-      // Validate inputs, layer, and transformer index
+      // Validate inputs, layer, and transformer index to ensure they meet expected structure and ranges
       if (
           !Array.isArray(x) ||
           x.length !== this.#inputSize ||
@@ -809,61 +810,69 @@ class HiveMind {
           transformerIdx >= this.#ensembleSize ||
           !layer || !layer.Wq || !layer.Wk || !layer.Wv || !layer.Wo
       ) {
+          // Return zero-filled array of correct shape if validation fails
           return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       }
 
-      // Compute context-aware input embeddings
-      const contextEnhancedInput = this.#contextAwareAttention(x, transformerIdx);
-
-      // Initialize query (Q), key (K), and value (V) matrices
+      // Define size of each attention head based on hidden size and number of heads
       const headSize = this.#hiddenSize / this.#numHeads;
+
+      // Initialize query (Q), key (K), and value (V) matrices for attention computation
       const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
 
-      // Compute Q, K, V with specialization weights
+      // Compute Q, K, V matrices by applying attention weights with specialization enhancement
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
               for (let k = 0; k < this.#hiddenSize; k++) {
+                  // Apply specialization weight to emphasize transformer-specific patterns
                   const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
                       ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
                       : 1;
-                  Q[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wq[k][j])
-                      ? contextEnhancedInput[i][k] * layer.Wq[k][j] * specWeight
+                  // Compute query values, handling invalid numbers gracefully
+                  Q[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wq[k][j])
+                      ? x[i][k] * layer.Wq[k][j] * specWeight
                       : 0;
-                  K[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wk[k][j])
-                      ? contextEnhancedInput[i][k] * layer.Wk[k][j] * specWeight
+                  // Compute key values with the same robustness
+                  K[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wk[k][j])
+                      ? x[i][k] * layer.Wk[k][j] * specWeight
                       : 0;
-                  V[i][j] += isValidNumber(contextEnhancedInput[i][k]) && isValidNumber(layer.Wv[k][j])
-                      ? contextEnhancedInput[i][k] * layer.Wv[k][j] * specWeight
+                  // Compute value values similarly
+                  V[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wv[k][j])
+                      ? x[i][k] * layer.Wv[k][j] * specWeight
                       : 0;
               }
           }
       }
 
-      // Compute attention scores for each head
+      // Initialize attention scores for each head to store dot-product results
       const attentionScores = Array(this.#numHeads).fill().map(() =>
           Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
       );
 
+      // Compute attention scores for each head by scaling dot products of Q and K
       for (let h = 0; h < this.#numHeads; h++) {
           for (let i = 0; i < this.#inputSize; i++) {
               for (let j = 0; j < this.#inputSize; j++) {
                   let sum = 0;
+                  // Calculate dot product for the current head
                   for (let k = 0; k < headSize; k++) {
                       sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k])
                           ? Q[i][h * headSize + k] * K[j][h * headSize + k]
                           : 0;
                   }
+                  // Scale attention score and apply specialization factor
                   attentionScores[h][i][j] = isValidNumber(sum)
                       ? sum / Math.sqrt(headSize) * this.#attentionScalingFactor * (1 + this.#specializationScores[transformerIdx])
                       : 0;
               }
+              // Apply softmax to normalize attention scores into probabilities
               attentionScores[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
           }
       }
 
-      // Compute attention output per head
+      // Compute attention output by weighting V with attention scores
       const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let h = 0; h < this.#numHeads; h++) {
           for (let i = 0; i < this.#inputSize; i++) {
@@ -877,7 +886,7 @@ class HiveMind {
           }
       }
 
-      // Apply output projection (Wo) with specialization weights
+      // Apply output projection with specialization weights to produce final attention output
       const finalOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
@@ -892,12 +901,13 @@ class HiveMind {
           }
       }
 
-      // Update attention memory with the final attention output
+      // Manage attention memory by storing the current output for future context awareness
       if (this.#attentionMemory[transformerIdx].length >= this.#contextWindow) {
-          this.#attentionMemory[transformerIdx].shift(); // Remove oldest entry
+          this.#attentionMemory[transformerIdx].shift(); // Remove oldest entry to maintain fixed window size
       }
-      this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice())); // Store copy of output
+      this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice())); // Store a deep copy of the output
 
+      // Return the final attention output for further processing in the transformer
       return finalOutput;
   }
 
@@ -1354,53 +1364,71 @@ class HiveMind {
       }));
   }
 
+  /**
+   * Computes the ensemble's output by processing inputs through each transformer and weighting their outputs.
+   * Integrates context-aware attention to enhance input embeddings with historical context.
+   *
+   * @param {number[]} inputs - Array of input features (length: #inputSize, typically 6).
+   * @returns {number[]} Ensemble output (length: #outputSize, typically 1).
+   */
   forward(inputs) {
-    if (!Array.isArray(inputs) || inputs.length !== this.#inputSize || !inputs.every(isValidNumber)) {
-      return Array(this.#outputSize).fill(0);
-    }
-
-    const individualOutputs = this.#transformers.map((transformer, idx) => {
-      let x = inputs.map((val, i) =>
-        transformer.positionalEncoding[i].map((pe, j) => (isValidNumber(val) ? val : 0) + (isValidNumber(pe) ? pe : 0))
-      );
-
-      const activations = [];
-      for (let layer = 0; layer < this.#numLayers; layer++) {
-        const normX = this.#layerNorm(x, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1);
-        const attentionOutput = this.#multiHeadAttention(normX, transformer.attentionWeights[layer], idx);
-        const attentionResidual = x.map((row, i) => row.map((val, j) =>
-          isValidNumber(val) && isValidNumber(attentionOutput[i][j]) ? val + attentionOutput[i][j] : val
-        ));
-        const normAttention = this.#layerNorm(attentionResidual, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2);
-        const ffnOutput = this.#feedForward(normAttention[0], transformer.ffnWeights[layer]);
-        x = attentionResidual.map((row, i) => row.map((val, j) =>
-          isValidNumber(val) && isValidNumber(ffnOutput[j]) ? val + ffnOutput[j] : val
-        ));
-        activations.push({ normX, attentionOutput, normAttention, ffnOutput });
+      // Validate inputs to ensure they are an array of the correct length and contain valid numbers
+      if (!Array.isArray(inputs) || inputs.length !== this.#inputSize || !inputs.every(isValidNumber)) {
+          return Array(this.#outputSize).fill(0);
       }
 
-      let output = Array(this.#outputSize).fill(0);
-      for (let i = 0; i < this.#hiddenSize; i++) {
-        for (let j = 0; j < this.#outputSize; j++) {
-          output[j] += isValidNumber(x[0][i]) && isValidNumber(transformer.outputWeights[i][j])
-            ? x[0][i] * transformer.outputWeights[i][j]
-            : 0;
-        }
-      }
-      output = output.map((val, i) =>
-        isValidNumber(val) && isValidNumber(transformer.outputBias[i]) ? val + transformer.outputBias[i] : val
+      const individualOutputs = this.#transformers.map((transformer, idx) => {
+          // Compute context-enhanced input embeddings using #contextAwareAttention
+          let x = this.#contextAwareAttention(inputs, idx);
+
+          const activations = [];
+          for (let layer = 0; layer < this.#numLayers; layer++) {
+              // Apply layer normalization to the input embeddings
+              const normX = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1));
+              // Perform multi-head attention on the normalized embeddings
+              const attentionOutput = this.#multiHeadAttention(normX, transformer.attentionWeights[layer], idx);
+              // Add the attention output to the original embeddings (residual connection)
+              const attentionResidual = x.map((row, i) => row.map((val, j) =>
+                  isValidNumber(val) && isValidNumber(attentionOutput[i][j]) ? val + attentionOutput[i][j] : val
+              ));
+              // Apply layer normalization to the residual output
+              const normAttention = attentionResidual.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2));
+              // Pass the normalized output through the feed-forward network
+              const ffnOutput = this.#feedForward(normAttention[0], transformer.ffnWeights[layer]);
+              // Add the feed-forward output to the residual output (another residual connection)
+              x = attentionResidual.map((row, i) => row.map((val, j) =>
+                  isValidNumber(val) && isValidNumber(ffnOutput[j]) ? val + ffnOutput[j] : val
+              ));
+              // Store activations for potential use in training or debugging
+              activations.push({ normX, attentionOutput, normAttention, ffnOutput });
+          }
+
+          // Compute the final output by applying the output weights and bias
+          let output = Array(this.#outputSize).fill(0);
+          for (let i = 0; i < this.#hiddenSize; i++) {
+              for (let j = 0; j < this.#outputSize; j++) {
+                  output[j] += isValidNumber(x[0][i]) && isValidNumber(transformer.outputWeights[i][j])
+                      ? x[0][i] * transformer.outputWeights[i][j]
+                      : 0;
+              }
+          }
+          output = output.map((val, i) =>
+              isValidNumber(val) && isValidNumber(transformer.outputBias[i]) ? val + transformer.outputBias[i] : val
+          );
+          // Apply sigmoid activation to the output
+          return sigmoid(output[0]);
+      });
+
+      // Update specialization scores, trust scores, and adaptive learning rates
+      this.#computeSpecializationScores(inputs, individualOutputs);
+      this.#updateTrustScores();
+      this.#updateAdaptiveLearningRates();
+
+      // Compute the weighted sum of individual transformer outputs
+      const weightedOutput = individualOutputs.reduce((sum, output, idx) =>
+          sum + (isValidNumber(output) ? output * this.#ensembleWeights[idx] : 0), 0
       );
-      return sigmoid(output[0]);
-    });
-
-    this.#computeSpecializationScores(inputs, individualOutputs);
-    this.#updateTrustScores();
-    this.#updateAdaptiveLearningRates();
-
-    const weightedOutput = individualOutputs.reduce((sum, output, idx) =>
-      sum + (isValidNumber(output) ? output * this.#ensembleWeights[idx] : 0), 0
-    );
-    return [isValidNumber(weightedOutput) ? weightedOutput : 0];
+      return [isValidNumber(weightedOutput) ? weightedOutput : 0];
   }
 
   train(inputs, target, winRate = 0.5) {
