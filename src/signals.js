@@ -157,31 +157,46 @@ class HiveMind {
 
   /**
    * Determines whether transformers should share weights based on performance variance.
-   * Returns true if variance exceeds a dynamic threshold, encouraging communication
-   * among transformers when performance diverges significantly.
+   * Returns true if the variance of performance scores exceeds a dynamic threshold,
+   * encouraging collaboration among transformers when their performances diverge significantly.
+   * Handles edge cases like invalid scores, empty arrays, or identical scores gracefully.
    * @returns {boolean} True if weight sharing should occur, false otherwise.
    */
   #shouldCommunicate() {
+      // Validate performance scores
+      if (
+          !Array.isArray(this.#performanceScores) ||
+          this.#performanceScores.length !== this.#ensembleSize ||
+          this.#ensembleSize === 0 ||
+          !this.#performanceScores.every(score => isValidNumber(score) && score >= 0 && score <= 1)
+      ) {
+          return false; // No communication if scores are invalid or ensemble is empty
+      }
+
       // Compute mean performance
-      const mean = this.#performanceScores.reduce((sum, score) => 
-          sum + (isValidNumber(score) ? score : 0), 0) / this.#ensembleSize;
+      const mean = this.#performanceScores.reduce((sum, score) => sum + score, 0) / this.#ensembleSize;
+
+      // Check if all scores are identical to avoid unnecessary computation
+      if (this.#performanceScores.every(score => Math.abs(score - mean) < 1e-6)) {
+          return false; // No need to communicate if all performances are the same
+      }
 
       // Compute variance of performance scores
-      const variance = this.#performanceScores.reduce((sum, score) => {
-          const val = isValidNumber(score) ? score : 0;
-          return sum + Math.pow(val - mean, 2);
-      }, 0) / this.#ensembleSize;
+      const variance = this.#performanceScores.reduce((sum, score) => sum + Math.pow(score - mean, 2), 0) / this.#ensembleSize;
 
-      // Check for invalid variance
-      if (!isValidNumber(variance)) return false;
+      // Ensure variance is valid
+      if (!isValidNumber(variance) || variance < 0) {
+          return false; // Prevent communication if variance is invalid
+      }
 
       // Compute standard deviation
       const performanceStd = Math.sqrt(variance);
 
-      // Dynamic threshold decreases as training progresses
-      const progress = Math.min(this.#trainingStepCount / 5000, 1);
+      // Calculate dynamic threshold, clamped to ensure valid range
+      const progress = Math.min(Math.max(this.#trainingStepCount / 5000, 0), 1);
       const threshold = 0.1 * (1 - progress) + 0.05;
 
+      // Return true if standard deviation exceeds the threshold
       return performanceStd > threshold;
   }
 
@@ -483,18 +498,41 @@ class HiveMind {
       }
   }
 
+  /**
+   * Updates the adaptive learning rates for each transformer based on their performance
+   * relative to the ensemble mean. Increases learning rates for underperforming transformers
+   * and decreases them for high performers, ensuring balanced learning. Handles invalid inputs,
+   * identical scores, and extreme differences to maintain numerical stability.
+   */
   #updateAdaptiveLearningRates() {
-    const performanceMean = this.#performanceScores.reduce((sum, score) => 
-    sum + (isValidNumber(score) && score >= 0 && score <= 1 ? score : 0), 0) / this.#ensembleSize || 1;
-    
-    this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
-      const performanceDiff = isValidNumber(this.#performanceScores[idx]) 
-        ? Math.min(Math.max(this.#performanceScores[idx] - performanceMean, -10), 10) 
-        : 0;
-      const adjustment = 1 + 0.1 * sigmoid(performanceDiff);
-      const newLr = this.#learningRate * adjustment;
-      return Math.min(Math.max(newLr, this.#learningRate * 0.5), this.#learningRate * 2);
-    });
+      // Validate performance scores
+      if (
+          !Array.isArray(this.#performanceScores) ||
+          this.#performanceScores.length !== this.#ensembleSize ||
+          !this.#performanceScores.every(score => isValidNumber(score) && score >= 0 && score <= 1)
+      ) {
+          this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
+          return;
+      }
+
+      // Compute mean performance
+      const performanceMean = this.#performanceScores.reduce((sum, score) => sum + score, 0) / this.#ensembleSize;
+
+      // Check if all scores are identical
+      if (this.#performanceScores.every(score => Math.abs(score - performanceMean) < 1e-6)) {
+          this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
+          return;
+      }
+
+      // Update adaptive learning rates
+      this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
+          const performanceDiff = isValidNumber(this.#performanceScores[idx])
+              ? Math.min(Math.max(this.#performanceScores[idx] - performanceMean, -0.5), 0.5) // Clamp difference
+              : 0;
+          const adjustment = 1 + 0.2 * sigmoid(performanceDiff * 5); // Smoother adjustment
+          const newLr = this.#learningRate * adjustment;
+          return Math.min(Math.max(newLr, this.#learningRate * 0.5), this.#learningRate * 2);
+      });
   }
 
   /**
@@ -782,18 +820,36 @@ class HiveMind {
 
   /**
    * Computes the derivative of the GELU activation function for backpropagation.
-   * Handles invalid inputs by returning 0 and uses an approximation for numerical stability.
-   * @param {number} x - Input value for which to compute GELU derivative.
+   * Uses an approximation combining the CDF and a scaled PDF, with clamping to prevent
+   * numerical instability for large inputs. Returns 0 for invalid inputs to ensure stable
+   * gradient computation.
+   * @param {number} x - Input value for which to compute the GELU derivative.
    * @returns {number} Derivative of GELU at x, or 0 if input is invalid.
    */
   #geluDerivative(x) {
+      // Validate input
       if (!isValidNumber(x)) return 0;
-      // Compute cumulative distribution function (CDF) for GELU
-      const cdf = 0.5 * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * Math.pow(x, 3))));
-      // Approximate normal PDF for derivative: exp(-x^2/2) / sqrt(2π)
-      const pdf = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+
+      // Clamp input to prevent overflow in x^3 term
+      const clampedX = Math.min(Math.max(x, -10), 10);
+
+      // Compute GELU approximation components
+      const x3 = Math.pow(clampedX, 3);
+      const poly = clampedX + 0.044715 * x3;
+      const sqrtTerm = Math.sqrt(2 / Math.PI);
+      const tanhArg = sqrtTerm * poly;
+
+      // Compute CDF: 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+      const cdf = 0.5 * (1 + Math.tanh(tanhArg));
+
+      // Compute approximate PDF: exp(-x^2/2) / sqrt(2π)
+      const pdf = Math.exp(-0.5 * clampedX * clampedX) / Math.sqrt(2 * Math.PI);
+
       // GELU derivative: CDF + x * PDF
-      return isValidNumber(cdf) && isValidNumber(pdf) ? cdf + x * pdf : 0;
+      const derivative = cdf + clampedX * pdf;
+
+      // Clamp derivative to prevent extreme gradients
+      return isValidNumber(derivative) ? Math.min(Math.max(derivative, -10), 10) : 0;
   }
 
   /**
@@ -918,11 +974,11 @@ class HiveMind {
   }
 
   /**
-   * Performs multi-head attention for a single transformer layer, processing input embeddings
-   * through multiple attention heads to capture diverse patterns. Integrates specialization weights
-   * to enhance attention focus, updates attention memory for historical context, and applies dropout
-   * during training. Returns the attention output and intermediates for backpropagation, handling
-   * invalid inputs by returning zero-filled arrays.
+   * Performs multi-head attention for a single transformer layer, computing attention across multiple heads
+   * to capture diverse patterns in the input. Enhances attention with specialization weights, updates attention
+   * memory for historical context, and applies dropout during training. Returns the attention output and
+   * intermediate values (Q, K, V, scores, probs) for backpropagation. Handles invalid inputs by returning
+   * zero-filled arrays and ensures numerical stability through validation and clamping.
    * @param {number[][]} x - Input embeddings of shape [inputSize, hiddenSize].
    * @param {object} layer - Transformer layer object containing attention weights (Wq, Wk, Wv, Wo).
    * @param {number} transformerIdx - Index of the transformer in the ensemble (0 to ensembleSize-1).
@@ -973,15 +1029,15 @@ class HiveMind {
           };
       }
 
-      // Compute query (Q), key (K), and value (V) matrices
+      // Compute query (Q), key (K), and value (V) matrices with specialization weights
       const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
               for (let k = 0; k < this.#hiddenSize; k++) {
-                  const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
-                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
+                  const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j])
+                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j]
                       : 1;
                   Q[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wq[k][j])
                       ? x[i][k] * layer.Wq[k][j] * specWeight
@@ -996,7 +1052,7 @@ class HiveMind {
           }
       }
 
-      // Compute attention scores for each head
+      // Compute attention scores and probabilities for each head
       const attentionScores = Array(this.#numHeads).fill().map(() =>
           Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
       );
@@ -1017,11 +1073,14 @@ class HiveMind {
                       ? sum / Math.sqrt(headSize) * this.#attentionScalingFactor * (1 + this.#specializationScores[transformerIdx])
                       : 0;
               }
+              // Apply softmax to get attention probabilities
               attentionProbs[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
+              // Apply dropout to attention probabilities during training
+              attentionProbs[h][i] = this.#dropout(attentionProbs[h][i], this.#dropoutRate, true);
           }
       }
 
-      // Compute attention output
+      // Compute attention output for each head
       const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let h = 0; h < this.#numHeads; h++) {
           for (let i = 0; i < this.#inputSize; i++) {
@@ -1041,25 +1100,25 @@ class HiveMind {
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
               for (let k = 0; k < this.#hiddenSize; k++) {
-                  const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
-                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
+                  const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j])
+                      ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j]
                       : 1;
                   finalOutput[i][j] += isValidNumber(output[i][k]) && isValidNumber(layer.Wo[k][j])
                       ? output[i][k] * layer.Wo[k][j] * specWeight
                       : 0;
               }
-              // Apply dropout during training
-              finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, true);
           }
+          // Apply dropout to the final output during training
+          finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, true);
       }
 
-      // Update attention memory
+      // Update attention memory with the final output
       if (this.#attentionMemory[transformerIdx].length >= this.#contextWindow) {
           this.#attentionMemory[transformerIdx].shift();
       }
       this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice()));
 
-      // Return output and intermediates for backpropagation
+      // Return the attention output and intermediates for backpropagation
       return {
           output: finalOutput,
           Q,
@@ -1071,15 +1130,16 @@ class HiveMind {
   }
 
   /**
-   * Computes the feed-forward network output for a transformer layer, applying
-   * linear transformations, GELU activation, and bias terms. Handles invalid inputs
-   * by returning a zero-filled array and ensures numerical stability.
-   * @param {number[]} x - Input vector (length: hiddenSize).
-   * @param {object} layer - Feed-forward layer object with W1, W2, b1, b2.
-   * @returns {number[]} Output vector (length: hiddenSize).
+   * Computes the feed-forward network output for a transformer layer, applying two linear transformations
+   * with GELU activation and bias terms. Incorporates specialization weights to enhance feature focus and
+   * applies dropout during training. Returns the output vector, handling invalid inputs by returning a
+   * zero-filled array and ensuring numerical stability through validation and clamping.
+   * @param {number[]} x - Input vector of length hiddenSize.
+   * @param {object} layer - Feed-forward layer object containing W1, W2, b1, b2 weights and biases.
+   * @returns {number[]} Output vector of length hiddenSize.
    */
   #feedForward(x, layer) {
-      // Validate inputs and layer parameters
+      // Validate input and layer parameters
       if (
           !Array.isArray(x) || x.length !== this.#hiddenSize ||
           !x.every(isValidNumber) ||
@@ -1096,24 +1156,34 @@ class HiveMind {
       const hidden = Array(this.#feedForwardSize).fill(0);
       for (let j = 0; j < this.#feedForwardSize; j++) {
           for (let i = 0; i < this.#hiddenSize; i++) {
-              hidden[j] += isValidNumber(x[i]) && isValidNumber(layer.W1[i][j]) ? x[i] * layer.W1[i][j] : 0;
+              hidden[j] += isValidNumber(x[i]) && isValidNumber(layer.W1[i][j])
+                  ? x[i] * layer.W1[i][j]
+                  : 0;
           }
-          hidden[j] = isValidNumber(hidden[j]) && isValidNumber(layer.b1[j]) ? hidden[j] + layer.b1[j] : hidden[j];
+          hidden[j] = isValidNumber(hidden[j]) && isValidNumber(layer.b1[j])
+              ? hidden[j] + layer.b1[j]
+              : hidden[j];
       }
 
-      // Apply GELU activation
-      const activated = hidden.map(val => this.#gelu(val));
+      // Apply GELU activation with dropout
+      let activated = hidden.map(val => this.#gelu(val));
+      activated = this.#dropout(activated, this.#dropoutRate, true);
 
       // Second linear transformation: activated * W2 + b2
       const output = Array(this.#hiddenSize).fill(0);
       for (let j = 0; j < this.#hiddenSize; j++) {
           for (let i = 0; i < this.#feedForwardSize; i++) {
-              output[j] += isValidNumber(activated[i]) && isValidNumber(layer.W2[i][j]) ? activated[i] * layer.W2[i][j] : 0;
+              output[j] += isValidNumber(activated[i]) && isValidNumber(layer.W2[i][j])
+                  ? activated[i] * layer.W2[i][j]
+                  : 0;
           }
-          output[j] = isValidNumber(output[j]) && isValidNumber(layer.b2[j]) ? output[j] + layer.b2[j] : output[j];
+          output[j] = isValidNumber(output[j]) && isValidNumber(layer.b2[j])
+              ? output[j] + layer.b2[j]
+              : output[j];
       }
 
-      return output;
+      // Apply dropout to the final output during training
+      return this.#dropout(output, this.#dropoutRate, true);
   }
 
   /**
@@ -1145,47 +1215,57 @@ class HiveMind {
       });
   }
 
-  // Computes the diversity loss for the ensemble to encourage varied transformer outputs,
-  // promoting specialization while maintaining collaboration. Calculates the variance of
-  // transformer outputs and scales it by the diversity weight, incorporating trust scores
-  // to prioritize high-performing transformers. Handles invalid inputs by returning a
-  // fallback loss of 0 to ensure training stability.
-  // Args:
-  //   outputs: Array of transformer outputs (length: #ensembleSize, typically 128).
-  // Returns:
-  //   A single number representing the diversity loss, bounded and numerically stable.
+  /**
+   * Computes the diversity loss for the ensemble to encourage varied transformer outputs,
+   * promoting specialization while maintaining collaboration. Calculates the variance of
+   * transformer outputs, weighted by trust scores, and scales it with the diversity weight.
+   * Handles invalid inputs, identical outputs, and zero trust weights gracefully to ensure
+   * numerical stability.
+   * @param {number[]} outputs - Array of transformer outputs (length: #ensembleSize).
+   * @returns {number} Diversity loss, bounded and numerically stable.
+   */
   #computeDiversityLoss(outputs) {
-      // Validate inputs to ensure they are an array of valid numbers
+      // Validate inputs
       if (
           !Array.isArray(outputs) ||
           outputs.length !== this.#ensembleSize ||
-          !outputs.every(isValidNumber)
+          !outputs.every(isValidNumber) ||
+          !this.#trustScoresHistory.every(history => Array.isArray(history) && history.every(isValidNumber))
       ) {
-          return 0; // Return 0 loss for invalid inputs to avoid disrupting training
+          return 0; // Return 0 for invalid inputs to avoid disrupting training
       }
 
-      // Compute the mean of transformer outputs
+      // Compute mean of transformer outputs
       const meanOutput = outputs.reduce((sum, val) => sum + val, 0) / this.#ensembleSize;
 
-      // Calculate variance of outputs, weighted by trust scores to emphasize high-performing transformers
+      // Check if all outputs are identical
+      if (outputs.every(out => Math.abs(out - meanOutput) < 1e-6)) {
+          return 0; // Minimal loss if outputs are identical
+      }
+
+      // Calculate variance of outputs, weighted by trust scores
       let variance = 0;
       let totalTrustWeight = 0;
       for (let i = 0; i < this.#ensembleSize; i++) {
           const trustWeight = this.#trustScoresHistory[i].length > 0
               ? this.#trustScoresHistory[i][this.#trustScoresHistory[i].length - 1]
               : 0.5; // Default to 0.5 if no trust history
+          if (!isValidNumber(trustWeight) || trustWeight < 0) {
+              continue; // Skip invalid trust weights
+          }
           const diff = outputs[i] - meanOutput;
           variance += trustWeight * diff * diff;
           totalTrustWeight += trustWeight;
       }
 
       // Normalize variance by total trust weight, default to 0 if total weight is zero
-      variance = totalTrustWeight > 0 ? variance / totalTrustWeight : 0;
+      variance = totalTrustWeight > 1e-6 ? variance / totalTrustWeight : 0;
 
-      // Scale variance by diversity weight and apply sigmoid to bound the loss
-      const diversityLoss = this.#diversityWeight * sigmoid(variance);
+      // Scale variance by diversity weight and apply sigmoid for bounded loss
+      const scaledVariance = variance * 10; // Adjust scaling for meaningful sigmoid output
+      const diversityLoss = this.#diversityWeight * sigmoid(scaledVariance);
 
-      // Ensure the loss is a valid number and non-negative
+      // Ensure loss is valid and non-negative
       return isValidNumber(diversityLoss) && diversityLoss >= 0 ? diversityLoss : 0;
   }
 
@@ -1685,11 +1765,11 @@ class HiveMind {
   }
 
   /**
-   * Trains the HiveMind model by processing input data and a target value, computing gradients
-   * for each transformer, and updating parameters using backpropagation, knowledge distillation,
-   * and weight sharing. Integrates performance scores, trust scores, and adaptive learning rates
-   * to guide updates, ensuring robust learning while handling invalid inputs gracefully.
-   * @param {number[]} inputs - Array of input features (length: #inputSize, typically 6).
+   * Trains the HiveMind model by performing a forward pass, computing gradients, and updating transformer
+   * parameters using backpropagation, knowledge distillation, and weight sharing. Updates performance scores,
+   * trust scores, and adaptive learning rates based on individual transformer outputs and the target.
+   * Handles invalid inputs gracefully by skipping updates and ensures numerical stability through gradient clipping.
+   * @param {number[]} inputs - Array of input features (length: inputSize, typically 6).
    * @param {number} target - Target output value for training.
    * @param {number} [winRate=0.5] - Optional win rate to adjust learning rate (0 to 1).
    */
@@ -1704,22 +1784,27 @@ class HiveMind {
           winRate < 0 ||
           winRate > 1
       ) {
-          return; // Early exit for invalid inputs to prevent errors
+          return; // Skip training for invalid inputs
       }
       this.#trainingStepCount++;
 
-      // Compute forward pass and individual transformer outputs
-      const individualOutputs = this.#transformers.map((transformer, idx) => {
-          let x = this.#contextAwareAttention(inputs, idx); // Use context-aware attention for input embeddings
-          const layerOutputs = [x];
-          const activations = [];
-          const attentionIntermediates = [];
+      // Initialize arrays to store intermediate values for backpropagation
+      const individualOutputs = [];
+      const layerOutputs = this.#transformers.map(() => []);
+      const activations = this.#transformers.map(() => []);
+      const attentionIntermediates = this.#transformers.map(() => []);
+
+      // Forward pass for each transformer
+      this.#transformers.forEach((transformer, idx) => {
+          let x = this.#contextAwareAttention(inputs, idx);
+          layerOutputs[idx].push(x);
+          const transformerActivations = [];
+          const transformerAttentionIntermediates = [];
 
           // Process through transformer layers
           for (let layer = 0; layer < this.#numLayers; layer++) {
               const normX = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1));
               const attentionResult = this.#multiHeadAttention(normX, transformer.attentionWeights[layer], idx);
-              // Use attentionResult.output instead of attentionResult directly
               const attentionOutput = attentionResult.output;
               const attentionResidual = x.map((row, i) => row.map((val, j) =>
                   isValidNumber(val) && isValidNumber(attentionOutput[i][j]) ? val + attentionOutput[i][j] : val
@@ -1729,9 +1814,9 @@ class HiveMind {
               x = attentionResidual.map((row, i) => row.map((val, j) =>
                   isValidNumber(val) && isValidNumber(ffnOutput[j]) ? val + ffnOutput[j] : val
               ));
-              layerOutputs.push(x);
-              activations.push({ normX, attentionOutput, normAttention });
-              attentionIntermediates.push({
+              layerOutputs[idx].push(x);
+              transformerActivations.push({ normX, attentionOutput, normAttention });
+              transformerAttentionIntermediates.push({
                   Q: attentionResult.Q,
                   K: attentionResult.K,
                   V: attentionResult.V,
@@ -1739,8 +1824,10 @@ class HiveMind {
                   attentionProbs: attentionResult.probs
               });
           }
+          activations[idx] = transformerActivations;
+          attentionIntermediates[idx] = transformerAttentionIntermediates;
 
-          // Compute final output
+          // Compute transformer output
           let output = Array(this.#outputSize).fill(0);
           for (let i = 0; i < this.#hiddenSize; i++) {
               for (let j = 0; j < this.#outputSize; j++) {
@@ -1749,13 +1836,19 @@ class HiveMind {
                       : 0;
               }
           }
-          output = output.map((val, i) => isValidNumber(val) && isValidNumber(transformer.outputBias[i]) ? val + transformer.outputBias[i] : val);
-          return sigmoid(output[0]);
+          output = output.map((val, i) => isValidNumber(val) && isValidNumber(transformer.outputBias[i])
+              ? val + transformer.outputBias[i]
+              : val
+          );
+          individualOutputs[idx] = sigmoid(output[0]);
       });
 
       // Compute ensemble output
+      const ensembleWeights = this.#computeAttentionWeights(inputs, individualOutputs);
+      this.#ensembleWeights = ensembleWeights;
+      this.#normalizeEnsembleWeights();
       const output = individualOutputs.reduce((sum, out, idx) =>
-          sum + (isValidNumber(out) ? out * this.#ensembleWeights[idx] : 0), 0
+          sum + (isValidNumber(out) && isValidNumber(this.#ensembleWeights[idx]) ? out * this.#ensembleWeights[idx] : 0), 0
       );
       const error = target - output;
 
@@ -1776,23 +1869,22 @@ class HiveMind {
           return isValidNumber(newScore) ? newScore : 0;
       });
 
-      // Update trust scores and adaptive learning rates
+      // Update trust scores, specialization scores, and adaptive learning rates
       this.#updateTrustScores();
       this.#computeSpecializationScores(inputs, individualOutputs);
       this.#updateAdaptiveLearningRates();
 
-      // Compute gradients and update parameters
+      // Backpropagation and gradient updates
       this.#transformers.forEach((transformer, idx) => {
-          let x = this.#contextAwareAttention(inputs, idx);
-          let grad = Array(this.#hiddenSize).fill(0);
           const adjustedLearningRate = this.#adaptiveLearningRate[idx] * (0.5 + 0.5 * winRate);
-          const delta = Math.min(Math.max(error * output * (1 - output) * adjustedLearningRate, -1), 1);
+          const delta = Math.min(Math.max(error * output * (1 - output) * adjustedLearningRate, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+          let grad = Array(this.#hiddenSize).fill(0);
 
-          // Compute output layer gradients
+          // Output layer gradients
           for (let i = 0; i < this.#hiddenSize; i++) {
               for (let j = 0; j < this.#outputSize; j++) {
-                  const gradUpdate = isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) && isValidNumber(x[0][i])
-                      ? delta * this.#ensembleWeights[idx] * x[0][i]
+                  const gradUpdate = isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) && isValidNumber(layerOutputs[idx][this.#numLayers][0][i])
+                      ? delta * this.#ensembleWeights[idx] * layerOutputs[idx][this.#numLayers][0][i]
                       : 0;
                   const clippedUpdate = Math.min(Math.max(gradUpdate, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
                   this.#gradientAccumulation[idx].outputWeights[i][j] += clippedUpdate;
@@ -1803,21 +1895,14 @@ class HiveMind {
           }
           this.#gradientAccumulation[idx].outputBias[0] += isValidNumber(delta) ? delta : 0;
 
-          for (let i = 0; i < this.#hiddenSize; i++) {
-            const biasGrad = isValidNumber(delta) ? delta / this.#inputSize : 0;
-            const clippedBiasUpdate = Math.min(Math.max(adjustedLearningRate * biasGrad, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
-            this.#gradientAccumulation[idx].attentionBias[i] += clippedBiasUpdate;
-          }
-
-          // Backpropagate through layers
+          // Backpropagate through layers in reverse
           for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
-              const normX = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1));
-              const attentionResult = this.#multiHeadAttention(normX, transformer.attentionWeights[layer], idx);
-              const attentionOutput = attentionResult.output; // Use attentionResult.output
-              const attentionResidual = x.map((row, i) => row.map((val, j) =>
-                  isValidNumber(val) && isValidNumber(attentionOutput[i][j]) ? val + attentionOutput[i][j] : val
-              ));
-              const normAttention = attentionResidual.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2));
+              const x = layerOutputs[idx][layer];
+              const { normX, attentionOutput, normAttention } = activations[idx][layer];
+              const { Q, K, V, attentionScores, attentionProbs } = attentionIntermediates[idx][layer];
+              const headSize = this.#hiddenSize / this.#numHeads;
+
+              // Feed-forward gradients
               const ffnInput = normAttention[0];
               const hidden = Array(this.#feedForwardSize).fill(0);
               for (let i = 0; i < this.#hiddenSize; i++) {
@@ -1865,8 +1950,89 @@ class HiveMind {
                       ? Math.min(Math.max(update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
                       : 0;
               }
-              x = normAttention; // Update x for next layer
-              grad = ffnGrad; // Propagate gradient backward
+
+              // Attention gradients
+              const attentionGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+              for (let i = 0; i < this.#inputSize; i++) {
+                  for (let j = 0; j < this.#hiddenSize; j++) {
+                      attentionGrad[i][j] = grad[j]; // Propagate gradient through residual connection
+                  }
+              }
+              const woGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+              for (let i = 0; i < this.#inputSize; i++) {
+                  for (let j = 0; j < this.#hiddenSize; j++) {
+                      for (let k = 0; k < this.#hiddenSize; k++) {
+                          woGrad[k][j] += isValidNumber(attentionGrad[i][j]) && isValidNumber(attentionOutput[i][k])
+                              ? attentionGrad[i][j] * attentionOutput[i][k]
+                              : 0;
+                      }
+                  }
+              }
+              const vGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(headSize).fill(0)));
+              const scoreGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+              for (let h = 0; h < this.#numHeads; h++) {
+                  for (let i = 0; i < this.#inputSize; i++) {
+                      for (let j = 0; j < this.#inputSize; j++) {
+                          for (let k = 0; k < headSize; k++) {
+                              const idx = h * headSize + k;
+                              vGrad[h][j][k] += isValidNumber(attentionGrad[i][idx]) && isValidNumber(attentionProbs[h][i][j])
+                                  ? attentionGrad[i][idx] * attentionProbs[h][i][j]
+                                  : 0;
+                              scoreGrad[h][i][j] += isValidNumber(attentionGrad[i][idx]) && isValidNumber(V[j][idx])
+                                  ? attentionGrad[i][idx] * V[j][idx]
+                                  : 0;
+                          }
+                      }
+                  }
+              }
+              const qGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+              const kGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+              for (let h = 0; h < this.#numHeads; h++) {
+                  for (let i = 0; i < this.#inputSize; i++) {
+                      for (let j = 0; j < this.#inputSize; j++) {
+                          for (let k = 0; k < headSize; k++) {
+                              const idx = h * headSize + k;
+                              const scaledScore = isValidNumber(scoreGrad[h][i][j])
+                                  ? scoreGrad[h][i][j] / Math.sqrt(headSize)
+                                  : 0;
+                              qGrad[i][idx] += isValidNumber(scaledScore) && isValidNumber(K[j][idx])
+                                  ? scaledScore * K[j][idx]
+                                  : 0;
+                              kGrad[j][idx] += isValidNumber(scaledScore) && isValidNumber(Q[i][idx])
+                                  ? scaledScore * Q[i][idx]
+                                  : 0;
+                          }
+                      }
+                  }
+              }
+              for (let i = 0; i < this.#hiddenSize; i++) {
+                  for (let j = 0; j < this.#hiddenSize; j++) {
+                      const wqUpdate = qGrad.reduce((sum, row) => sum + (isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
+                      const wkUpdate = kGrad.reduce((sum, row) => sum + (isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
+                      const wvUpdate = vGrad.reduce((sum, head) => sum + head[i % this.#inputSize].reduce((s, v) => s + (isValidNumber(v[j % headSize]) ? v[j % headSize] : 0), 0), 0);
+                      const woUpdate = isValidNumber(woGrad[i][j]) ? woGrad[i][j] : 0;
+                      const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
+                          ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
+                          : 1;
+                      if (isValidNumber(wqUpdate)) {
+                          const clippedUpdate = Math.min(Math.max(adjustedLearningRate * wqUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                          this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += clippedUpdate;
+                      }
+                      if (isValidNumber(wkUpdate)) {
+                          const clippedUpdate = Math.min(Math.max(adjustedLearningRate * wkUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                          this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += clippedUpdate;
+                      }
+                      if (isValidNumber(wvUpdate)) {
+                          const clippedUpdate = Math.min(Math.max(adjustedLearningRate * wvUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                          this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += clippedUpdate;
+                      }
+                      if (isValidNumber(woUpdate)) {
+                          const clippedUpdate = Math.min(Math.max(adjustedLearningRate * woUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                          this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += clippedUpdate;
+                      }
+                  }
+              }
+              grad = qGrad[0]; // Update gradient for the next layer
           }
       });
 
@@ -1874,39 +2040,62 @@ class HiveMind {
       this.#transformers.forEach((transformer, idx) => {
           for (let i = 0; i < this.#hiddenSize; i++) {
               for (let j = 0; j < this.#outputSize; j++) {
-                  transformer.outputWeights[i][j] -= this.#gradientAccumulation[idx].outputWeights[i][j];
+                  transformer.outputWeights[i][j] -= isValidNumber(this.#gradientAccumulation[idx].outputWeights[i][j])
+                      ? this.#gradientAccumulation[idx].outputWeights[i][j]
+                      : 0;
               }
           }
           for (let j = 0; j < this.#outputSize; j++) {
-              transformer.outputBias[j] -= this.#gradientAccumulation[idx].outputBias[j];
-          }
-          for (let i = 0; i < this.#hiddenSize; i++) {
-            this.#attentionBias[idx][i] -= this.#gradientAccumulation[idx].attentionBias[i];
+              transformer.outputBias[j] -= isValidNumber(this.#gradientAccumulation[idx].outputBias[j])
+                  ? this.#gradientAccumulation[idx].outputBias[j]
+                  : 0;
           }
           for (let layer = 0; layer < this.#numLayers; layer++) {
               for (let i = 0; i < this.#hiddenSize; i++) {
                   for (let j = 0; j < this.#feedForwardSize; j++) {
-                      transformer.ffnWeights[layer].W1[i][j] -= this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j];
+                      transformer.ffnWeights[layer].W1[i][j] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j])
+                          ? this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j]
+                          : 0;
                   }
               }
               for (let i = 0; i < this.#feedForwardSize; i++) {
                   for (let j = 0; j < this.#hiddenSize; j++) {
-                      transformer.ffnWeights[layer].W2[i][j] -= this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j];
+                      transformer.ffnWeights[layer].W2[i][j] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j])
+                          ? this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j]
+                          : 0;
                   }
               }
               for (let i = 0; i < this.#feedForwardSize; i++) {
-                  transformer.ffnWeights[layer].b1[i] -= this.#gradientAccumulation[idx].ffnWeights[layer].b1[i];
+                  transformer.ffnWeights[layer].b1[i] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].b1[i])
+                      ? this.#gradientAccumulation[idx].ffnWeights[layer].b1[i]
+                      : 0;
               }
               for (let i = 0; i < this.#hiddenSize; i++) {
-                  transformer.ffnWeights[layer].b2[i] -= this.#gradientAccumulation[idx].ffnWeights[layer].b2[i];
+                  transformer.ffnWeights[layer].b2[i] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].b2[i])
+                      ? this.#gradientAccumulation[idx].ffnWeights[layer].b2[i]
+                      : 0;
+              }
+              for (let i = 0; i < this.#hiddenSize; i++) {
+                  for (let j = 0; j < this.#hiddenSize; j++) {
+                      transformer.attentionWeights[layer].Wq[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j])
+                          ? this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j]
+                          : 0;
+                      transformer.attentionWeights[layer].Wk[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j])
+                          ? this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j]
+                          : 0;
+                      transformer.attentionWeights[layer].Wv[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j])
+                          ? this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j]
+                          : 0;
+                      transformer.attentionWeights[layer].Wo[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j])
+                          ? this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j]
+                          : 0;
+                  }
               }
           }
       });
 
       // Apply knowledge distillation and weight sharing
       this.#distillKnowledge(individualOutputs, target);
-      this.#ensembleWeights = this.#computeAttentionWeights(inputs, individualOutputs);
-      this.#normalizeEnsembleWeights();
       if (this.#shouldCommunicate()) {
           this.#shareWeights();
       }
