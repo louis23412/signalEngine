@@ -446,10 +446,12 @@ class HiveMind {
   }
 
   #updateAdaptiveLearningRates() {
-    const performanceMean = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) / this.#ensembleSize || 1;
+    const performanceMean = this.#performanceScores.reduce((sum, score) => 
+    sum + (isValidNumber(score) && score >= 0 && score <= 1 ? score : 0), 0) / this.#ensembleSize || 1;
+    
     this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
       const performanceDiff = isValidNumber(this.#performanceScores[idx]) 
-        ? this.#performanceScores[idx] - performanceMean 
+        ? Math.min(Math.max(this.#performanceScores[idx] - performanceMean, -10), 10) 
         : 0;
       const adjustment = 1 + 0.1 * sigmoid(performanceDiff);
       const newLr = this.#learningRate * adjustment;
@@ -1951,8 +1953,9 @@ class HiveMind {
     }
   }
 
-  // Getter / Setter methods. Ignore for now:
-  // ---------------------------------------
+  // Getter / Setter methods
+  // -----------------------
+
   getParameters(idx) {
     return this.#transformers[idx];
   }
