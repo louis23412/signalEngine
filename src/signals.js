@@ -155,13 +155,34 @@ class HiveMind {
     }
   }
 
+  /**
+   * Determines whether transformers should share weights based on performance variance.
+   * Returns true if variance exceeds a dynamic threshold, encouraging communication
+   * among transformers when performance diverges significantly.
+   * @returns {boolean} True if weight sharing should occur, false otherwise.
+   */
   #shouldCommunicate() {
-    const performanceStd = Math.sqrt(
-      this.#performanceScores.reduce((sum, score) => sum + (score - this.#performanceScores.reduce((s, v) => s + v, 0) / this.#ensembleSize) ** 2, 0) / this.#ensembleSize
-    );
-    const progress = Math.min(this.#trainingStepCount / 5000, 1);
-    const threshold = 0.1 * (1 - progress) + 0.05;
-    return isValidNumber(performanceStd) && performanceStd > threshold;
+      // Compute mean performance
+      const mean = this.#performanceScores.reduce((sum, score) => 
+          sum + (isValidNumber(score) ? score : 0), 0) / this.#ensembleSize;
+
+      // Compute variance of performance scores
+      const variance = this.#performanceScores.reduce((sum, score) => {
+          const val = isValidNumber(score) ? score : 0;
+          return sum + Math.pow(val - mean, 2);
+      }, 0) / this.#ensembleSize;
+
+      // Check for invalid variance
+      if (!isValidNumber(variance)) return false;
+
+      // Compute standard deviation
+      const performanceStd = Math.sqrt(variance);
+
+      // Dynamic threshold decreases as training progresses
+      const progress = Math.min(this.#trainingStepCount / 5000, 1);
+      const threshold = 0.1 * (1 - progress) + 0.05;
+
+      return performanceStd > threshold;
   }
 
   /**
@@ -715,39 +736,106 @@ class HiveMind {
       });
   }
 
+  /**
+   * Normalizes the ensemble weights to ensure they sum to 1, handling edge cases like invalid or zero weights.
+   * This method adjusts the weights of each transformer in the ensemble to maintain a valid probability distribution.
+   */
   #normalizeEnsembleWeights() {
-    const sum = this.#ensembleWeights.reduce((s, w) => s + w, 0) || 1;
-    this.#ensembleWeights = this.#ensembleWeights.map(w => w / sum);
-  }
+      // Sum all valid weights, ignoring invalid or negative values
+      const sum = this.#ensembleWeights.reduce((s, w) => s + (isValidNumber(w) && w >= 0 ? w : 0), 0);
 
-  #gelu(x) {
-    return isValidNumber(x) ? 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * x ** 3))) : 0;
-  }
+      // If sum is effectively zero, assign uniform weights to avoid division by zero
+      if (sum <= 1e-6) {
+          this.#ensembleWeights = Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
+          return;
+      }
 
-  #geluDerivative(x) {
-    if (!isValidNumber(x)) return 0;
-    const cdf = 0.5 * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * x ** 3)));
-    const pdf = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
-    return cdf + x * pdf;
-  }
+      // Normalize weights, replacing invalid or negative values with zero
+      this.#ensembleWeights = this.#ensembleWeights.map(w => 
+          isValidNumber(w) && w >= 0 ? w / sum : 0
+      );
 
-  #layerNorm(x, gamma, beta, eps = 1e-6) {
-    if (!x.every(isValidNumber) || !gamma.every(isValidNumber) || !beta.every(isValidNumber)) {
-      return Array(x.length).fill(0);
-    }
-    const mean = x.reduce((sum, val) => sum + val, 0) / x.length;
-    const variance = x.reduce((sum, val) => sum + (val - mean) ** 2, 0) / x.length;
-    return x.map((val, i) => isValidNumber(val) && isValidNumber(variance) ? gamma[i] * (val - mean) / Math.sqrt(variance + eps) + beta[i] : 0);
+      // Ensure sum is exactly 1 by adjusting the largest weight if necessary
+      const finalSum = this.#ensembleWeights.reduce((s, w) => s + w, 0);
+      if (Math.abs(finalSum - 1) > 1e-6) {
+          const maxIndex = this.#ensembleWeights.indexOf(Math.max(...this.#ensembleWeights));
+          this.#ensembleWeights[maxIndex] += 1 - finalSum;
+      }
   }
 
   /**
-   * Computes context-aware input embeddings by combining current inputs with historical attention outputs
-   * from attentionMemory, enhancing temporal dependencies. Projects inputs to hidden size, adds positional
-   * encodings, blends with historical context, and applies layer normalization. Handles invalid inputs and
-   * transformer indices gracefully, ensuring numerical stability and alignment with the transformer's architecture.
-   * @param {number[]} inputs - Array of input values (length: inputSize, typically 6).
-   * @param {number} transformerIdx - Index of the transformer in the ensemble (0 to ensembleSize-1).
-   * @returns {number[][]} Array of shape [inputSize, hiddenSize] representing context-enhanced input embeddings.
+   * Applies the GELU activation function to a single input value, ensuring numerical stability.
+   * Returns 0 for invalid inputs to prevent propagation of NaN or Infinity.
+   * @param {number} x - Input value to apply GELU activation.
+   * @returns {number} GELU-activated value or 0 if input is invalid.
+   */
+  #gelu(x) {
+      if (!isValidNumber(x)) return 0;
+      // GELU approximation: x * Φ(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+      return 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * Math.pow(x, 3))));
+  }
+
+  /**
+   * Computes the derivative of the GELU activation function for backpropagation.
+   * Handles invalid inputs by returning 0 and uses an approximation for numerical stability.
+   * @param {number} x - Input value for which to compute GELU derivative.
+   * @returns {number} Derivative of GELU at x, or 0 if input is invalid.
+   */
+  #geluDerivative(x) {
+      if (!isValidNumber(x)) return 0;
+      // Compute cumulative distribution function (CDF) for GELU
+      const cdf = 0.5 * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * Math.pow(x, 3))));
+      // Approximate normal PDF for derivative: exp(-x^2/2) / sqrt(2π)
+      const pdf = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+      // GELU derivative: CDF + x * PDF
+      return isValidNumber(cdf) && isValidNumber(pdf) ? cdf + x * pdf : 0;
+  }
+
+  /**
+   * Applies layer normalization to an input vector, stabilizing training by normalizing
+   * across the hidden dimensions. Handles invalid inputs by returning a zero-filled array.
+   * @param {number[]} x - Input vector to normalize (length: hiddenSize).
+   * @param {number[]} gamma - Scaling parameters (length: hiddenSize).
+   * @param {number[]} beta - Shift parameters (length: hiddenSize).
+   * @param {number} [eps=1e-6] - Small constant to prevent division by zero.
+   * @returns {number[]} Normalized output vector (length: hiddenSize).
+   */
+  #layerNorm(x, gamma, beta, eps = 1e-6) {
+      // Validate inputs, gamma, and beta
+      if (
+          !Array.isArray(x) || x.length !== this.#hiddenSize ||
+          !Array.isArray(gamma) || gamma.length !== this.#hiddenSize ||
+          !Array.isArray(beta) || beta.length !== this.#hiddenSize ||
+          !x.every(isValidNumber) || !gamma.every(isValidNumber) || !beta.every(isValidNumber)
+      ) {
+          return Array(this.#hiddenSize).fill(0);
+      }
+
+      // Compute mean and variance of input
+      const mean = x.reduce((sum, val) => sum + val, 0) / x.length;
+      const variance = x.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / x.length;
+
+      // Check for invalid variance
+      if (!isValidNumber(variance) || !isValidNumber(mean)) {
+          return Array(this.#hiddenSize).fill(0);
+      }
+
+      // Normalize and apply gamma and beta
+      const output = x.map((val, i) => {
+          const normalized = (val - mean) / Math.sqrt(variance + eps);
+          return isValidNumber(normalized) ? gamma[i] * normalized + beta[i] : 0;
+      });
+
+      return output;
+  }
+
+  /**
+   * Computes context-aware input embeddings by combining current inputs with historical
+   * attention outputs, enhancing temporal dependencies. Projects inputs to hidden size,
+   * adds positional encodings, blends with historical context, and applies layer normalization.
+   * @param {number[]} inputs - Array of input values (length: inputSize).
+   * @param {number} transformerIdx - Index of the transformer in the ensemble.
+   * @returns {number[][]} Array of shape [inputSize, hiddenSize] with context-enhanced embeddings.
    */
   #contextAwareAttention(inputs, transformerIdx) {
       // Validate inputs and transformer index
@@ -759,17 +847,15 @@ class HiveMind {
           transformerIdx < 0 ||
           transformerIdx >= this.#ensembleSize
       ) {
-          // Return zero-filled array as a safe fallback for invalid inputs or index
           return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       }
 
       const transformer = this.#transformers[transformerIdx];
 
-      // Project inputs to hidden size using a simple linear transformation
+      // Project inputs to hidden size using specialization weights
       const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
-              // Use specialization weights to modulate input projection
               const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
                   ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j]
                   : 1;
@@ -779,7 +865,7 @@ class HiveMind {
           }
       }
 
-      // Add positional encodings to projected inputs
+      // Add positional encodings
       const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
@@ -789,14 +875,17 @@ class HiveMind {
           }
       }
 
-      // Incorporate historical context from attentionMemory if available and valid
+      // Incorporate historical context from attention memory
       if (
           this.#attentionMemory[transformerIdx].length > 0 &&
+          Array.isArray(this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1]) &&
           this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1].length === this.#inputSize &&
-          this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1].every(row => row.length === this.#hiddenSize)
+          this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1].every(row => 
+              Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)
+          )
       ) {
           const recentAttention = this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1];
-          const contextWeight = 0.3; // Weight for blending historical context
+          const contextWeight = 0.3;
 
           for (let i = 0; i < this.#inputSize; i++) {
               for (let j = 0; j < this.#hiddenSize; j++) {
@@ -811,7 +900,7 @@ class HiveMind {
           }
       }
 
-      // Apply layer normalization to stabilize output
+      // Apply layer normalization
       for (let i = 0; i < this.#inputSize; i++) {
           output[i] = this.#layerNorm(
               output[i],
@@ -952,30 +1041,79 @@ class HiveMind {
       };
   }
 
+  /**
+   * Computes the feed-forward network output for a transformer layer, applying
+   * linear transformations, GELU activation, and bias terms. Handles invalid inputs
+   * by returning a zero-filled array and ensures numerical stability.
+   * @param {number[]} x - Input vector (length: hiddenSize).
+   * @param {object} layer - Feed-forward layer object with W1, W2, b1, b2.
+   * @returns {number[]} Output vector (length: hiddenSize).
+   */
   #feedForward(x, layer) {
-    const hidden = Array(this.#feedForwardSize).fill(0);
-    for (let i = 0; i < this.#hiddenSize; i++) {
+      // Validate inputs and layer parameters
+      if (
+          !Array.isArray(x) || x.length !== this.#hiddenSize ||
+          !x.every(isValidNumber) ||
+          !layer || !layer.W1 || !layer.W2 || !layer.b1 || !layer.b2 ||
+          !layer.W1.every(row => Array.isArray(row) && row.length === this.#feedForwardSize && row.every(isValidNumber)) ||
+          !layer.W2.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)) ||
+          !Array.isArray(layer.b1) || layer.b1.length !== this.#feedForwardSize || !layer.b1.every(isValidNumber) ||
+          !Array.isArray(layer.b2) || layer.b2.length !== this.#hiddenSize || !layer.b2.every(isValidNumber)
+      ) {
+          return Array(this.#hiddenSize).fill(0);
+      }
+
+      // First linear transformation: x * W1 + b1
+      const hidden = Array(this.#feedForwardSize).fill(0);
       for (let j = 0; j < this.#feedForwardSize; j++) {
-        hidden[j] += isValidNumber(x[i]) && isValidNumber(layer.W1[i][j]) ? x[i] * layer.W1[i][j] : 0;
+          for (let i = 0; i < this.#hiddenSize; i++) {
+              hidden[j] += isValidNumber(x[i]) && isValidNumber(layer.W1[i][j]) ? x[i] * layer.W1[i][j] : 0;
+          }
+          hidden[j] = isValidNumber(hidden[j]) && isValidNumber(layer.b1[j]) ? hidden[j] + layer.b1[j] : hidden[j];
       }
-    }
-    const activated = hidden.map((val, i) => this.#gelu(val + (isValidNumber(layer.b1[i]) ? layer.b1[i] : 0)));
-    const output = Array(this.#hiddenSize).fill(0);
-    for (let i = 0; i < this.#feedForwardSize; i++) {
+
+      // Apply GELU activation
+      const activated = hidden.map(val => this.#gelu(val));
+
+      // Second linear transformation: activated * W2 + b2
+      const output = Array(this.#hiddenSize).fill(0);
       for (let j = 0; j < this.#hiddenSize; j++) {
-        output[j] += isValidNumber(activated[i]) && isValidNumber(layer.W2[i][j]) ? activated[i] * layer.W2[i][j] : 0;
+          for (let i = 0; i < this.#feedForwardSize; i++) {
+              output[j] += isValidNumber(activated[i]) && isValidNumber(layer.W2[i][j]) ? activated[i] * layer.W2[i][j] : 0;
+          }
+          output[j] = isValidNumber(output[j]) && isValidNumber(layer.b2[j]) ? output[j] + layer.b2[j] : output[j];
       }
-    }
-    return output.map((val, i) =>
-      isValidNumber(val) && isValidNumber(layer.b2[i])
-        ? val + layer.b2[i]
-        : isValidNumber(val) ? val : 0
-    );
+
+      return output;
   }
 
+  /**
+   * Applies dropout to an input vector during training to prevent overfitting.
+   * Returns the input unchanged during inference or if the rate is invalid.
+   * @param {number[]} x - Input vector to apply dropout (length: hiddenSize).
+   * @param {number} rate - Dropout rate (0 to 1).
+   * @param {boolean} training - Whether the model is in training mode.
+   * @returns {number[]} Output vector with dropout applied (length: hiddenSize).
+   */
   #dropout(x, rate, training = false) {
-    if (!training) return x;
-    return x.map(val => isValidNumber(val) && Math.random() >= rate ? val / (1 - rate) : 0);
+      // Validate inputs and rate
+      if (
+          !Array.isArray(x) || 
+          !x.every(isValidNumber) || 
+          !isValidNumber(rate) || 
+          rate < 0 || 
+          rate >= 1
+      ) {
+          return x.slice(); // Return a copy of input to avoid modifying original
+      }
+
+      if (!training) return x.slice();
+
+      // Apply dropout: scale kept values by 1/(1-rate) to maintain expected value
+      return x.map(val => {
+          if (!isValidNumber(val)) return 0;
+          return Math.random() >= rate ? val / (1 - rate) : 0;
+      });
   }
 
   // Computes the diversity loss for the ensemble to encourage varied transformer outputs,
