@@ -161,15 +161,15 @@ class HiveMind {
     return isValidNumber(performanceStd) && performanceStd > threshold;
   }
 
-  // Computes ensemble weights for each transformer by integrating attention mechanisms,
-  // historical performance, trust scores, and specialization scores. Processes input features
-  // and transformer outputs to calculate attention scores, ensuring robust contextual understanding
-  // across all input positions and transformers. Returns normalized weights summing to 1.
-  // Args:
-  //   inputs: Array of input features (length: #inputSize, typically 6).
-  //   outputs: Array of transformer outputs (length: #ensembleSize, typically 128).
-  // Returns:
-  //   Array of ensemble weights (length: #ensembleSize), normalized to sum to 1.
+  /**
+   * Computes ensemble weights for each transformer by integrating attention mechanisms,
+   * historical performance, trust scores, and specialization scores. Processes input features
+   * and transformer outputs to calculate attention scores, ensuring robust contextual understanding
+   * across all input positions and transformers. Returns normalized weights summing to 1.
+   * @param {number[]} inputs - Array of input features (length: #inputSize, typically 6).
+   * @param {number[]} outputs - Array of transformer outputs (length: #ensembleSize, typically 128).
+   * @returns {number[]} Array of ensemble weights (length: #ensembleSize), normalized to sum to 1.
+   */
   #computeAttentionWeights(inputs, outputs) {
       // Validate inputs and outputs to ensure they meet expected format and size
       if (
@@ -184,7 +184,7 @@ class HiveMind {
           return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
       }
 
-      // Transform inputs into feature vectors for attention computation
+      // Transform inputs into feature vectors for attention computation, projecting to hidden size
       const inputFeatures = inputs.map(x =>
           Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
       );
@@ -206,7 +206,7 @@ class HiveMind {
               )
           );
 
-          // Compute keys using input features, not outputs, to align with attention mechanism
+          // Compute keys using input features to align with attention mechanism
           const keys = inputFeatures.map(row =>
               row.map((val, i) =>
                   Array(this.#hiddenSize).fill().reduce((sum, _, j) =>
@@ -235,7 +235,7 @@ class HiveMind {
                           ? queries[i][k] * keys[j][k]
                           : 0;
                   }
-                  // Apply softmax to attention scores for each position
+                  // Apply softmax to attention scores for each position, scaled by attention scaling factor
                   const attentionWeight = softmax(
                       Array(this.#inputSize).fill().map((_, k) => {
                           let dp = 0;
@@ -244,7 +244,9 @@ class HiveMind {
                                   ? queries[i][m] * keys[k][m]
                                   : 0;
                           }
-                          return dp / Math.sqrt(this.#hiddenSize) * this.#attentionScalingFactor;
+                          return isValidNumber(dp)
+                              ? dp / Math.sqrt(this.#hiddenSize) * this.#attentionScalingFactor
+                              : 0;
                       })
                   )[j];
 
@@ -258,10 +260,11 @@ class HiveMind {
           }
 
           // Scale score and add bias for numerical stability
-          const biasIndex = t % this.#hiddenSize; // Ensure safe indexing within attentionBias
-          score = score / this.#inputSize + (isValidNumber(this.#attentionBias[biasIndex]) ? this.#attentionBias[biasIndex] : 0);
+          score = score / this.#inputSize + (isValidNumber(this.#attentionBias[t % this.#hiddenSize])
+              ? this.#attentionBias[t % this.#hiddenSize]
+              : 0);
 
-          // Incorporate historical performance, trust, and specialization
+          // Incorporate historical performance, trust, specialization, and swarm intelligence
           const historicalWeight = this.#historicalPerformance[t].length > 0
               ? this.#historicalPerformance[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
                 this.#historicalPerformance[t].length
@@ -270,10 +273,12 @@ class HiveMind {
               ? this.#trustScoresHistory[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
                 this.#trustScoresHistory[t].length
               : 0.5;
-          const specializationBoost = 1 + (isValidNumber(this.#specializationScores[t]) ? this.#specializationScores[t] : 0);
+          const specializationBoost = 1 + (isValidNumber(this.#specializationScores[t])
+              ? this.#specializationScores[t] * this.#swarmIntelligenceFactor
+              : 0);
 
           // Combine factors to compute final attention score
-          attentionScores[t] = score * (0.6 + 0.2 * historicalWeight + 0.2 * trustScore * specializationBoost);
+          attentionScores[t] = score * (0.5 + 0.2 * historicalWeight + 0.2 * trustScore + 0.1 * specializationBoost);
       }
 
       // Apply softmax to normalize attention scores
@@ -282,7 +287,9 @@ class HiveMind {
       // Compute final ensemble weights by combining attention weights with performance, specialization, and trust
       const finalWeights = weights.map((w, idx) => {
           const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0;
-          const specializationFactor = 1 + (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] * this.#swarmIntelligenceFactor : 0);
+          const specializationFactor = 1 + (isValidNumber(this.#specializationScores[idx])
+              ? this.#specializationScores[idx] * this.#swarmIntelligenceFactor
+              : 0);
           const trustScore = this.#trustScoresHistory[idx].length > 0
               ? this.#trustScoresHistory[idx][this.#trustScoresHistory[idx].length - 1]
               : 0.5;
@@ -346,12 +353,14 @@ class HiveMind {
     this.#normalizeEnsembleWeights();
   }
 
-  // Computes specialization scores for each transformer based on correlations between input features and transformer outputs.
-  // Updates specialization weights to reflect feature importance, incorporating trust scores, performance, and swarm intelligence.
-  // Handles invalid inputs by skipping updates and normalizing scores to ensure numerical stability.
-  // Args:
-  //   inputs: Array of input features (length: #inputSize, typically 6).
-  //   outputs: Array of transformer outputs (length: #ensembleSize, typically 128).
+  /**
+   * Computes specialization scores for each transformer based on correlations between input features
+   * and transformer outputs. Updates specialization weights to reflect feature importance, incorporating
+   * trust scores, performance, and swarm intelligence. Handles invalid inputs by skipping updates and
+   * normalizing scores to ensure numerical stability.
+   * @param {number[]} inputs - Array of input features (length: #inputSize, typically 6).
+   * @param {number[]} outputs - Array of transformer outputs (length: #ensembleSize, typically 128).
+   */
   #computeSpecializationScores(inputs, outputs) {
       // Validate inputs and outputs to ensure they are usable
       if (
@@ -401,22 +410,21 @@ class HiveMind {
               ? this.#trustScoresHistory[idx][this.#trustScoresHistory[idx].length - 1]
               : 0.5;
           const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
-          // Combine factors with sigmoid for bounded scores
+          // Combine factors with sigmoid for bounded scores, incorporating swarm intelligence
           const input = Math.min(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * trustFactor + 0.2 * performanceFactor), 5);
           return sigmoid(input);
       });
 
-      // Normalize specialization scores to ensure comparability
+      // Normalize specialization scores to ensure sum to 1
       const sumScores = this.#specializationScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
       this.#specializationScores = this.#specializationScores.map(score => isValidNumber(score) ? score / sumScores : 0);
 
       // Update specialization weights based on correlations, mapping to hidden dimensions
       for (let i = 0; i < this.#ensembleSize; i++) {
-          // Compute a transformer-specific scaling factor based on its specialization score
           const specializationFactor = 1 + this.#specializationScores[i] * this.#swarmIntelligenceFactor;
           for (let j = 0; j < this.#hiddenSize; j++) {
               for (let k = 0; k < this.#hiddenSize; k++) {
-                  // Map hidden dimension to input feature using modulo, but scale by aggregated correlation
+                  // Map hidden dimension to input feature cyclically
                   const inputIdx = j % this.#inputSize;
                   const corr = featureCorrelations[i][inputIdx];
                   if (isValidNumber(corr)) {
@@ -425,21 +433,23 @@ class HiveMind {
                           ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor, -0.1), 0.1)
                           : 0;
                       this.#specializationWeights[i][j][k] += update;
+                      // Clip weights to prevent numerical instability
                       this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -1), 1);
                   }
               }
           }
       }
 
-      // Update attention weight matrix to reflect specialization, enhancing attention mechanism
+      // Update attention weight matrix to reflect specialization
       for (let i = 0; i < this.#ensembleSize; i++) {
           const meanCorr = featureCorrelations[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / this.#inputSize || 0;
           for (let j = 0; j < this.#hiddenSize; j++) {
               // Apply correlation-based update to attention weights, scaled by specialization score
               const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(meanCorr) && isValidNumber(this.#specializationScores[i])
-                  ? Math.min(Math.max(this.#adaptiveLearningRate[i] * meanCorr * (1 + this.#specializationScores[i]), -0.1), 0.1)
+                  ? Math.min(Math.max(this.#adaptiveLearningRate[i] * meanCorr * (1 + this.#specializationScores[i] * this.#swarmIntelligenceFactor), -0.1), 0.1)
                   : 0;
               this.#attentionWeightMatrix[i][j] += update;
+              // Clip weights to prevent numerical instability
               this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1), 1);
           }
       }
@@ -459,11 +469,13 @@ class HiveMind {
     });
   }
 
-  // Shares weights among lower-performing transformers to improve their performance by adopting
-  // knowledge from top performers, while preserving the weights of top performers to maintain
-  // specialization. Uses trust scores, specialization scores, and swarm intelligence to weight
-  // contributions, with momentum to smooth updates. Handles invalid values gracefully and ensures
-  // numerical stability through clipping and validation.
+  /**
+   * Shares weights among lower-performing transformers to improve their performance by adopting
+   * knowledge from top performers, while preserving the weights of top performers to maintain
+   * specialization. Uses trust scores, specialization scores, and swarm intelligence to weight
+   * contributions, with momentum to smooth updates. Handles invalid values gracefully and ensures
+   * numerical stability through clipping and validation.
+   */
   #shareWeights() {
       // Compute trust scores based on performance, normalized to sum to 1
       const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
@@ -482,7 +494,7 @@ class HiveMind {
                           totalWeight += trustWeights[t];
                       }
                   }
-                  result[i][j] = totalWeight > 0 ? weightedSum / totalWeight : 0;
+                  result[i][j] = totalWeight > 1e-6 ? weightedSum / totalWeight : 0;
               }
           }
           return result;
@@ -499,7 +511,7 @@ class HiveMind {
                       totalWeight += trustWeights[t];
                   }
               }
-              result[i] = totalWeight > 0 ? weightedSum / totalWeight : 0;
+              result[i] = totalWeight > 1e-6 ? weightedSum / totalWeight : 0;
           }
           return result;
       };
@@ -544,33 +556,40 @@ class HiveMind {
               if (topPerformers.includes(idx)) return;
 
               const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
-              const swarmInfluence = 1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx];
+              const swarmInfluence = 1 + this.#swarmIntelligenceFactor * (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0);
 
-              // Update attention weights
+              // Update attention weights with specialization and clipping
               for (let i = 0; i < t.attentionWeights[layer].Wq.length; i++) {
                   for (let j = 0; j < t.attentionWeights[layer].Wq[i].length; j++) {
                       const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
                           ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
                           : 1;
+                      const update = isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
+                          ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
+                          : t.attentionWeights[layer].Wq[i][j] || 0;
                       this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
-                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
-                              ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
-                              : t.attentionWeights[layer].Wq[i][j] || 0);
+                          (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
                       t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
+
+                      const wkUpdate = isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
+                          ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
+                          : t.attentionWeights[layer].Wk[i][j] || 0;
                       this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
-                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
-                              ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
-                              : t.attentionWeights[layer].Wk[i][j] || 0);
+                          (1 - momentumFactor) * Math.min(Math.max(wkUpdate, -1), 1);
                       t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
+
+                      const wvUpdate = isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
+                          ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
+                          : t.attentionWeights[layer].Wv[i][j] || 0;
                       this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
-                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
-                              ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
-                              : t.attentionWeights[layer].Wv[i][j] || 0);
+                          (1 - momentumFactor) * Math.min(Math.max(wvUpdate, -1), 1);
                       t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
+
+                      const woUpdate = isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
+                          ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
+                          : t.attentionWeights[layer].Wo[i][j] || 0;
                       this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
-                          (1 - momentumFactor) * (isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
-                              ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
-                              : t.attentionWeights[layer].Wo[i][j] || 0);
+                          (1 - momentumFactor) * Math.min(Math.max(woUpdate, -1), 1);
                       t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
                   }
               }
@@ -581,10 +600,11 @@ class HiveMind {
                       const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize])
                           ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize]
                           : 1;
+                      const update = isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
+                          ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
+                          : t.ffnWeights[layer].W1[i][j] || 0;
                       this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
-                          (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
-                              ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
-                              : t.ffnWeights[layer].W1[i][j] || 0);
+                          (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
                       t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
                   }
               }
@@ -593,51 +613,61 @@ class HiveMind {
                       const specializationFactor = isValidNumber(this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize])
                           ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize]
                           : 1;
+                      const update = isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
+                          ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
+                          : t.ffnWeights[layer].W2[i][j] || 0;
                       this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
-                          (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
-                              ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
-                              : t.ffnWeights[layer].W2[i][j] || 0);
+                          (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
                       t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
                   }
               }
 
               // Update feed-forward biases
               for (let i = 0; i < t.ffnWeights[layer].b1.length; i++) {
+                  const update = isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
+                      ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
+                      : t.ffnWeights[layer].b1[i] || 0;
                   this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
-                      (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
-                          ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
-                          : t.ffnWeights[layer].b1[i] || 0);
+                      (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
                   t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
               }
               for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
+                  const update = isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
+                      ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
+                      : t.ffnWeights[layer].b2[i] || 0;
                   this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
-                      (1 - momentumFactor) * (isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
-                          ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
-                          : t.ffnWeights[layer].b2[i] || 0);
+                      (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
                   t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
               }
 
               // Update layer normalization weights
               for (let i = 0; i < t.layerNormWeights[layer].gamma1.length; i++) {
+                  const gamma1Update = isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
+                      ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
+                      : t.layerNormWeights[layer].gamma1[i] || 1;
                   this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
-                          ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
-                          : t.layerNormWeights[layer].gamma1[i] || 1);
+                      (1 - momentumFactor) * Math.min(Math.max(gamma1Update, -1), 1);
                   t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
+
+                  const beta1Update = isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
+                      ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
+                      : t.layerNormWeights[layer].beta1[i] || 0;
                   this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
-                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
-                          ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
-                          : t.layerNormWeights[layer].beta1[i] || 0);
+                      (1 - momentumFactor) * Math.min(Math.max(beta1Update, -1), 1);
                   t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
+
+                  const gamma2Update = isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
+                      ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
+                      : t.layerNormWeights[layer].gamma2[i] || 1;
                   this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
-                          ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
-                          : t.layerNormWeights[layer].gamma2[i] || 1);
+                      (1 - momentumFactor) * Math.min(Math.max(gamma2Update, -1), 1);
                   t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
+
+                  const beta2Update = isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
+                      ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
+                      : t.layerNormWeights[layer].beta2[i] || 0;
                   this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
-                      (1 - momentumFactor) * (isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
-                          ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
-                          : t.layerNormWeights[layer].beta2[i] || 0);
+                      (1 - momentumFactor) * Math.min(Math.max(beta2Update, -1), 1);
                   t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
               }
           });
@@ -654,7 +684,7 @@ class HiveMind {
           if (topPerformers.includes(idx)) return;
 
           const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
-          const swarmInfluence = 1 + this.#swarmIntelligenceFactor * this.#specializationScores[idx];
+          const swarmInfluence = 1 + this.#swarmIntelligenceFactor * (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0);
 
           // Update output weights
           for (let i = 0; i < t.outputWeights.length; i++) {
@@ -662,20 +692,22 @@ class HiveMind {
                   const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
                       ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
                       : 1;
+                  const update = isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
+                      ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
+                      : t.outputWeights[i][j] || 0;
                   this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
-                      (1 - momentumFactor) * (isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
-                          ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
-                          : t.outputWeights[i][j] || 0);
+                      (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
                   t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
               }
           }
 
           // Update output biases
           for (let i = 0; i < t.outputBias.length; i++) {
+              const update = isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
+                  ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
+                  : t.outputBias[i] || 0;
               this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
-                  (1 - momentumFactor) * (isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
-                      ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
-                      : t.outputBias[i] || 0);
+                  (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
               t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
           }
       });
@@ -706,15 +738,15 @@ class HiveMind {
     return x.map((val, i) => isValidNumber(val) && isValidNumber(variance) ? gamma[i] * (val - mean) / Math.sqrt(variance + eps) + beta[i] : 0);
   }
 
-  // Computes context-aware input embeddings by combining current inputs with historical attention outputs
-  // from attentionMemory, enhancing temporal dependencies. Projects inputs to hidden size, adds positional
-  // encodings, blends with historical context, and applies layer normalization. Handles invalid inputs and
-  // transformer indices gracefully, ensuring numerical stability and alignment with the transformer's architecture.
-  // Args:
-  //   inputs: Array of input values (length: inputSize, typically 6).
-  //   transformerIdx: Index of the transformer in the ensemble (0 to ensembleSize-1).
-  // Returns:
-  //   Array of shape [inputSize, hiddenSize] representing context-enhanced input embeddings.
+  /**
+   * Computes context-aware input embeddings by combining current inputs with historical attention outputs
+   * from attentionMemory, enhancing temporal dependencies. Projects inputs to hidden size, adds positional
+   * encodings, blends with historical context, and applies layer normalization. Handles invalid inputs and
+   * transformer indices gracefully, ensuring numerical stability and alignment with the transformer's architecture.
+   * @param {number[]} inputs - Array of input values (length: inputSize, typically 6).
+   * @param {number} transformerIdx - Index of the transformer in the ensemble (0 to ensembleSize-1).
+   * @returns {number[][]} Array of shape [inputSize, hiddenSize] representing context-enhanced input embeddings.
+   */
   #contextAwareAttention(inputs, transformerIdx) {
       // Validate inputs and transformer index
       if (
@@ -730,22 +762,22 @@ class HiveMind {
       }
 
       const transformer = this.#transformers[transformerIdx];
-      
-      // Project inputs to hidden size to match positional encoding dimensions
+
+      // Project inputs to hidden size using a simple linear transformation
       const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
-              // Use specialization weights as a projection matrix, mapping input to hidden size
+              // Use specialization weights to modulate input projection
               const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
                   ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j]
                   : 1;
               inputProjection[i][j] = isValidNumber(inputs[i])
-                  ? inputs[i] * specWeight
+                  ? inputs[i] * specWeight * (1 + this.#swarmIntelligenceFactor)
                   : 0;
           }
       }
 
-      // Initialize output array by adding positional encodings
+      // Add positional encodings to projected inputs
       const output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
@@ -755,20 +787,21 @@ class HiveMind {
           }
       }
 
-      // Incorporate historical context from attentionMemory if available
-      if (this.#attentionMemory[transformerIdx].length > 0) {
-          // Use the most recent attention output from memory
+      // Incorporate historical context from attentionMemory if available and valid
+      if (
+          this.#attentionMemory[transformerIdx].length > 0 &&
+          this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1].length === this.#inputSize &&
+          this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1].every(row => row.length === this.#hiddenSize)
+      ) {
           const recentAttention = this.#attentionMemory[transformerIdx][this.#attentionMemory[transformerIdx].length - 1];
-          const contextWeight = 0.3; // Weight for blending historical context (tunable)
-          
+          const contextWeight = 0.3; // Weight for blending historical context
+
           for (let i = 0; i < this.#inputSize; i++) {
               for (let j = 0; j < this.#hiddenSize; j++) {
-                  // Blend current input (with positional encoding) with historical attention output
                   const historicalValue = isValidNumber(recentAttention[i][j]) ? recentAttention[i][j] : 0;
                   const specializationFactor = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
                       ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j]
                       : 1;
-                  // Combine current input and historical context with specialization weighting
                   output[i][j] = isValidNumber(output[i][j])
                       ? (1 - contextWeight) * output[i][j] + contextWeight * historicalValue * specializationFactor
                       : historicalValue * specializationFactor;
@@ -789,11 +822,10 @@ class HiveMind {
   }
 
   /**
-   * Performs multi-head attention for a single transformer layer.
-   * Processes the input embeddings through multiple attention heads to capture diverse patterns.
-   * Integrates specialization weights to enhance attention focus and updates attention memory for historical context.
-   * Applies dropout for regularization during training.
-   *
+   * Performs multi-head attention for a single transformer layer. Processes the input embeddings
+   * through multiple attention heads to capture diverse patterns. Integrates specialization weights
+   * to enhance attention focus and updates attention memory for historical context. Applies dropout
+   * for regularization during training.
    * @param {number[][]} x - Input embeddings of shape [inputSize, hiddenSize], already enhanced with context.
    * @param {object} layer - Transformer layer object containing attention weights (Wq, Wk, Wv, Wo).
    * @param {number} transformerIdx - Index of the transformer in the ensemble (0 to ensembleSize-1).
@@ -814,31 +846,30 @@ class HiveMind {
           return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       }
 
-      // Define size of each attention head based on hidden size and number of heads
       const headSize = this.#hiddenSize / this.#numHeads;
+      if (!Number.isInteger(headSize)) {
+          // Fallback if hiddenSize is not divisible by numHeads
+          return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+      }
 
-      // Initialize query (Q), key (K), and value (V) matrices for attention computation
+      // Initialize query (Q), key (K), and value (V) matrices
       const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
 
-      // Compute Q, K, V matrices by applying attention weights with specialization enhancement
+      // Compute Q, K, V matrices with specialization weights
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
               for (let k = 0; k < this.#hiddenSize; k++) {
-                  // Apply specialization weight to emphasize transformer-specific patterns
                   const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k])
                       ? 1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][k]
                       : 1;
-                  // Compute query values, handling invalid numbers gracefully
                   Q[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wq[k][j])
                       ? x[i][k] * layer.Wq[k][j] * specWeight
                       : 0;
-                  // Compute key values with the same robustness
                   K[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wk[k][j])
                       ? x[i][k] * layer.Wk[k][j] * specWeight
                       : 0;
-                  // Compute value values similarly
                   V[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wv[k][j])
                       ? x[i][k] * layer.Wv[k][j] * specWeight
                       : 0;
@@ -846,28 +877,25 @@ class HiveMind {
           }
       }
 
-      // Initialize attention scores for each head to store dot-product results
+      // Compute attention scores for each head
       const attentionScores = Array(this.#numHeads).fill().map(() =>
           Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
       );
-
-      // Compute attention scores for each head by scaling dot products of Q and K
       for (let h = 0; h < this.#numHeads; h++) {
           for (let i = 0; i < this.#inputSize; i++) {
               for (let j = 0; j < this.#inputSize; j++) {
                   let sum = 0;
-                  // Calculate dot product for the current head
                   for (let k = 0; k < headSize; k++) {
-                      sum += isValidNumber(Q[i][h * headSize + k]) && isValidNumber(K[j][h * headSize + k])
-                          ? Q[i][h * headSize + k] * K[j][h * headSize + k]
+                      const idx = h * headSize + k;
+                      sum += isValidNumber(Q[i][idx]) && isValidNumber(K[j][idx])
+                          ? Q[i][idx] * K[j][idx]
                           : 0;
                   }
-                  // Scale attention score and apply specialization factor
                   attentionScores[h][i][j] = isValidNumber(sum)
                       ? sum / Math.sqrt(headSize) * this.#attentionScalingFactor * (1 + this.#specializationScores[transformerIdx])
                       : 0;
               }
-              // Apply softmax to normalize attention scores into probabilities
+              // Apply softmax to normalize attention scores
               attentionScores[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
           }
       }
@@ -878,15 +906,16 @@ class HiveMind {
           for (let i = 0; i < this.#inputSize; i++) {
               for (let j = 0; j < this.#inputSize; j++) {
                   for (let k = 0; k < headSize; k++) {
-                      output[i][h * headSize + k] += isValidNumber(attentionScores[h][i][j]) && isValidNumber(V[j][h * headSize + k])
-                          ? attentionScores[h][i][j] * V[j][h * headSize + k]
+                      const idx = h * headSize + k;
+                      output[i][idx] += isValidNumber(attentionScores[h][i][j]) && isValidNumber(V[j][idx])
+                          ? attentionScores[h][i][j] * V[j][idx]
                           : 0;
                   }
               }
           }
       }
 
-      // Apply output projection with specialization weights to produce final attention output
+      // Apply output projection with specialization weights
       const finalOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
       for (let i = 0; i < this.#inputSize; i++) {
           for (let j = 0; j < this.#hiddenSize; j++) {
@@ -899,15 +928,16 @@ class HiveMind {
                       : 0;
               }
           }
+          // Apply dropout to final output during training
+          finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, true);
       }
 
-      // Manage attention memory by storing the current output for future context awareness
+      // Update attention memory with the current output
       if (this.#attentionMemory[transformerIdx].length >= this.#contextWindow) {
-          this.#attentionMemory[transformerIdx].shift(); // Remove oldest entry to maintain fixed window size
+          this.#attentionMemory[transformerIdx].shift();
       }
-      this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice())); // Store a deep copy of the output
+      this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice()));
 
-      // Return the final attention output for further processing in the transformer
       return finalOutput;
   }
 
