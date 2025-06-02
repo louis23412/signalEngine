@@ -381,14 +381,14 @@ class HiveMind {
                   const outputDiff = outputs[i] - outputMean;
                   const inputStd = Math.sqrt(
                       inputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - inputMean) ** 2, 0) / inputs.length
-                  ) || 1;
+                  ) || 1e-6;
                   const outputStd = Math.sqrt(
                       outputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - outputMean) ** 2, 0) / outputs.length
-                  ) || 1;
+                  ) || 1e-6;
                   const numerator = inputDiff * outputDiff;
                   // Compute correlation, handling division by zero
-                  featureCorrelations[i][j] = isValidNumber(numerator) && inputStd > 0 && outputStd > 0
-                      ? numerator / (inputStd * outputStd)
+                  featureCorrelations[i][j] = isValidNumber(numerator) && inputStd > 1e-6 && outputStd > 1e-6
+                      ? Math.min(Math.max(numerator / (inputStd * outputStd), -1), 1)
                       : 0;
               }
           }
@@ -402,12 +402,13 @@ class HiveMind {
               : 0.5;
           const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
           // Combine factors with sigmoid for bounded scores
-          return sigmoid(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * trustFactor + 0.2 * performanceFactor));
+          const input = Math.min(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * trustFactor + 0.2 * performanceFactor), 5);
+          return sigmoid(input);
       });
 
       // Normalize specialization scores to ensure comparability
-      const maxScore = Math.max(...this.#specializationScores.filter(isValidNumber)) || 1;
-      this.#specializationScores = this.#specializationScores.map(score => isValidNumber(score) ? score / maxScore : 0);
+      const sumScores = this.#specializationScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
+      this.#specializationScores = this.#specializationScores.map(score => isValidNumber(score) ? score / sumScores : 0);
 
       // Update specialization weights based on correlations, mapping to hidden dimensions
       for (let i = 0; i < this.#ensembleSize; i++) {
@@ -420,9 +421,10 @@ class HiveMind {
                   const corr = featureCorrelations[i][inputIdx];
                   if (isValidNumber(corr)) {
                       // Update weights with learning rate, correlation, and specialization influence
-                      const update = this.#adaptiveLearningRate[i] * corr * specializationFactor;
+                      const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr) && isValidNumber(specializationFactor)
+                          ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor, -0.1), 0.1)
+                          : 0;
                       this.#specializationWeights[i][j][k] += update;
-                      // Clip weights to maintain numerical stability
                       this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -1), 1);
                   }
               }
@@ -434,9 +436,10 @@ class HiveMind {
           const meanCorr = featureCorrelations[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / this.#inputSize || 0;
           for (let j = 0; j < this.#hiddenSize; j++) {
               // Apply correlation-based update to attention weights, scaled by specialization score
-              const update = this.#adaptiveLearningRate[i] * meanCorr * (1 + this.#specializationScores[i]);
-              this.#attentionWeightMatrix[i][j] += isValidNumber(update) ? update : 0;
-              // Clip attention weights to maintain stability
+              const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(meanCorr) && isValidNumber(this.#specializationScores[i])
+                  ? Math.min(Math.max(this.#adaptiveLearningRate[i] * meanCorr * (1 + this.#specializationScores[i]), -0.1), 0.1)
+                  : 0;
+              this.#attentionWeightMatrix[i][j] += update;
               this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1), 1);
           }
       }
