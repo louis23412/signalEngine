@@ -65,7 +65,7 @@ class HiveMind {
     }))
   }));
   #attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-  #attentionBias = Array(this.#hiddenSize).fill(0);
+  #attentionBias = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill(0));
   #diversityWeight = 0.2;
   #maxPerformanceHistory = 100;
   #contextWindow = 10;
@@ -98,7 +98,8 @@ class HiveMind {
       beta1: Array(this.#hiddenSize).fill(0),
       gamma2: Array(this.#hiddenSize).fill(0),
       beta2: Array(this.#hiddenSize).fill(0)
-    }))
+    })),
+    attentionBias: Array(this.#hiddenSize).fill(0)
   }));
   #specializationWeights = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0)));
 
@@ -147,8 +148,10 @@ class HiveMind {
         this.#attentionWeightMatrix[i][j] = (Math.random() - 0.5) * Math.sqrt(2 / (this.#ensembleSize + this.#hiddenSize));
       }
     }
-    for (let i = 0; i < this.#hiddenSize; i++) {
-      this.#attentionBias[i] = 0;
+    for (let t = 0; t < this.#ensembleSize; t++) {
+      for (let i = 0; i < this.#hiddenSize; i++) {
+        this.#attentionBias[t][i] = (Math.random() - 0.5) * Math.sqrt(2 / this.#hiddenSize);
+      }
     }
   }
 
@@ -259,10 +262,9 @@ class HiveMind {
               }
           }
 
-          // Scale score and add bias for numerical stability
-          score = score / this.#inputSize + (isValidNumber(this.#attentionBias[t % this.#hiddenSize])
-              ? this.#attentionBias[t % this.#hiddenSize]
-              : 0);
+          // Scale score and add average of transformer-specific bias for numerical stability
+          const biasSum = this.#attentionBias[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0);
+          score = score / this.#inputSize + (biasSum / this.#hiddenSize);
 
           // Incorporate historical performance, trust, specialization, and swarm intelligence
           const historicalWeight = this.#historicalPerformance[t].length > 0
@@ -1406,7 +1408,8 @@ class HiveMind {
               beta1: Array(this.#hiddenSize).fill(0),
               gamma2: Array(this.#hiddenSize).fill(0),
               beta2: Array(this.#hiddenSize).fill(0)
-          }))
+          })),
+          attentionBias: Array(this.#hiddenSize).fill(0)
       }));
   }
 
@@ -1587,6 +1590,12 @@ class HiveMind {
           }
           this.#gradientAccumulation[idx].outputBias[0] += isValidNumber(delta) ? delta : 0;
 
+          for (let i = 0; i < this.#hiddenSize; i++) {
+            const biasGrad = isValidNumber(delta) ? delta / this.#inputSize : 0;
+            const clippedBiasUpdate = Math.min(Math.max(adjustedLearningRate * biasGrad, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+            this.#gradientAccumulation[idx].attentionBias[i] += clippedBiasUpdate;
+          }
+
           // Backpropagate through layers
           for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
               const normX = x.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma1, transformer.layerNormWeights[layer].beta1));
@@ -1657,6 +1666,9 @@ class HiveMind {
           }
           for (let j = 0; j < this.#outputSize; j++) {
               transformer.outputBias[j] -= this.#gradientAccumulation[idx].outputBias[j];
+          }
+          for (let i = 0; i < this.#hiddenSize; i++) {
+            this.#attentionBias[idx][i] -= this.#gradientAccumulation[idx].attentionBias[i];
           }
           for (let layer = 0; layer < this.#numLayers; layer++) {
               for (let i = 0; i < this.#hiddenSize; i++) {
@@ -1816,17 +1828,27 @@ class HiveMind {
     }
   }
 
-  getAttentionBias() {
-    return this.#attentionBias;
+  getAttentionBias(idx) {
+    if (
+      Number.isInteger(idx) &&
+      idx >= 0 &&
+      idx < this.#ensembleSize
+    ) {
+      return this.#attentionBias[idx];
+    }
+    return Array(this.#hiddenSize).fill(0);
   }
 
-  setAttentionBias(bias) {
+  setAttentionBias(idx, bias) {
     if (
+      Number.isInteger(idx) &&
+      idx >= 0 &&
+      idx < this.#ensembleSize &&
       Array.isArray(bias) &&
       bias.length === this.#hiddenSize &&
       bias.every(isValidNumber)
     ) {
-      this.#attentionBias = bias.map(val => isValidNumber(val) ? val : 0);
+      this.#attentionBias[idx] = bias.map(val => isValidNumber(val) ? val : 0);
     }
   }
 
