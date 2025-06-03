@@ -1399,16 +1399,16 @@ class HiveMind {
                 ? outputProb * Math.log((outputProb + 1e-6) / (targetProb + 1e-6)) + (1 - outputProb) * Math.log((1 - outputProb + 1e-6) / (1 - targetProb + 1e-6))
                 : 0;
 
-                let l2Reg = 0;
-                for (let t = 0; t < this.#ensembleSize; t++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        if (isValidNumber(this.#attentionWeightMatrix[t][j])) {
-                            l2Reg += Math.pow(this.#attentionWeightMatrix[t][j], 2);
-                        }
+            let l2Reg = 0;
+            for (let t = 0; t < this.#ensembleSize; t++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    if (isValidNumber(this.#attentionWeightMatrix[t][j])) {
+                        l2Reg += Math.pow(this.#attentionWeightMatrix[t][j], 2);
                     }
                 }
-                const l2Loss = 0.0001 * l2Reg;
-                const totalLoss = this.#knowledgeDistillationLoss * klLoss + diversityLoss + l2Loss;
+            }
+            const l2Loss = 0.0001 * l2Reg;
+            const totalLoss = this.#knowledgeDistillationLoss * klLoss + diversityLoss + l2Loss;
 
             const adjustedLearningRate = this.#adaptiveLearningRate[idx];
             const grad = isValidNumber(totalLoss) ? totalLoss * adjustedLearningRate : 0;
@@ -1715,33 +1715,72 @@ class HiveMind {
                 }
 
                 // Update layer normalization weights
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    const gammaUpdate = adjustedLearningRate * grad;
-                    if (isValidNumber(gammaUpdate)) {
-                        const clippedGammaUpdate = Math.min(
-                            Math.max(gammaUpdate, -this.#gradientClippingThreshold),
-                            this.#gradientClippingThreshold
-                        );
-                        transformer.layerNormWeights[layer].gamma1[i] = isValidNumber(transformer.layerNormWeights[layer].gamma1[i])
-                            ? transformer.layerNormWeights[layer].gamma1[i] - clippedGammaUpdate
-                            : 1;
-                        transformer.layerNormWeights[layer].beta1[i] = isValidNumber(transformer.layerNormWeights[layer].beta1[i])
-                            ? transformer.layerNormWeights[layer].beta1[i] - clippedGammaUpdate
+                const normInput = attentionInput;
+                for (let i = 0; i < this.#inputSize; i++) {
+                    const gamma1Grad = Array(this.#hiddenSize).fill(0);
+                    const beta1Grad = Array(this.#hiddenSize).fill(0);
+                    const gamma2Grad = Array(this.#hiddenSize).fill(0);
+                    const beta2Grad = Array(this.#hiddenSize).fill(0);
+                    const meanNorm = normInput[i].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
+                    const varianceNorm = normInput[i].reduce((sum, val) => sum + Math.pow(val - meanNorm, 2), 0) / this.#hiddenSize;
+                    const stdNorm = Math.sqrt(varianceNorm + 1e-6);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const normalized = (normInput[i][j] - meanNorm) / stdNorm;
+                        gamma1Grad[j] = isValidNumber(qGrad[i][j]) && isValidNumber(normalized)
+                            ? qGrad[i][j] * normalized
                             : 0;
-                        transformer.layerNormWeights[layer].gamma2[i] = isValidNumber(transformer.layerNormWeights[layer].gamma2[i])
-                            ? transformer.layerNormWeights[layer].gamma2[i] - clippedGammaUpdate
-                            : 1;
-                        transformer.layerNormWeights[layer].beta2[i] = isValidNumber(transformer.layerNormWeights[layer].beta2[i])
-                            ? transformer.layerNormWeights[layer].beta2[i] - clippedGammaUpdate
+                        beta1Grad[j] = isValidNumber(qGrad[i][j]) ? qGrad[i][j] : 0;
+                        gamma2Grad[j] = isValidNumber(grad) && isValidNumber(normalized)
+                            ? grad * normalized
                             : 0;
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i] += clippedGammaUpdate;
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i] += clippedGammaUpdate;
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += clippedGammaUpdate;
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += clippedGammaUpdate;
+                        beta2Grad[j] = isValidNumber(grad) ? grad : 0;
+                        const updateGamma1 = adjustedLearningRate * gamma1Grad[j];
+                        const updateBeta1 = adjustedLearningRate * beta1Grad[j];
+                        const updateGamma2 = adjustedLearningRate * gamma2Grad[j];
+                        const updateBeta2 = adjustedLearningRate * beta2Grad[j];
+                        if (isValidNumber(updateGamma1)) {
+                            const clippedUpdate = Math.min(
+                                Math.max(updateGamma1, -this.#gradientClippingThreshold),
+                                this.#gradientClippingThreshold
+                            );
+                            transformer.layerNormWeights[layer].gamma1[j] = isValidNumber(transformer.layerNormWeights[layer].gamma1[j])
+                                ? transformer.layerNormWeights[layer].gamma1[j] - clippedUpdate
+                                : 1;
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += clippedUpdate;
+                        }
+                        if (isValidNumber(updateBeta1)) {
+                            const clippedUpdate = Math.min(
+                                Math.max(updateBeta1, -this.#gradientClippingThreshold),
+                                this.#gradientClippingThreshold
+                            );
+                            transformer.layerNormWeights[layer].beta1[j] = isValidNumber(transformer.layerNormWeights[layer].beta1[j])
+                                ? transformer.layerNormWeights[layer].beta1[j] - clippedUpdate
+                                : 0;
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += clippedUpdate;
+                        }
+                        if (isValidNumber(updateGamma2)) {
+                            const clippedUpdate = Math.min(
+                                Math.max(updateGamma2, -this.#gradientClippingThreshold),
+                                this.#gradientClippingThreshold
+                            );
+                            transformer.layerNormWeights[layer].gamma2[j] = isValidNumber(transformer.layerNormWeights[layer].gamma2[j])
+                                ? transformer.layerNormWeights[layer].gamma2[j] - clippedUpdate
+                                : 1;
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[j] += clippedUpdate;
+                        }
+                        if (isValidNumber(updateBeta2)) {
+                            const clippedUpdate = Math.min(
+                                Math.max(updateBeta2, -this.#gradientClippingThreshold),
+                                this.#gradientClippingThreshold
+                            );
+                            transformer.layerNormWeights[layer].beta2[j] = isValidNumber(transformer.layerNormWeights[layer].beta2[j])
+                                ? transformer.layerNormWeights[layer].beta2[j] - clippedUpdate
+                                : 0;
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[j] += clippedUpdate;
+                        }
                     }
                 }
-            }
-        });
+            }});
 
         // Reset gradient accumulation
         this.#gradientAccumulation = this.#gradientAccumulation.map(() => ({
@@ -2075,6 +2114,29 @@ class HiveMind {
                         : 0;
                 }
 
+                // Layer normalization gradients for gamma2 and beta2
+                const normAttentionGrad = grad.slice(); // Gradient before FFN
+                const gamma2Grad = Array(this.#hiddenSize).fill(0);
+                const beta2Grad = Array(this.#hiddenSize).fill(0);
+                const meanAttention = normAttention[0].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
+                const varianceAttention = normAttention[0].reduce((sum, val) => sum + Math.pow(val - meanAttention, 2), 0) / this.#hiddenSize;
+                const stdAttention = Math.sqrt(varianceAttention + 1e-6);
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    const normalized = (normAttention[0][i] - meanAttention) / stdAttention;
+                    gamma2Grad[i] = isValidNumber(normAttentionGrad[i]) && isValidNumber(normalized)
+                        ? normAttentionGrad[i] * normalized
+                        : 0;
+                    beta2Grad[i] = isValidNumber(normAttentionGrad[i]) ? normAttentionGrad[i] : 0;
+                    const updateGamma = adjustedLearningRate * gamma2Grad[i];
+                    const updateBeta = adjustedLearningRate * beta2Grad[i];
+                    this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += isValidNumber(updateGamma)
+                        ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
+                        : 0;
+                    this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += isValidNumber(updateBeta)
+                        ? Math.min(Math.max(updateBeta, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
+                        : 0;
+                }
+
                 // Attention gradients
                 const attentionGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
                 for (let i = 0; i < this.#inputSize; i++) {
@@ -2156,6 +2218,31 @@ class HiveMind {
                         }
                     }
                 }
+
+                // Layer normalization gradients for gamma1 and beta1
+                const normXGrad = qGrad; // Gradient before attention
+                for (let i = 0; i < this.#inputSize; i++) {
+                    const gamma1Grad = Array(this.#hiddenSize).fill(0);
+                    const beta1Grad = Array(this.#hiddenSize).fill(0);
+                    const meanX = normX[i].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
+                    const varianceX = normX[i].reduce((sum, val) => sum + Math.pow(val - meanX, 2), 0) / this.#hiddenSize;
+                    const stdX = Math.sqrt(varianceX + 1e-6);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const normalized = (normX[i][j] - meanX) / stdX;
+                        gamma1Grad[j] = isValidNumber(normXGrad[i][j]) && isValidNumber(normalized)
+                            ? normXGrad[i][j] * normalized
+                            : 0;
+                        beta1Grad[j] = isValidNumber(normXGrad[i][j]) ? normXGrad[i][j] : 0;
+                        const updateGamma = adjustedLearningRate * gamma1Grad[j];
+                        const updateBeta = adjustedLearningRate * beta1Grad[j];
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma)
+                            ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
+                            : 0;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta)
+                            ? Math.min(Math.max(updateBeta, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
+                            : 0;
+                    }
+                }
                 grad = qGrad[0]; // Update gradient for the next layer
             }
         });
@@ -2214,6 +2301,20 @@ class HiveMind {
                             ? this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j]
                             : 0;
                     }
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    transformer.layerNormWeights[layer].gamma1[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i]
+                        : 0;
+                    transformer.layerNormWeights[layer].beta1[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i]
+                        : 0;
+                    transformer.layerNormWeights[layer].gamma2[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i]
+                        : 0;
+                    transformer.layerNormWeights[layer].beta2[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i]
+                        : 0;
                 }
             }
 
