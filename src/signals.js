@@ -71,7 +71,7 @@ class HiveMind {
     #contextWindow = 10;
     #knowledgeDistillationLoss = 0.1;
     #attentionScalingFactor = 1.0;
-    #gradientClippingThreshold = 2.0;
+    #gradientClippingThreshold = 5.0;
     #swarmIntelligenceFactor = 0.3;
     #adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
     #trustScoresHistory = Array(this.#ensembleSize).fill().map(() => []);
@@ -146,7 +146,7 @@ class HiveMind {
         this.#normalizeEnsembleWeights();
         for (let i = 0; i < this.#ensembleSize; i++) {
             for (let j = 0; j < this.#hiddenSize; j++) {
-                this.#attentionWeightMatrix[i][j] = (Math.random() - 0.5) * Math.sqrt(6 / this.#hiddenSize);
+                this.#attentionWeightMatrix[i][j] = (Math.random() - 0.5) * Math.sqrt(2 / this.#hiddenSize);
             }
         }
         for (let t = 0; t < this.#ensembleSize; t++) {
@@ -520,18 +520,14 @@ class HiveMind {
         // Update attention weight matrix to reflect specialization
         for (let i = 0; i < this.#ensembleSize; i++) {
             const meanCorr = featureCorrelations[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / this.#inputSize || 0;
-            // FIX: Compute gradient-based update for attention weight matrix using loss contribution
             const specializationFactor = 1 + (isValidNumber(this.#specializationScores[i]) ? this.#specializationScores[i] * this.#swarmIntelligenceFactor : 0);
             for (let j = 0; j < this.#hiddenSize; j++) {
-                const currentWeight = this.#attentionWeightMatrix[i][j];
-                const grad = isValidNumber(meanCorr) && isValidNumber(currentWeight)
-                    ? meanCorr * specializationFactor // Remove currentWeight scaling to prevent decay
-                    : 0;
+                const grad = isValidNumber(meanCorr) ? meanCorr * specializationFactor : 0;
                 const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(grad)
                     ? this.#adaptiveLearningRate[i] * grad
                     : 0;
                 this.#attentionWeightMatrix[i][j] += update;
-                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -0.5), 0.5); // Tighter clipping
+                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0); // Relaxed clipping
             }
         }
 
@@ -847,6 +843,9 @@ class HiveMind {
     }
 
     #normalizeAttentionWeights() {
+        // Apply normalization every 10 training steps to allow weight evolution
+        if (this.#trainingStepCount % 10 !== 0) return;
+
         for (let i = 0; i < this.#ensembleSize; i++) {
             let norm = 0;
             for (let j = 0; j < this.#hiddenSize; j++) {
