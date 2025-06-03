@@ -66,7 +66,7 @@ class HiveMind {
     }));
     #attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill(0));
     #attentionBias = Array(this.#ensembleSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-    #diversityWeight = 0.2;
+    #diversityWeight = 0.5;
     #maxPerformanceHistory = 100;
     #contextWindow = 10;
     #knowledgeDistillationLoss = 0.1;
@@ -520,14 +520,16 @@ class HiveMind {
         // Update attention weight matrix to reflect specialization
         for (let i = 0; i < this.#ensembleSize; i++) {
             const meanCorr = featureCorrelations[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / this.#inputSize || 0;
-            const specializationFactor = 1 + (isValidNumber(this.#specializationScores[i]) ? this.#specializationScores[i] * this.#swarmIntelligenceFactor : 0);
+            const specializationFactor = 1 + (isValidNumber(this.#specializationScores[i]) ? this.#specializationScores[i] * this.#swarmIntelligenceFactor * 2 : 0); // Amplify specialization
             for (let j = 0; j < this.#hiddenSize; j++) {
                 const grad = isValidNumber(meanCorr) ? meanCorr * specializationFactor : 0;
                 const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(grad)
-                    ? this.#adaptiveLearningRate[i] * grad
+                    ? this.#adaptiveLearningRate[i] * grad * 2 // Increase update magnitude
                     : 0;
                 this.#attentionWeightMatrix[i][j] += update;
-                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0); // Relaxed clipping
+                // Add noise to prevent convergence
+                this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * 0.005;
+                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
             }
         }
 
@@ -843,8 +845,8 @@ class HiveMind {
     }
 
     #normalizeAttentionWeights() {
-        // Apply normalization every 10 training steps to allow weight evolution
-        if (this.#trainingStepCount % 10 !== 0) return;
+        // Apply normalization every 100 training steps to reduce over-constraint
+        if (this.#trainingStepCount % 100 !== 0) return;
 
         for (let i = 0; i < this.#ensembleSize; i++) {
             let norm = 0;
@@ -858,6 +860,10 @@ class HiveMind {
                 this.#attentionWeightMatrix[i][j] = isValidNumber(this.#attentionWeightMatrix[i][j])
                     ? this.#attentionWeightMatrix[i][j] / norm
                     : 0;
+                // Add small noise to maintain diversity
+                this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * 0.01;
+                // Clip to prevent extreme values
+                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
             }
         }
     }
@@ -2210,13 +2216,22 @@ class HiveMind {
                     }
                 }
             }
-            // FIX: Apply accumulated gradients to attention bias
+
+            // Apply accumulated gradients to attention bias and weight matrix
             for (let i = 0; i < this.#hiddenSize; i++) {
-                const l2Penalty = 0.001 * this.#attentionBias[idx][i]; // Add L2 regularization
-                const update = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i])
-                    ? this.#gradientAccumulation[idx].attentionBias[i] + l2Penalty
-                    : l2Penalty;
-                this.#attentionBias[idx][i] -= Math.min(Math.max(update, -0.1), 0.1); // Clip updates
+                // Update attention bias
+                const l2PenaltyBias = 0.001 * this.#attentionBias[idx][i]; // L2 regularization for bias
+                const biasUpdate = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i])
+                    ? this.#gradientAccumulation[idx].attentionBias[i] + l2PenaltyBias
+                    : l2PenaltyBias;
+                this.#attentionBias[idx][i] -= Math.min(Math.max(biasUpdate, -0.1), 0.1); // Clip updates
+
+                // Update attention weight matrix with L2 regularization
+                const l2PenaltyWeight = 0.001 * this.#attentionWeightMatrix[idx][i]; // L2 regularization for weights
+                const weightUpdate = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i]) // Reuse gradient for simplicity
+                    ? this.#gradientAccumulation[idx].attentionBias[i] + l2PenaltyWeight
+                    : l2PenaltyWeight;
+                this.#attentionWeightMatrix[idx][i] -= Math.min(Math.max(weightUpdate, -0.1), 0.1); // Clip updates
             }
         });
 
