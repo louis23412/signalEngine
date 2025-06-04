@@ -184,7 +184,7 @@ class NeuralSignalEngine {
     dynamicThreshold = Math.max(40, Math.min(80, isValidNumber(dynamicThreshold) ? dynamicThreshold : 60));
     if (!isValidNumber(confidence)) return parseFloat(dynamicThreshold.toFixed(3));
     const confidenceProximity = Math.abs(confidence - dynamicThreshold) / 100;
-    return parseFloat((dynamicThreshold * (1 - 0.1 * confidenceProximity)).toFixed(3));
+    return (dynamicThreshold * (1 - 0.1 * confidenceProximity));
   }
 
   #updateOpenTrades(candles) {
@@ -327,8 +327,12 @@ class NeuralSignalEngine {
 
     const hysteresisFactor = 1.05;
     const buyThreshold = adaptiveThreshold * (probBuy > probHold ? 1 : hysteresisFactor);
-    
-    return decisionScore >= buyThreshold ? 'buy' : 'hold';
+
+    return {
+      suggestedAction : decisionScore >= buyThreshold ? 'buy' : 'hold',
+      decisionScore,
+      buyThreshold
+    }
   }
 
   getSignal(candles) {
@@ -351,11 +355,9 @@ class NeuralSignalEngine {
     const key = this.#generateFeatureKey(features);
     const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
     const pattern = patternStmt.get(key, JSON.stringify(features));
-    const pseudoWins = 1;
-    const pseudoUses = 2;
     const winRate = pattern && pattern.usage_count > 0
-      ? (pattern.win_count + pseudoWins) / (pattern.usage_count + pseudoUses)
-      : 0.5;
+      ? pattern.win_count / pattern.usage_count
+      : 0;
 
     const dynamicThreshold = this.#computeDynamicThreshold(indicators, confidence, this.#config.baseConfidenceThreshold, winRate);
     const multiplier = this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * Math.max(0, (confidence - dynamicThreshold) / (100 - dynamicThreshold));
@@ -405,15 +407,19 @@ class NeuralSignalEngine {
       dynamicThreshold
     );
 
-    const suggestedAction = this.#computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate);
+    const filteredDecision = this.#computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate);
 
     return {
-      suggestedAction,
-      multiplier: isValidNumber(multiplier) ? truncateToDecimals(multiplier, 3) : this.#config.minMultiplier,
+      suggestedAction: filteredDecision.suggestedAction,
       entryPrice,
       sellPrice: isValidNumber(sellPrice) ? truncateToDecimals(sellPrice, 2) : 0,
       stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
-      expectedReward: truncateToDecimals(expectedReward, 8)
+      multiplier: isValidNumber(multiplier) ? truncateToDecimals(multiplier, 3) : this.#config.minMultiplier,
+      expectedReward: truncateToDecimals(expectedReward, 8),
+      rawConfidence: confidence,
+      rawThreshold: dynamicThreshold,
+      filteredConfidence: filteredDecision.decisionScore,
+      filteredThreshold: filteredDecision.buyThreshold
     };
   }
 }

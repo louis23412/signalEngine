@@ -117,20 +117,16 @@ class HiveMind {
         let db;
 
         try {
-            // Ensure the state directory exists
             if (!fs.existsSync(directoryPath)) {
                 fs.mkdirSync(directoryPath, { recursive: true });
             }
 
-            // Initialize database with Write-Ahead Logging for performance
             db = new Database(dbPath, { fileMustExist: false });
             db.pragma('journal_mode = WAL');
             db.pragma('synchronous = NORMAL');
 
-            // Begin transaction
             db.exec('BEGIN TRANSACTION');
 
-            // Create tables with versioning to avoid conflicts
             db.exec(`
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
@@ -256,11 +252,9 @@ class HiveMind {
                 );
             `);
 
-            // Save metadata (e.g., training step count)
             const insertMetadata = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
             insertMetadata.run('trainingStepCount', this.#trainingStepCount.toString());
 
-            // Save ensemble weights
             const insertEnsembleWeights = db.prepare('INSERT OR REPLACE INTO ensemble_weights (idx, weight) VALUES (?, ?)');
             this.#ensembleWeights.forEach((weight, idx) => {
                 if (isValidNumber(weight)) {
@@ -268,7 +262,6 @@ class HiveMind {
                 }
             });
 
-            // Save performance scores
             const insertPerformanceScores = db.prepare('INSERT OR REPLACE INTO performance_scores (idx, score) VALUES (?, ?)');
             this.#performanceScores.forEach((score, idx) => {
                 if (isValidNumber(score)) {
@@ -276,7 +269,6 @@ class HiveMind {
                 }
             });
 
-            // Save agreement scores
             const insertAgreementScores = db.prepare('INSERT OR REPLACE INTO agreement_scores (idx, score) VALUES (?, ?)');
             this.#agreementScores.forEach((score, idx) => {
                 if (isValidNumber(score)) {
@@ -284,7 +276,6 @@ class HiveMind {
                 }
             });
 
-            // Save specialization scores
             const insertSpecializationScores = db.prepare('INSERT OR REPLACE INTO specialization_scores (idx, score) VALUES (?, ?)');
             this.#specializationScores.forEach((score, idx) => {
                 if (isValidNumber(score)) {
@@ -292,7 +283,6 @@ class HiveMind {
                 }
             });
 
-            // Save historical performance
             const insertHistoricalPerformance = db.prepare('INSERT OR REPLACE INTO historical_performance (idx, step, score) VALUES (?, ?, ?)');
             this.#historicalPerformance.forEach((history, idx) => {
                 history.forEach((score, step) => {
@@ -302,7 +292,6 @@ class HiveMind {
                 });
             });
 
-            // Save trust scores history
             const insertTrustScoresHistory = db.prepare('INSERT OR REPLACE INTO trust_scores_history (idx, step, score) VALUES (?, ?, ?)');
             this.#trustScoresHistory.forEach((history, idx) => {
                 history.forEach((score, step) => {
@@ -312,7 +301,6 @@ class HiveMind {
                 });
             });
 
-            // Save adaptive learning rates
             const insertAdaptiveLearningRate = db.prepare('INSERT OR REPLACE INTO adaptive_learning_rate (idx, rate) VALUES (?, ?)');
             this.#adaptiveLearningRate.forEach((rate, idx) => {
                 if (isValidNumber(rate)) {
@@ -320,7 +308,6 @@ class HiveMind {
                 }
             });
 
-            // Save attention weight matrix
             const insertAttentionWeightMatrix = db.prepare('INSERT OR REPLACE INTO attention_weight_matrix (idx, row, value) VALUES (?, ?, ?)');
             this.#attentionWeightMatrix.forEach((weights, idx) => {
                 weights.forEach((value, row) => {
@@ -330,7 +317,6 @@ class HiveMind {
                 });
             });
 
-            // Save attention bias
             const insertAttentionBias = db.prepare('INSERT OR REPLACE INTO attention_bias (idx, row, value) VALUES (?, ?, ?)');
             this.#attentionBias.forEach((biases, idx) => {
                 biases.forEach((value, row) => {
@@ -340,7 +326,6 @@ class HiveMind {
                 });
             });
 
-            // Save specialization weights
             const insertSpecializationWeights = db.prepare('INSERT OR REPLACE INTO specialization_weights (idx, row, col, value) VALUES (?, ?, ?, ?)');
             this.#specializationWeights.forEach((matrix, idx) => {
                 matrix.forEach((row, r) => {
@@ -352,7 +337,6 @@ class HiveMind {
                 });
             });
 
-            // Save attention memory
             const insertAttentionMemory = db.prepare('INSERT OR REPLACE INTO attention_memory (idx, window, seq, dim, value) VALUES (?, ?, ?, ?, ?)');
             this.#attentionMemory.forEach((memory, idx) => {
                 memory.forEach((window, w) => {
@@ -366,7 +350,6 @@ class HiveMind {
                 });
             });
 
-            // Save transformers (weights and biases)
             const insertTransformerWeights = db.prepare('INSERT OR REPLACE INTO transformers (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
             const insertTransformerBiases = db.prepare('INSERT OR REPLACE INTO transformer_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
             const insertTransformerLayerNorm = db.prepare('INSERT OR REPLACE INTO transformer_layer_norm (idx, layer, norm_type, row, value) VALUES (?, ?, ?, ?, ?)');
@@ -463,7 +446,6 @@ class HiveMind {
                 });
             });
 
-            // Save momentum weights and biases
             const insertMomentumWeights = db.prepare('INSERT OR REPLACE INTO momentum_weights (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
             const insertMomentumBiases = db.prepare('INSERT OR REPLACE INTO momentum_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
             this.#momentumWeights.forEach((momentum, idx) => {
@@ -559,7 +541,6 @@ class HiveMind {
                 });
             });
 
-            // Save gradient accumulation
             const insertGradientAccumulation = db.prepare('INSERT OR REPLACE INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
             const insertGradientBiases = db.prepare('INSERT OR REPLACE INTO gradient_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
             this.#gradientAccumulation.forEach((gradient, idx) => {
@@ -655,12 +636,9 @@ class HiveMind {
                 });
             });
 
-            // Commit transaction
             db.exec('COMMIT');
         } catch (error) {
-            // Rollback on error
             db.exec('ROLLBACK');
-            console.error('Error saving HiveMind state:', error);
         } finally {
             if (db) {
                 db.close();
@@ -674,20 +652,17 @@ class HiveMind {
 
         try {
             if (!fs.existsSync(dbPath)) {
-                console.warn('No saved state found at', dbPath);
                 return;
             }
 
             db = new Database(dbPath, { readonly: true });
 
-            // Load metadata
             const metadataStmt = db.prepare('SELECT key, value FROM metadata WHERE key = ?');
             const trainingStepCount = metadataStmt.get('trainingStepCount');
             if (trainingStepCount && isValidNumber(Number(trainingStepCount.value))) {
                 this.#trainingStepCount = Number(trainingStepCount.value);
             }
 
-            // Load ensemble weights
             const ensembleWeightsStmt = db.prepare('SELECT idx, weight FROM ensemble_weights');
             const ensembleWeights = ensembleWeightsStmt.all();
             ensembleWeights.forEach(({ idx, weight }) => {
@@ -697,7 +672,6 @@ class HiveMind {
             });
             this.#normalizeEnsembleWeights();
 
-            // Load performance scores
             const performanceScoresStmt = db.prepare('SELECT idx, score FROM performance_scores');
             const performanceScores = performanceScoresStmt.all();
             performanceScores.forEach(({ idx, score }) => {
@@ -706,7 +680,6 @@ class HiveMind {
                 }
             });
 
-            // Load agreement scores
             const agreementScoresStmt = db.prepare('SELECT idx, score FROM agreement_scores');
             const agreementScores = agreementScoresStmt.all();
             agreementScores.forEach(({ idx, score }) => {
@@ -715,7 +688,6 @@ class HiveMind {
                 }
             });
 
-            // Load specialization scores
             const specializationScoresStmt = db.prepare('SELECT idx, score FROM specialization_scores');
             const specializationScores = specializationScoresStmt.all();
             specializationScores.forEach(({ idx, score }) => {
@@ -724,7 +696,6 @@ class HiveMind {
                 }
             });
 
-            // Load historical performance
             const historicalPerformanceStmt = db.prepare('SELECT idx, step, score FROM historical_performance ORDER BY idx, step');
             const historicalPerformance = historicalPerformanceStmt.all();
             this.#historicalPerformance = Array(this.#ensembleSize).fill().map(() => []);
@@ -734,7 +705,6 @@ class HiveMind {
                 }
             });
 
-            // Load trust scores history
             const trustScoresHistoryStmt = db.prepare('SELECT idx, step, score FROM trust_scores_history ORDER BY idx, step');
             const trustScoresHistory = trustScoresHistoryStmt.all();
             this.#trustScoresHistory = Array(this.#ensembleSize).fill().map(() => []);
@@ -744,7 +714,6 @@ class HiveMind {
                 }
             });
 
-            // Load adaptive learning rates
             const adaptiveLearningRateStmt = db.prepare('SELECT idx, rate FROM adaptive_learning_rate');
             const adaptiveLearningRates = adaptiveLearningRateStmt.all();
             adaptiveLearningRates.forEach(({ idx, rate }) => {
@@ -753,7 +722,6 @@ class HiveMind {
                 }
             });
 
-            // Load attention weight matrix
             const attentionWeightMatrixStmt = db.prepare('SELECT idx, row, value FROM attention_weight_matrix');
             const attentionWeightMatrix = attentionWeightMatrixStmt.all();
             attentionWeightMatrix.forEach(({ idx, row, value }) => {
@@ -762,7 +730,6 @@ class HiveMind {
                 }
             });
 
-            // Load attention bias
             const attentionBiasStmt = db.prepare('SELECT idx, row, value FROM attention_bias');
             const attentionBias = attentionBiasStmt.all();
             attentionBias.forEach(({ idx, row, value }) => {
@@ -771,7 +738,6 @@ class HiveMind {
                 }
             });
 
-            // Load specialization weights
             const specializationWeightsStmt = db.prepare('SELECT idx, row, col, value FROM specialization_weights');
             const specializationWeights = specializationWeightsStmt.all();
             specializationWeights.forEach(({ idx, row, col, value }) => {
@@ -785,7 +751,6 @@ class HiveMind {
                 }
             });
 
-            // Load attention memory
             const attentionMemoryStmt = db.prepare('SELECT idx, window, seq, dim, value FROM attention_memory');
             const attentionMemory = attentionMemoryStmt.all();
             this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
@@ -803,7 +768,6 @@ class HiveMind {
                 }
             });
 
-            // Load transformers
             const transformerWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM transformers');
             const transformerBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM transformer_biases');
             const transformerLayerNormStmt = db.prepare('SELECT idx, layer, norm_type, row, value FROM transformer_layer_norm');
@@ -873,7 +837,6 @@ class HiveMind {
                 }
             });
 
-            // Load momentum weights and biases
             const momentumWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM momentum_weights');
             const momentumBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM momentum_biases');
             const momentumWeights = momentumWeightsStmt.all();
@@ -931,7 +894,6 @@ class HiveMind {
                 }
             });
 
-            // Load gradient accumulation
             const gradientAccumulationStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
             const gradientBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM gradient_biases');
             const gradientAccumulation = gradientAccumulationStmt.all();
@@ -990,7 +952,6 @@ class HiveMind {
             });
 
         } catch (error) {
-            console.error('Error loading HiveMind state:', error);
         } finally {
             if (db) {
                 db.close();
