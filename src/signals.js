@@ -243,8 +243,9 @@ class NeuralSignalEngine {
         `);
         const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
 
-        let tempCounter = 1
+        let tempCounter = 0
         for (const trade of closedTrades) {
+          tempCounter++
           const key = this.#generateFeatureKey(trade.features);
           const pattern = patternStmt.get(key, JSON.stringify(trade.features));
           const isWin = trade.outcome > 0 ? 1 : 0;
@@ -256,10 +257,8 @@ class NeuralSignalEngine {
           updateQTableStmt.run(trade.stateKey, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.stateKey);
 
           const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
-          console.log('Training.......')
-          this.#transformer.train(trade.features, trade.outcome > 0 ? (0.5 + 0.5 * winRate) : 0);
-          console.log(`Training complete! ${tempCounter} / ${closedTrades.length}`)
-          tempCounter++
+          const target = (trade.outcome + 1) / 2 * (0.8 + 0.2 * winRate);
+          this.#transformer.train(trade.features, target, winRate, tempCounter === closedTrades.length);
         }
 
         for (const key of keysToDelete) {

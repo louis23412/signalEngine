@@ -2521,7 +2521,7 @@ class HiveMind {
         return [isValidNumber(finalOutput[0]) ? finalOutput[0] : 0];
     }
 
-    train(inputs, target, winRate = 0.5) {
+    train(inputs, target, winRate = 0.5, shouldSave = true) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
@@ -2928,7 +2928,10 @@ class HiveMind {
             this.#shareWeights();
         }
         this.#normalizeAttentionWeights();
-        this.#saveState();
+
+        if (shouldSave) {
+            this.#saveState();
+        }
     }
 }
 
