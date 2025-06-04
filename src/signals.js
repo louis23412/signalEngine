@@ -106,36 +106,39 @@ class HiveMind {
     constructor() {
         const xavierInit = (rows, cols) => Array(rows).fill().map(() => Array(cols).fill().map(() => (Math.random() - 0.5) * Math.sqrt(2 / (rows + cols))));
         for (let i = 0; i < this.#ensembleSize; i++) {
-        const transformer = {
-            positionalEncoding: Array(this.#inputSize).fill().map((_, idx) => {
-            const pos = idx / (10000 ** (2 * Math.floor(idx / 2) / this.#hiddenSize));
-            return Array(this.#hiddenSize).fill().map((_, d) => d % 2 === 0 ? Math.sin(pos) : Math.cos(pos));
-            }),
-            attentionWeights: Array(this.#numLayers).fill().map(() => ({
-            Wq: xavierInit(this.#hiddenSize, this.#hiddenSize),
-            Wk: xavierInit(this.#hiddenSize, this.#hiddenSize),
-            Wv: xavierInit(this.#hiddenSize, this.#hiddenSize),
-            Wo: xavierInit(this.#hiddenSize, this.#hiddenSize)
-            })),
-            ffnWeights: Array(this.#numLayers).fill().map(() => ({
-            W1: xavierInit(this.#hiddenSize, this.#feedForwardSize),
-            W2: xavierInit(this.#feedForwardSize, this.#hiddenSize),
-            b1: Array(this.#feedForwardSize).fill(0),
-            b2: Array(this.#hiddenSize).fill(0)
-            })),
-            layerNormWeights: Array(this.#numLayers).fill().map(() => ({
-            gamma1: Array(this.#hiddenSize).fill(1),
-            beta1: Array(this.#hiddenSize).fill(0),
-            gamma2: Array(this.#hiddenSize).fill(1),
-            beta2: Array(this.#hiddenSize).fill(0)
-            })),
-            outputWeights: xavierInit(this.#hiddenSize, this.#outputSize),
-            outputBias: Array(this.#outputSize).fill(0)
-        };
-        this.#transformers.push(transformer);
-        this.#ensembleWeights.push(1 / this.#ensembleSize);
-        this.#historicalPerformance[i] = [0];
-        this.#trustScoresHistory[i] = [0];
+            const transformer = {
+                positionalEncoding: Array(this.#inputSize).fill().map((_, pos) => {
+                    return Array(this.#hiddenSize).fill().map((_, d) => {
+                        const exponent = 2 * Math.floor(d / 2) / this.#hiddenSize;
+                        const freq = 1 / (10000 ** exponent);
+                        return d % 2 === 0 ? Math.sin(pos * freq) : Math.cos(pos * freq);
+                    });
+                }),
+                attentionWeights: Array(this.#numLayers).fill().map(() => ({
+                    Wq: xavierInit(this.#hiddenSize, this.#hiddenSize),
+                    Wk: xavierInit(this.#hiddenSize, this.#hiddenSize),
+                    Wv: xavierInit(this.#hiddenSize, this.#hiddenSize),
+                    Wo: xavierInit(this.#hiddenSize, this.#hiddenSize)
+                })),
+                ffnWeights: Array(this.#numLayers).fill().map(() => ({
+                    W1: xavierInit(this.#hiddenSize, this.#feedForwardSize),
+                    W2: xavierInit(this.#feedForwardSize, this.#hiddenSize),
+                    b1: Array(this.#feedForwardSize).fill(0),
+                    b2: Array(this.#hiddenSize).fill(0)
+                })),
+                layerNormWeights: Array(this.#numLayers).fill().map(() => ({
+                    gamma1: Array(this.#hiddenSize).fill(1),
+                    beta1: Array(this.#hiddenSize).fill(0),
+                    gamma2: Array(this.#hiddenSize).fill(1),
+                    beta2: Array(this.#hiddenSize).fill(0)
+                })),
+                outputWeights: xavierInit(this.#hiddenSize, this.#outputSize),
+                outputBias: Array(this.#outputSize).fill(0)
+            };
+            this.#transformers.push(transformer);
+            this.#ensembleWeights.push(1 / this.#ensembleSize);
+            this.#historicalPerformance[i] = [0];
+            this.#trustScoresHistory[i] = [0];
             for (let j = 0; j < this.#hiddenSize; j++) {
                 for (let k = 0; k < this.#hiddenSize; k++) {
                     const scale = Math.sqrt(2 / (this.#hiddenSize + this.#hiddenSize)) * (1 + 0.05 * (j + k / this.#hiddenSize));
