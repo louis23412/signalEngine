@@ -1,3 +1,9 @@
+import fs from 'fs';
+import path from 'path';
+import Database from 'better-sqlite3';
+
+const directoryPath = path.join(import.meta.dirname, '..', 'state')
+
 const isValidNumber = (value) => {
   if (value == null) return false;
   const num = typeof value === 'string' ? Number(value) : value;
@@ -103,6 +109,893 @@ class HiveMind {
         }));
 
         this.#normalizeEnsembleWeights();
+        this.#loadState();
+    }
+
+    #saveState() {
+        const dbPath = path.join(directoryPath, 'hivemind_state.db');
+        let db;
+
+        try {
+            // Ensure the state directory exists
+            if (!fs.existsSync(directoryPath)) {
+                fs.mkdirSync(directoryPath, { recursive: true });
+            }
+
+            // Initialize database with Write-Ahead Logging for performance
+            db = new Database(dbPath, { fileMustExist: false });
+            db.pragma('journal_mode = WAL');
+            db.pragma('synchronous = NORMAL');
+
+            // Begin transaction
+            db.exec('BEGIN TRANSACTION');
+
+            // Create tables with versioning to avoid conflicts
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                CREATE TABLE IF NOT EXISTS ensemble_weights (
+                    idx INTEGER PRIMARY KEY,
+                    weight REAL
+                );
+                CREATE TABLE IF NOT EXISTS performance_scores (
+                    idx INTEGER PRIMARY KEY,
+                    score REAL
+                );
+                CREATE TABLE IF NOT EXISTS agreement_scores (
+                    idx INTEGER PRIMARY KEY,
+                    score REAL
+                );
+                CREATE TABLE IF NOT EXISTS specialization_scores (
+                    idx INTEGER PRIMARY KEY,
+                    score REAL
+                );
+                CREATE TABLE IF NOT EXISTS historical_performance (
+                    idx INTEGER,
+                    step INTEGER,
+                    score REAL,
+                    PRIMARY KEY (idx, step)
+                );
+                CREATE TABLE IF NOT EXISTS trust_scores_history (
+                    idx INTEGER,
+                    step INTEGER,
+                    score REAL,
+                    PRIMARY KEY (idx, step)
+                );
+                CREATE TABLE IF NOT EXISTS adaptive_learning_rate (
+                    idx INTEGER PRIMARY KEY,
+                    rate REAL
+                );
+                CREATE TABLE IF NOT EXISTS attention_weight_matrix (
+                    idx INTEGER,
+                    row INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, row)
+                );
+                CREATE TABLE IF NOT EXISTS attention_bias (
+                    idx INTEGER,
+                    row INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, row)
+                );
+                CREATE TABLE IF NOT EXISTS specialization_weights (
+                    idx INTEGER,
+                    row INTEGER,
+                    col INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, row, col)
+                );
+                CREATE TABLE IF NOT EXISTS attention_memory (
+                    idx INTEGER,
+                    window INTEGER,
+                    seq INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, seq, dim)
+                );
+                CREATE TABLE IF NOT EXISTS transformers (
+                    idx INTEGER,
+                    layer INTEGER,
+                    weight_type TEXT,
+                    row INTEGER,
+                    col INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, weight_type, row, col)
+                );
+                CREATE TABLE IF NOT EXISTS transformer_biases (
+                    idx INTEGER,
+                    layer INTEGER,
+                    bias_type TEXT,
+                    row INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, bias_type, row)
+                );
+                CREATE TABLE IF NOT EXISTS transformer_layer_norm (
+                    idx INTEGER,
+                    layer INTEGER,
+                    norm_type TEXT,
+                    row INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, norm_type, row)
+                );
+                CREATE TABLE IF NOT EXISTS momentum_weights (
+                    idx INTEGER,
+                    layer INTEGER,
+                    weight_type TEXT,
+                    row INTEGER,
+                    col INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, weight_type, row, col)
+                );
+                CREATE TABLE IF NOT EXISTS momentum_biases (
+                    idx INTEGER,
+                    layer INTEGER,
+                    bias_type TEXT,
+                    row INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, bias_type, row)
+                );
+                CREATE TABLE IF NOT EXISTS gradient_accumulation (
+                    idx INTEGER,
+                    layer INTEGER,
+                    weight_type TEXT,
+                    row INTEGER,
+                    col INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, weight_type, row, col)
+                );
+                CREATE TABLE IF NOT EXISTS gradient_biases (
+                    idx INTEGER,
+                    layer INTEGER,
+                    bias_type TEXT,
+                    row INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, bias_type, row)
+                );
+            `);
+
+            // Save metadata (e.g., training step count)
+            const insertMetadata = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
+            insertMetadata.run('trainingStepCount', this.#trainingStepCount.toString());
+
+            // Save ensemble weights
+            const insertEnsembleWeights = db.prepare('INSERT OR REPLACE INTO ensemble_weights (idx, weight) VALUES (?, ?)');
+            this.#ensembleWeights.forEach((weight, idx) => {
+                if (isValidNumber(weight)) {
+                    insertEnsembleWeights.run(idx, weight);
+                }
+            });
+
+            // Save performance scores
+            const insertPerformanceScores = db.prepare('INSERT OR REPLACE INTO performance_scores (idx, score) VALUES (?, ?)');
+            this.#performanceScores.forEach((score, idx) => {
+                if (isValidNumber(score)) {
+                    insertPerformanceScores.run(idx, score);
+                }
+            });
+
+            // Save agreement scores
+            const insertAgreementScores = db.prepare('INSERT OR REPLACE INTO agreement_scores (idx, score) VALUES (?, ?)');
+            this.#agreementScores.forEach((score, idx) => {
+                if (isValidNumber(score)) {
+                    insertAgreementScores.run(idx, score);
+                }
+            });
+
+            // Save specialization scores
+            const insertSpecializationScores = db.prepare('INSERT OR REPLACE INTO specialization_scores (idx, score) VALUES (?, ?)');
+            this.#specializationScores.forEach((score, idx) => {
+                if (isValidNumber(score)) {
+                    insertSpecializationScores.run(idx, score);
+                }
+            });
+
+            // Save historical performance
+            const insertHistoricalPerformance = db.prepare('INSERT OR REPLACE INTO historical_performance (idx, step, score) VALUES (?, ?, ?)');
+            this.#historicalPerformance.forEach((history, idx) => {
+                history.forEach((score, step) => {
+                    if (isValidNumber(score)) {
+                        insertHistoricalPerformance.run(idx, step, score);
+                    }
+                });
+            });
+
+            // Save trust scores history
+            const insertTrustScoresHistory = db.prepare('INSERT OR REPLACE INTO trust_scores_history (idx, step, score) VALUES (?, ?, ?)');
+            this.#trustScoresHistory.forEach((history, idx) => {
+                history.forEach((score, step) => {
+                    if (isValidNumber(score)) {
+                        insertTrustScoresHistory.run(idx, step, score);
+                    }
+                });
+            });
+
+            // Save adaptive learning rates
+            const insertAdaptiveLearningRate = db.prepare('INSERT OR REPLACE INTO adaptive_learning_rate (idx, rate) VALUES (?, ?)');
+            this.#adaptiveLearningRate.forEach((rate, idx) => {
+                if (isValidNumber(rate)) {
+                    insertAdaptiveLearningRate.run(idx, rate);
+                }
+            });
+
+            // Save attention weight matrix
+            const insertAttentionWeightMatrix = db.prepare('INSERT OR REPLACE INTO attention_weight_matrix (idx, row, value) VALUES (?, ?, ?)');
+            this.#attentionWeightMatrix.forEach((weights, idx) => {
+                weights.forEach((value, row) => {
+                    if (isValidNumber(value)) {
+                        insertAttentionWeightMatrix.run(idx, row, value);
+                    }
+                });
+            });
+
+            // Save attention bias
+            const insertAttentionBias = db.prepare('INSERT OR REPLACE INTO attention_bias (idx, row, value) VALUES (?, ?, ?)');
+            this.#attentionBias.forEach((biases, idx) => {
+                biases.forEach((value, row) => {
+                    if (isValidNumber(value)) {
+                        insertAttentionBias.run(idx, row, value);
+                    }
+                });
+            });
+
+            // Save specialization weights
+            const insertSpecializationWeights = db.prepare('INSERT OR REPLACE INTO specialization_weights (idx, row, col, value) VALUES (?, ?, ?, ?)');
+            this.#specializationWeights.forEach((matrix, idx) => {
+                matrix.forEach((row, r) => {
+                    row.forEach((value, c) => {
+                        if (isValidNumber(value)) {
+                            insertSpecializationWeights.run(idx, r, c, value);
+                        }
+                    });
+                });
+            });
+
+            // Save attention memory
+            const insertAttentionMemory = db.prepare('INSERT OR REPLACE INTO attention_memory (idx, window, seq, dim, value) VALUES (?, ?, ?, ?, ?)');
+            this.#attentionMemory.forEach((memory, idx) => {
+                memory.forEach((window, w) => {
+                    window.forEach((seq, s) => {
+                        seq.forEach((value, d) => {
+                            if (isValidNumber(value)) {
+                                insertAttentionMemory.run(idx, w, s, d, value);
+                            }
+                        });
+                    });
+                });
+            });
+
+            // Save transformers (weights and biases)
+            const insertTransformerWeights = db.prepare('INSERT OR REPLACE INTO transformers (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertTransformerBiases = db.prepare('INSERT OR REPLACE INTO transformer_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
+            const insertTransformerLayerNorm = db.prepare('INSERT OR REPLACE INTO transformer_layer_norm (idx, layer, norm_type, row, value) VALUES (?, ?, ?, ?, ?)');
+            this.#transformers.forEach((transformer, idx) => {
+                transformer.attentionWeights.forEach((layer, l) => {
+                    layer.Wq.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertTransformerWeights.run(idx, l, 'Wq', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wk.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertTransformerWeights.run(idx, l, 'Wk', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wv.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertTransformerWeights.run(idx, l, 'Wv', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wo.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertTransformerWeights.run(idx, l, 'Wo', r, c, value);
+                            }
+                        });
+                    });
+                });
+                transformer.ffnWeights.forEach((layer, l) => {
+                    layer.W1.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertTransformerWeights.run(idx, l, 'W1', r, c, value);
+                            }
+                        });
+                    });
+                    layer.W2.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertTransformerWeights.run(idx, l, 'W2', r, c, value);
+                            }
+                        });
+                    });
+                    layer.b1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerBiases.run(idx, l, 'b1', r, value);
+                        }
+                    });
+                    layer.b2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerBiases.run(idx, l, 'b2', r, value);
+                        }
+                    });
+                });
+                transformer.layerNormWeights.forEach((layer, l) => {
+                    layer.gamma1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerLayerNorm.run(idx, l, 'gamma1', r, value);
+                        }
+                    });
+                    layer.beta1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerLayerNorm.run(idx, l, 'beta1', r, value);
+                        }
+                    });
+                    layer.gamma2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerLayerNorm.run(idx, l, 'gamma2', r, value);
+                        }
+                    });
+                    layer.beta2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerLayerNorm.run(idx, l, 'beta2', r, value);
+                        }
+                    });
+                });
+                transformer.outputWeights.forEach((row, r) => {
+                    row.forEach((value, c) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerWeights.run(idx, -1, 'outputWeights', r, c, value);
+                        }
+                    });
+                });
+                transformer.outputBias.forEach((value, r) => {
+                    if (isValidNumber(value)) {
+                        insertTransformerBiases.run(idx, -1, 'outputBias', r, value);
+                    }
+                });
+            });
+
+            // Save momentum weights and biases
+            const insertMomentumWeights = db.prepare('INSERT OR REPLACE INTO momentum_weights (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertMomentumBiases = db.prepare('INSERT OR REPLACE INTO momentum_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
+            this.#momentumWeights.forEach((momentum, idx) => {
+                momentum.attentionWeights.forEach((layer, l) => {
+                    layer.Wq.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertMomentumWeights.run(idx, l, 'Wq', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wk.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertMomentumWeights.run(idx, l, 'Wk', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wv.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertMomentumWeights.run(idx, l, 'Wv', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wo.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertMomentumWeights.run(idx, l, 'Wo', r, c, value);
+                            }
+                        });
+                    });
+                });
+                momentum.ffnWeights.forEach((layer, l) => {
+                    layer.W1.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertMomentumWeights.run(idx, l, 'W1', r, c, value);
+                            }
+                        });
+                    });
+                    layer.W2.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertMomentumWeights.run(idx, l, 'W2', r, c, value);
+                            }
+                        });
+                    });
+                    layer.b1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumBiases.run(idx, l, 'b1', r, value);
+                        }
+                    });
+                    layer.b2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumBiases.run(idx, l, 'b2', r, value);
+                        }
+                    });
+                });
+                momentum.layerNormWeights.forEach((layer, l) => {
+                    layer.gamma1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumBiases.run(idx, l, 'gamma1', r, value);
+                        }
+                    });
+                    layer.beta1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumBiases.run(idx, l, 'beta1', r, value);
+                        }
+                    });
+                    layer.gamma2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumBiases.run(idx, l, 'gamma2', r, value);
+                        }
+                    });
+                    layer.beta2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumBiases.run(idx, l, 'beta2', r, value);
+                        }
+                    });
+                });
+                momentum.outputWeights.forEach((row, r) => {
+                    row.forEach((value, c) => {
+                        if (isValidNumber(value)) {
+                            insertMomentumWeights.run(idx, -1, 'outputWeights', r, c, value);
+                        }
+                    });
+                });
+                momentum.outputBias.forEach((value, r) => {
+                    if (isValidNumber(value)) {
+                        insertMomentumBiases.run(idx, -1, 'outputBias', r, value);
+                    }
+                });
+            });
+
+            // Save gradient accumulation
+            const insertGradientAccumulation = db.prepare('INSERT OR REPLACE INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertGradientBiases = db.prepare('INSERT OR REPLACE INTO gradient_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
+            this.#gradientAccumulation.forEach((gradient, idx) => {
+                gradient.attentionWeights.forEach((layer, l) => {
+                    layer.Wq.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wq', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wk.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wk', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wv.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wv', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wo.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wo', r, c, value);
+                            }
+                        });
+                    });
+                });
+                gradient.ffnWeights.forEach((layer, l) => {
+                    layer.W1.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'W1', r, c, value);
+                            }
+                        });
+                    });
+                    layer.W2.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'W2', r, c, value);
+                            }
+                        });
+                    });
+                    layer.b1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientBiases.run(idx, l, 'b1', r, value);
+                        }
+                    });
+                    layer.b2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientBiases.run(idx, l, 'b2', r, value);
+                        }
+                    });
+                });
+                gradient.layerNormWeights.forEach((layer, l) => {
+                    layer.gamma1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientBiases.run(idx, l, 'gamma1', r, value);
+                        }
+                    });
+                    layer.beta1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientBiases.run(idx, l, 'beta1', r, value);
+                        }
+                    });
+                    layer.gamma2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientBiases.run(idx, l, 'gamma2', r, value);
+                        }
+                    });
+                    layer.beta2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientBiases.run(idx, l, 'beta2', r, value);
+                        }
+                    });
+                });
+                gradient.outputWeights.forEach((row, r) => {
+                    row.forEach((value, c) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, -1, 'outputWeights', r, c, value);
+                        }
+                    });
+                });
+                gradient.outputBias.forEach((value, r) => {
+                    if (isValidNumber(value)) {
+                        insertGradientBiases.run(idx, -1, 'outputBias', r, value);
+                    }
+                });
+            });
+
+            // Commit transaction
+            db.exec('COMMIT');
+        } catch (error) {
+            // Rollback on error
+            db.exec('ROLLBACK');
+            console.error('Error saving HiveMind state:', error);
+        } finally {
+            if (db) {
+                db.close();
+            }
+        }
+    }
+
+    #loadState() {
+        const dbPath = path.join(directoryPath, 'hivemind_state.db');
+        let db;
+
+        try {
+            if (!fs.existsSync(dbPath)) {
+                console.warn('No saved state found at', dbPath);
+                return;
+            }
+
+            db = new Database(dbPath, { readonly: true });
+
+            // Load metadata
+            const metadataStmt = db.prepare('SELECT key, value FROM metadata WHERE key = ?');
+            const trainingStepCount = metadataStmt.get('trainingStepCount');
+            if (trainingStepCount && isValidNumber(Number(trainingStepCount.value))) {
+                this.#trainingStepCount = Number(trainingStepCount.value);
+            }
+
+            // Load ensemble weights
+            const ensembleWeightsStmt = db.prepare('SELECT idx, weight FROM ensemble_weights');
+            const ensembleWeights = ensembleWeightsStmt.all();
+            ensembleWeights.forEach(({ idx, weight }) => {
+                if (isValidNumber(weight) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#ensembleWeights[idx] = weight;
+                }
+            });
+            this.#normalizeEnsembleWeights();
+
+            // Load performance scores
+            const performanceScoresStmt = db.prepare('SELECT idx, score FROM performance_scores');
+            const performanceScores = performanceScoresStmt.all();
+            performanceScores.forEach(({ idx, score }) => {
+                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#performanceScores[idx] = score;
+                }
+            });
+
+            // Load agreement scores
+            const agreementScoresStmt = db.prepare('SELECT idx, score FROM agreement_scores');
+            const agreementScores = agreementScoresStmt.all();
+            agreementScores.forEach(({ idx, score }) => {
+                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#agreementScores[idx] = score;
+                }
+            });
+
+            // Load specialization scores
+            const specializationScoresStmt = db.prepare('SELECT idx, score FROM specialization_scores');
+            const specializationScores = specializationScoresStmt.all();
+            specializationScores.forEach(({ idx, score }) => {
+                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#specializationScores[idx] = score;
+                }
+            });
+
+            // Load historical performance
+            const historicalPerformanceStmt = db.prepare('SELECT idx, step, score FROM historical_performance ORDER BY idx, step');
+            const historicalPerformance = historicalPerformanceStmt.all();
+            this.#historicalPerformance = Array(this.#ensembleSize).fill().map(() => []);
+            historicalPerformance.forEach(({ idx, step, score }) => {
+                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize && Number.isInteger(step)) {
+                    this.#historicalPerformance[idx][step] = score;
+                }
+            });
+
+            // Load trust scores history
+            const trustScoresHistoryStmt = db.prepare('SELECT idx, step, score FROM trust_scores_history ORDER BY idx, step');
+            const trustScoresHistory = trustScoresHistoryStmt.all();
+            this.#trustScoresHistory = Array(this.#ensembleSize).fill().map(() => []);
+            trustScoresHistory.forEach(({ idx, step, score }) => {
+                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize && Number.isInteger(step)) {
+                    this.#trustScoresHistory[idx][step] = score;
+                }
+            });
+
+            // Load adaptive learning rates
+            const adaptiveLearningRateStmt = db.prepare('SELECT idx, rate FROM adaptive_learning_rate');
+            const adaptiveLearningRates = adaptiveLearningRateStmt.all();
+            adaptiveLearningRates.forEach(({ idx, rate }) => {
+                if (isValidNumber(rate) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#adaptiveLearningRate[idx] = rate;
+                }
+            });
+
+            // Load attention weight matrix
+            const attentionWeightMatrixStmt = db.prepare('SELECT idx, row, value FROM attention_weight_matrix');
+            const attentionWeightMatrix = attentionWeightMatrixStmt.all();
+            attentionWeightMatrix.forEach(({ idx, row, value }) => {
+                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize && row >= 0 && row < this.#hiddenSize) {
+                    this.#attentionWeightMatrix[idx][row] = value;
+                }
+            });
+
+            // Load attention bias
+            const attentionBiasStmt = db.prepare('SELECT idx, row, value FROM attention_bias');
+            const attentionBias = attentionBiasStmt.all();
+            attentionBias.forEach(({ idx, row, value }) => {
+                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize && row >= 0 && row < this.#hiddenSize) {
+                    this.#attentionBias[idx][row] = value;
+                }
+            });
+
+            // Load specialization weights
+            const specializationWeightsStmt = db.prepare('SELECT idx, row, col, value FROM specialization_weights');
+            const specializationWeights = specializationWeightsStmt.all();
+            specializationWeights.forEach(({ idx, row, col, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0 && row < this.#hiddenSize &&
+                    col >= 0 && col < this.#hiddenSize
+                ) {
+                    this.#specializationWeights[idx][row][col] = value;
+                }
+            });
+
+            // Load attention memory
+            const attentionMemoryStmt = db.prepare('SELECT idx, window, seq, dim, value FROM attention_memory');
+            const attentionMemory = attentionMemoryStmt.all();
+            this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
+                Array(this.#contextWindow).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)))
+            );
+            attentionMemory.forEach(({ idx, window, seq, dim, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    window >= 0 && window < this.#contextWindow &&
+                    seq >= 0 && seq < this.#inputSize &&
+                    dim >= 0 && dim < this.#hiddenSize
+                ) {
+                    this.#attentionMemory[idx][window][seq][dim] = value;
+                }
+            });
+
+            // Load transformers
+            const transformerWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM transformers');
+            const transformerBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM transformer_biases');
+            const transformerLayerNormStmt = db.prepare('SELECT idx, layer, norm_type, row, value FROM transformer_layer_norm');
+            const transformerWeights = transformerWeightsStmt.all();
+            const transformerBiases = transformerBiasesStmt.all();
+            const transformerLayerNorm = transformerLayerNormStmt.all();
+            transformerWeights.forEach(({ idx, layer, weight_type, row, col, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0 && col >= 0
+                ) {
+                    if (weight_type === 'outputWeights' && layer === -1) {
+                        if (row < this.#hiddenSize && col < this.#outputSize) {
+                            this.#transformers[idx].outputWeights[row][col] = value;
+                        }
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (weight_type === 'Wq' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#transformers[idx].attentionWeights[layer].Wq[row][col] = value;
+                        } else if (weight_type === 'Wk' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#transformers[idx].attentionWeights[layer].Wk[row][col] = value;
+                        } else if (weight_type === 'Wv' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#transformers[idx].attentionWeights[layer].Wv[row][col] = value;
+                        } else if (weight_type === 'Wo' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#transformers[idx].attentionWeights[layer].Wo[row][col] = value;
+                        } else if (weight_type === 'W1' && row < this.#hiddenSize && col < this.#feedForwardSize) {
+                            this.#transformers[idx].ffnWeights[layer].W1[row][col] = value;
+                        } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
+                            this.#transformers[idx].ffnWeights[layer].W2[row][col] = value;
+                        }
+                    }
+                }
+            });
+            transformerBiases.forEach(({ idx, layer, bias_type, row, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0
+                ) {
+                    if (bias_type === 'outputBias' && layer === -1 && row < this.#outputSize) {
+                        this.#transformers[idx].outputBias[row] = value;
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (bias_type === 'b1' && row < this.#feedForwardSize) {
+                            this.#transformers[idx].ffnWeights[layer].b1[row] = value;
+                        } else if (bias_type === 'b2' && row < this.#hiddenSize) {
+                            this.#transformers[idx].ffnWeights[layer].b2[row] = value;
+                        }
+                    }
+                }
+            });
+            transformerLayerNorm.forEach(({ idx, layer, norm_type, row, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    layer >= 0 && layer < this.#numLayers &&
+                    row >= 0 && row < this.#hiddenSize
+                ) {
+                    if (norm_type === 'gamma1') {
+                        this.#transformers[idx].layerNormWeights[layer].gamma1[row] = value;
+                    } else if (norm_type === 'beta1') {
+                        this.#transformers[idx].layerNormWeights[layer].beta1[row] = value;
+                    } else if (norm_type === 'gamma2') {
+                        this.#transformers[idx].layerNormWeights[layer].gamma2[row] = value;
+                    } else if (norm_type === 'beta2') {
+                        this.#transformers[idx].layerNormWeights[layer].beta2[row] = value;
+                    }
+                }
+            });
+
+            // Load momentum weights and biases
+            const momentumWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM momentum_weights');
+            const momentumBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM momentum_biases');
+            const momentumWeights = momentumWeightsStmt.all();
+            const momentumBiases = momentumBiasesStmt.all();
+            momentumWeights.forEach(({ idx, layer, weight_type, row, col, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0 && col >= 0
+                ) {
+                    if (weight_type === 'outputWeights' && layer === -1) {
+                        if (row < this.#hiddenSize && col < this.#outputSize) {
+                            this.#momentumWeights[idx].outputWeights[row][col] = value;
+                        }
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (weight_type === 'Wq' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#momentumWeights[idx].attentionWeights[layer].Wq[row][col] = value;
+                        } else if (weight_type === 'Wk' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#momentumWeights[idx].attentionWeights[layer].Wk[row][col] = value;
+                        } else if (weight_type === 'Wv' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#momentumWeights[idx].attentionWeights[layer].Wv[row][col] = value;
+                        } else if (weight_type === 'Wo' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#momentumWeights[idx].attentionWeights[layer].Wo[row][col] = value;
+                        } else if (weight_type === 'W1' && row < this.#hiddenSize && col < this.#feedForwardSize) {
+                            this.#momentumWeights[idx].ffnWeights[layer].W1[row][col] = value;
+                        } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
+                            this.#momentumWeights[idx].ffnWeights[layer].W2[row][col] = value;
+                        }
+                    }
+                }
+            });
+            momentumBiases.forEach(({ idx, layer, bias_type, row, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0
+                ) {
+                    if (bias_type === 'outputBias' && layer === -1 && row < this.#outputSize) {
+                        this.#momentumWeights[idx].outputBias[row] = value;
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (bias_type === 'b1' && row < this.#feedForwardSize) {
+                            this.#momentumWeights[idx].ffnWeights[layer].b1[row] = value;
+                        } else if (bias_type === 'b2' && row < this.#hiddenSize) {
+                            this.#momentumWeights[idx].ffnWeights[layer].b2[row] = value;
+                        } else if (bias_type === 'gamma1' && row < this.#hiddenSize) {
+                            this.#momentumWeights[idx].layerNormWeights[layer].gamma1[row] = value;
+                        } else if (bias_type === 'beta1' && row < this.#hiddenSize) {
+                            this.#momentumWeights[idx].layerNormWeights[layer].beta1[row] = value;
+                        } else if (bias_type === 'gamma2' && row < this.#hiddenSize) {
+                            this.#momentumWeights[idx].layerNormWeights[layer].gamma2[row] = value;
+                        } else if (bias_type === 'beta2' && row < this.#hiddenSize) {
+                            this.#momentumWeights[idx].layerNormWeights[layer].beta2[row] = value;
+                        }
+                    }
+                }
+            });
+
+            // Load gradient accumulation
+            const gradientAccumulationStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
+            const gradientBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM gradient_biases');
+            const gradientAccumulation = gradientAccumulationStmt.all();
+            const gradientBiases = gradientBiasesStmt.all();
+            gradientAccumulation.forEach(({ idx, layer, weight_type, row, col, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0 && col >= 0
+                ) {
+                    if (weight_type === 'outputWeights' && layer === -1) {
+                        if (row < this.#hiddenSize && col < this.#outputSize) {
+                            this.#gradientAccumulation[idx].outputWeights[row][col] = value;
+                        }
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (weight_type === 'Wq' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[row][col] = value;
+                        } else if (weight_type === 'Wk' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[row][col] = value;
+                        } else if (weight_type === 'Wv' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[row][col] = value;
+                        } else if (weight_type === 'Wo' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[row][col] = value;
+                        } else if (weight_type === 'W1' && row < this.#hiddenSize && col < this.#feedForwardSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].W1[row][col] = value;
+                        } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].W2[row][col] = value;
+                        }
+                    }
+                }
+            });
+            gradientBiases.forEach(({ idx, layer, bias_type, row, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize &&
+                    row >= 0
+                ) {
+                    if (bias_type === 'outputBias' && layer === -1 && row < this.#outputSize) {
+                        this.#gradientAccumulation[idx].outputBias[row] = value;
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (bias_type === 'b1' && row < this.#feedForwardSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].b1[row] = value;
+                        } else if (bias_type === 'b2' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].b2[row] = value;
+                        } else if (bias_type === 'gamma1' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[row] = value;
+                        } else if (bias_type === 'beta1' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[row] = value;
+                        } else if (bias_type === 'gamma2' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[row] = value;
+                        } else if (bias_type === 'beta2' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[row] = value;
+                        }
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error('Error loading HiveMind state:', error);
+        } finally {
+            if (db) {
+                db.close();
+            }
+        }
     }
 
     #xavierInit(rows, cols) {
@@ -2035,184 +2928,7 @@ class HiveMind {
             this.#shareWeights();
         }
         this.#normalizeAttentionWeights();
-    }
-
-    getParameters(idx) {
-        return this.#transformers[idx];
-    }
-
-    setParameters(idx, params) {
-        const validateArray = (arr, defaultValue) => arr.map(val => isValidNumber(val) ? val : defaultValue);
-        const validatedParams = {
-        ...params,
-        ffnWeights: params.ffnWeights.map(layer => ({
-            W1: layer.W1.map(row => validateArray(row, 0)),
-            W2: layer.W2.map(row => validateArray(row, 0)),
-            b1: validateArray(layer.b1, 0),
-            b2: validateArray(layer.b2, 0)
-        })),
-        layerNormWeights: params.layerNormWeights.map(layer => ({
-            gamma1: validateArray(layer.gamma1, 1),
-            beta1: validateArray(layer.beta1, 0),
-            gamma2: validateArray(layer.gamma2, 1),
-            beta2: validateArray(layer.beta2, 0)
-        })),
-        attentionWeights: params.attentionWeights.map(layer => ({
-            Wq: layer.Wq.map(row => validateArray(row, 0)),
-            Wk: layer.Wk.map(row => validateArray(row, 0)),
-            Wv: layer.Wv.map(row => validateArray(row, 0)),
-            Wo: layer.Wo.map(row => validateArray(row, 0))
-        })),
-        positionalEncoding: params.positionalEncoding.map(row => validateArray(row, 0)),
-        outputWeights: params.outputWeights.map(row => validateArray(row, 0)),
-        outputBias: validateArray(params.outputBias, 0)
-        };
-        this.#transformers[idx] = validatedParams;
-    }
-
-    getEnsembleWeight(idx) {
-        return this.#ensembleWeights[idx];
-    }
-
-    setEnsembleWeight(idx, weight) {
-        if (isValidNumber(weight) && weight >= 0) {
-        this.#ensembleWeights[idx] = weight;
-        this.#normalizeEnsembleWeights();
-        }
-    }
-
-    getPerformanceScore(idx) {
-        return this.#performanceScores[idx];
-    }
-
-    setPerformanceScore(idx, score) {
-        if (isValidNumber(score) && score >= 0 && score <= 1) {
-        this.#performanceScores[idx] = score;
-        }
-    }
-
-    getAgreementScore(idx) {
-        return this.#agreementScores[idx];
-    }
-
-    setAgreementScore(idx, score) {
-        if (isValidNumber(score) && score >= 0 && score <= 1) {
-        this.#agreementScores[idx] = score;
-        }
-    }
-
-    getHistoricalPerformance(idx) {
-        return this.#historicalPerformance[idx];
-    }
-
-    setHistoricalPerformance(idx, history) {
-        if (Array.isArray(history) && history.every(isValidNumber)) {
-        this.#historicalPerformance[idx] = history.slice(0, this.#maxPerformanceHistory);
-        }
-    }
-
-    getTrustScoresHistory(idx) {
-        return this.#trustScoresHistory[idx];
-    }
-
-    setTrustScoresHistory(idx, value) {
-        if (Array.isArray(value) && value.every(isValidNumber)) {
-        this.#trustScoresHistory[idx] = value.slice(0, this.#maxTrustHistory);
-        }
-    }
-
-    getSpecializationScore(idx) {
-        return this.#specializationScores[idx];
-    }
-
-    setSpecializationScore(idx, value) {
-        if (isValidNumber(value) && value >= 0 && value <= 1) {
-        this.#specializationScores[idx] = value;
-        }
-    }
-
-    getSpecializationWeights(idx) {
-        return this.#specializationWeights[idx];
-    }
-
-    setSpecializationWeights(idx, weights) {
-        if (
-        Array.isArray(weights) &&
-        weights.length === this.#hiddenSize &&
-        weights.every(
-            w => Array.isArray(w) &&
-            w.length === this.#hiddenSize &&
-            w.every(row => isValidNumber(row))
-        )
-        ) {
-        this.#specializationWeights[idx] = weights.map(row => row.map(val => isValidNumber(val) ? val : 0));
-        }
-    }
-
-    getAttentionWeightMatrix(idx) {
-        return this.#attentionWeightMatrix[idx];
-    }
-
-    setAttentionWeightMatrix(idx, matrix) {
-        if (
-        Array.isArray(matrix) &&
-        matrix.length === this.#hiddenSize &&
-        matrix.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
-        ) {
-        this.#attentionWeightMatrix[idx] = matrix.map(row => row.map(val => isValidNumber(val) ? val : 0));
-        }
-    }
-
-    getAttentionBias(idx) {
-        if (
-        Number.isInteger(idx) &&
-        idx >= 0 &&
-        idx < this.#ensembleSize
-        ) {
-        return this.#attentionBias[idx];
-        }
-        return Array(this.#hiddenSize).fill(0);
-    }
-
-    setAttentionBias(idx, bias) {
-        if (
-        Number.isInteger(idx) &&
-        idx >= 0 &&
-        idx < this.#ensembleSize &&
-        Array.isArray(bias) &&
-        bias.length === this.#hiddenSize &&
-        bias.every(isValidNumber)
-        ) {
-        this.#attentionBias[idx] = bias.map(val => isValidNumber(val) ? val : 0);
-        }
-    }
-
-    getAttentionMemory(idx) {
-        return this.#attentionMemory[idx];
-    }
-
-    setAttentionMemory(idx, memory) {
-        if (
-        Array.isArray(memory) &&
-        memory.length === this.#contextWindow &&
-        memory.every(
-            m => Array.isArray(m) &&
-            m.length === this.#hiddenSize &&
-            m.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
-        )
-        ) {
-        this.#attentionMemory[idx] = memory.map(m => m.map(row => row.map(val => isValidNumber(val) ? val : 0)));
-        }
-    }
-
-    getAdaptiveLearningRate(idx) {
-        return this.#adaptiveLearningRate[idx];
-    }
-
-    setAdaptiveLearningRate(idx, rate) {
-        if (isValidNumber(rate) && rate >= 0) {
-        this.#adaptiveLearningRate[idx] = rate;
-        }
+        this.#saveState();
     }
 }
 

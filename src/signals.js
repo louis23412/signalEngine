@@ -35,7 +35,6 @@ class NeuralSignalEngine {
     fs.mkdirSync(directoryPath, { recursive: true });
     this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
     this.#initDatabase();
-    this.#loadState();
   }
 
   #initDatabase() {
@@ -73,152 +72,12 @@ class NeuralSignalEngine {
         close REAL NOT NULL,
         volume REAL NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS transformer_parameters (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        transformer_id TEXT NOT NULL,
-        parameters TEXT NOT NULL,
-        ensemble_weight REAL NOT NULL,
-        performance_score REAL NOT NULL,
-        agreement_score REAL NOT NULL,
-        historical_performance TEXT NOT NULL,
-        trust_scores TEXT NOT NULL,
-        specialization_score REAL NOT NULL,
-        specialization_weights TEXT NOT NULL,
-        attention_weight_matrix TEXT NOT NULL,
-        attention_bias TEXT NOT NULL,
-        attention_memory TEXT NOT NULL,
-        adaptive_learning_rate REAL NOT NULL,
-        updated_at INTEGER NOT NULL,
-        UNIQUE(transformer_id)
-      );
       CREATE INDEX IF NOT EXISTS idx_bucket_key ON patterns(bucket_key);
       CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
       CREATE INDEX IF NOT EXISTS idx_open_trades_stopLoss ON open_trades(stopLoss);
       CREATE INDEX IF NOT EXISTS idx_candles_timestamp ON candles(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_transformer_id ON transformer_parameters(transformer_id);
     `);
   }
-
-    #loadState() {
-        const stmt = this.#db.prepare(`
-        SELECT transformer_id, parameters, ensemble_weight, performance_score, 
-                agreement_score, historical_performance, trust_scores, specialization_score,
-                specialization_weights, attention_weight_matrix, attention_bias, 
-                attention_memory, adaptive_learning_rate
-        FROM transformer_parameters
-        `);
-        const params = stmt.all();
-        
-        if (params.length === 0) {
-        for (let i = 0; i < 128; i++) {
-            const transformerId = `transformer_${i + 1}`;
-            const parameters = this.#transformer.getParameters(i);
-            const weight = this.#transformer.getEnsembleWeight(i);
-            const performanceScore = this.#transformer.getPerformanceScore(i);
-            const agreementScore = this.#transformer.getAgreementScore(i);
-            const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
-            const trustScores = this.#transformer.getTrustScoresHistory(i);
-            const specializationScore = this.#transformer.getSpecializationScore(i);
-            const specializationWeights = this.#transformer.getSpecializationWeights(i);
-            const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
-            const attentionBias = this.#transformer.getAttentionBias(i);
-            const attentionMemory = this.#transformer.getAttentionMemory(i);
-            const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
-            this.#db.prepare(`
-            INSERT OR REPLACE INTO transformer_parameters (
-                transformer_id, parameters, ensemble_weight, performance_score, 
-                agreement_score, historical_performance, trust_scores, specialization_score,
-                specialization_weights, attention_weight_matrix, attention_bias,
-                attention_memory, adaptive_learning_rate, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-            transformerId, 
-            JSON.stringify(parameters), 
-            weight, 
-            performanceScore, 
-            agreementScore, 
-            JSON.stringify(historicalPerformance), 
-            JSON.stringify(trustScores), 
-            specializationScore,
-            JSON.stringify(specializationWeights),
-            JSON.stringify(attentionWeightMatrix),
-            JSON.stringify(attentionBias),
-            JSON.stringify(attentionMemory),
-            adaptiveLearningRate,
-            Date.now()
-            );
-        }
-        } else {
-        params.forEach(param => {
-            if (/^transformer_[1-128]$/.test(param.transformer_id)) {
-            const idx = parseInt(param.transformer_id.split('_')[1]) - 1;
-            this.#transformer.setParameters(idx, JSON.parse(param.parameters));
-            this.#transformer.setEnsembleWeight(idx, param.ensemble_weight);
-            this.#transformer.setPerformanceScore(idx, param.performance_score);
-            this.#transformer.setAgreementScore(idx, param.agreement_score);
-            this.#transformer.setHistoricalPerformance(idx, JSON.parse(param.historical_performance));
-            this.#transformer.setTrustScoresHistory(idx, JSON.parse(param.trust_scores));
-            this.#transformer.setSpecializationScore(idx, param.specialization_score);
-            this.#transformer.setSpecializationWeights(idx, JSON.parse(param.specialization_weights));
-            this.#transformer.setAttentionWeightMatrix(idx, JSON.parse(param.attention_weight_matrix));
-            this.#transformer.setAttentionBias(idx, JSON.parse(param.attention_bias));
-            this.#transformer.setAttentionMemory(idx, JSON.parse(param.attention_memory));
-            this.#transformer.setAdaptiveLearningRate(idx, param.adaptive_learning_rate);
-            }
-        });
-        }
-    }
-
-    #saveState() {
-        const transaction = this.#db.transaction(() => {
-        for (let i = 0; i < 128; i++) {
-            const transformerId = `transformer_${i + 1}`;
-            const parameters = this.#transformer.getParameters(i);
-            const weight = this.#transformer.getEnsembleWeight(i);
-            const performanceScore = this.#transformer.getPerformanceScore(i);
-            const agreementScore = this.#transformer.getAgreementScore(i);
-            const historicalPerformance = this.#transformer.getHistoricalPerformance(i);
-            const trustScores = this.#transformer.getTrustScoresHistory(i);
-            const specializationScore = this.#transformer.getSpecializationScore(i);
-            const specializationWeights = this.#transformer.getSpecializationWeights(i);
-            const attentionWeightMatrix = this.#transformer.getAttentionWeightMatrix(i);
-            const attentionBias = this.#transformer.getAttentionBias(i);
-            const attentionMemory = this.#transformer.getAttentionMemory(i);
-            const adaptiveLearningRate = this.#transformer.getAdaptiveLearningRate(i);
-            
-            const validatedAttentionBias = Array.isArray(attentionBias) && attentionBias.length === this.#transformer.getAttentionBias(i).length && attentionBias.every(isValidNumber)
-                ? attentionBias
-                : Array(this.#transformer.getAttentionBias(i).length).fill(0).map(() => (Math.random() - 0.5) * Math.sqrt(2 / this.#transformer.getAttentionBias(i).length));
-
-            this.#db.prepare(`
-            INSERT OR REPLACE INTO transformer_parameters (
-                transformer_id, parameters, ensemble_weight, performance_score, 
-                agreement_score, historical_performance, trust_scores, specialization_score,
-                specialization_weights, attention_weight_matrix, attention_bias,
-                attention_memory, adaptive_learning_rate, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-            transformerId, 
-            JSON.stringify(parameters), 
-            weight, 
-            performanceScore, 
-            agreementScore, 
-            JSON.stringify(historicalPerformance), 
-            JSON.stringify(trustScores), 
-            specializationScore,
-            JSON.stringify(specializationWeights),
-            JSON.stringify(attentionWeightMatrix),
-            JSON.stringify(validatedAttentionBias),
-            JSON.stringify(attentionMemory),
-            adaptiveLearningRate,
-            Date.now()
-            );
-        }
-        });
-        transaction();
-    }
 
   #getRecentCandles(candles) {
     if (!Array.isArray(candles) || candles.length === 0) {
@@ -384,6 +243,7 @@ class NeuralSignalEngine {
         `);
         const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
 
+        let tempCounter = 1
         for (const trade of closedTrades) {
           const key = this.#generateFeatureKey(trade.features);
           const pattern = patternStmt.get(key, JSON.stringify(trade.features));
@@ -396,7 +256,10 @@ class NeuralSignalEngine {
           updateQTableStmt.run(trade.stateKey, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.stateKey);
 
           const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
+          console.log('Training.......')
           this.#transformer.train(trade.features, trade.outcome > 0 ? (0.5 + 0.5 * winRate) : 0);
+          console.log(`Training complete! ${tempCounter} / ${closedTrades.length}`)
+          tempCounter++
         }
 
         for (const key of keysToDelete) {
@@ -404,7 +267,6 @@ class NeuralSignalEngine {
         }
       });
       transaction();
-      this.#saveState();
     }
   }
 
