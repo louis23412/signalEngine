@@ -1,8 +1,3 @@
-const truncateToDecimals = (value, decimals) => {
-  const factor = Math.pow(10, decimals);
-  return Math.floor(value * factor) / factor;
-};
-
 const isValidNumber = (value) => {
   if (value == null) return false;
   const num = typeof value === 'string' ? Number(value) : value;

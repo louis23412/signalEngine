@@ -10,16 +10,6 @@ const isValidNumber = (value) => {
   return typeof num === 'number' && !isNaN(num) && isFinite(num);
 };
 
-const sigmoid = (x) => isValidNumber(x) ? 1 / (1 + Math.exp(-Math.min(Math.max(x, -100), 100))) : 0;
-
-const softmax = (arr) => {
-  if (!arr.every(isValidNumber)) return arr.map(() => 1 / arr.length);
-  const max = Math.max(...arr);
-  const exp = arr.map(x => Math.exp(x - max));
-  const sum = exp.reduce((a, b) => a + b, 0) || 1;
-  return exp.map(x => x / sum);
-};
-
 class HiveMind {
     #inputSize = 6;
     #hiddenSize = 16;
@@ -1107,7 +1097,7 @@ class HiveMind {
                             ? queries[i][k] * keys[j][k]
                             : 0;
                     }
-                    const attentionWeight = softmax(
+                    const attentionWeight = this.#softmax(
                         Array(this.#inputSize).fill().map((_, k) => {
                             let dp = 0;
                             for (let m = 0; m < this.#hiddenSize; m++) {
@@ -1147,7 +1137,7 @@ class HiveMind {
             attentionScores[t] = score * (0.5 + 0.2 * historicalWeight + 0.2 * trustScore + 0.1 * specializationBoost);
         }
 
-        const weights = softmax(attentionScores.map(score => isValidNumber(score) ? score : 0));
+        const weights = this.#softmax(attentionScores.map(score => isValidNumber(score) ? score : 0));
 
         const finalWeights = weights.map((w, idx) => {
             const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0;
@@ -1187,7 +1177,7 @@ class HiveMind {
             this.#historicalPerformance[idx].length
             : 0;
         const specializationBoost = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
-        const trustScore = sigmoid(normalizedScore * (0.6 + 0.2 * agreementFactor + 0.1 * historicalTrend + 0.1 * specializationBoost));
+        const trustScore = this.#sigmoid(normalizedScore * (0.6 + 0.2 * agreementFactor + 0.1 * historicalTrend + 0.1 * specializationBoost));
         history.push(isValidNumber(trustScore) ? trustScore : 0.5);
         if (history.length > this.#maxTrustHistory) history.shift();
         return history;
@@ -1280,7 +1270,7 @@ class HiveMind {
                 : 0.5;
             const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
             const input = Math.min(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * trustFactor + 0.2 * performanceFactor), 5);
-            return sigmoid(input);
+            return this.#sigmoid(input);
         });
 
         const sumScores = this.#specializationScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
@@ -1342,7 +1332,7 @@ class HiveMind {
             const performanceDiff = isValidNumber(this.#performanceScores[idx])
                 ? Math.min(Math.max(this.#performanceScores[idx] - performanceMean, -0.5), 0.5)
                 : 0;
-            const adjustment = 1 + 0.2 * sigmoid(performanceDiff * 5);
+            const adjustment = 1 + 0.2 * this.#sigmoid(performanceDiff * 5);
             const newLr = this.#learningRate * adjustment;
             return Math.min(Math.max(newLr, this.#learningRate * 0.5), this.#learningRate * 2);
         });
@@ -1508,7 +1498,7 @@ class HiveMind {
                         ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
                         : t.layerNormWeights[layer].gamma1[i] || 1;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(gamma1Update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(gamma1Update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
                     t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
 
                     const beta1Update = isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
@@ -1522,7 +1512,7 @@ class HiveMind {
                         ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
                         : t.layerNormWeights[layer].gamma2[i] || 1;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(gamma2Update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(gamma2Update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
                     t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
 
                     const beta2Update = isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
@@ -1635,6 +1625,18 @@ class HiveMind {
         return isValidNumber(derivative) ? Math.min(Math.max(derivative, -10), 10) : 0;
     }
 
+    #sigmoid (x) {
+        return isValidNumber(x) ? 1 / (1 + Math.exp(-Math.min(Math.max(x, -100), 100))) : 0;
+    }
+
+    #softmax (arr) {
+        if (!arr.every(isValidNumber)) return arr.map(() => 1 / arr.length);
+        const max = Math.max(...arr);
+        const exp = arr.map(x => Math.exp(x - max));
+        const sum = exp.reduce((a, b) => a + b, 0) || 1;
+        return exp.map(x => x / sum);
+    }
+
     #layerNorm(x, gamma, beta, eps = 1e-6) {
         if (
             !Array.isArray(x) || x.length !== this.#hiddenSize ||
@@ -1654,7 +1656,8 @@ class HiveMind {
 
         const output = x.map((val, i) => {
             const normalized = (val - mean) / Math.sqrt(variance + eps);
-            return isValidNumber(normalized) ? gamma[i] * normalized + beta[i] : 0;
+            const gammaAdjusted = Math.abs(gamma[i] - 1.0) < 1e-6 ? 1.0 : gamma[i];
+            return isValidNumber(normalized) ? gammaAdjusted * normalized + beta[i] : 0;
         });
 
         return output;
@@ -1820,7 +1823,7 @@ class HiveMind {
                         ? sum / Math.sqrt(headSize) * this.#attentionScalingFactor * (1 + this.#specializationScores[transformerIdx])
                         : 0;
                 }
-                attentionProbs[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
+                attentionProbs[h][i] = this.#softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
                 attentionProbs[h][i] = this.#dropout(attentionProbs[h][i], this.#dropoutRate, true);
             }
         }
@@ -1973,7 +1976,7 @@ class HiveMind {
         variance = totalTrustWeight > 1e-6 ? variance / totalTrustWeight : 0;
 
         const scaledVariance = variance * 10;
-        const diversityLoss = this.#diversityWeight * sigmoid(scaledVariance);
+        const diversityLoss = this.#diversityWeight * this.#sigmoid(scaledVariance);
 
         return isValidNumber(diversityLoss) && diversityLoss >= 0 ? diversityLoss : 0;
     }
@@ -2009,8 +2012,8 @@ class HiveMind {
             if (topPerformers.includes(idx)) return;
 
             const output = outputs[idx];
-            const outputProb = sigmoid(output);
-            const targetProb = sigmoid(targetOutput);
+            const outputProb = this.#sigmoid(output);
+            const targetProb = this.#sigmoid(targetOutput);
             const klLoss = isValidNumber(outputProb) && isValidNumber(targetProb)
                 ? outputProb * Math.log((outputProb + 1e-6) / (targetProb + 1e-6)) + (1 - outputProb) * Math.log((1 - outputProb + 1e-6) / (1 - targetProb + 1e-6))
                 : 0;
@@ -2113,7 +2116,7 @@ class HiveMind {
                                 ? sum / Math.sqrt(headSize) * (1 + this.#specializationScores[idx])
                                 : 0;
                         }
-                        attentionProbs[h][i] = softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
+                        attentionProbs[h][i] = this.#softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
                     }
                 }
 
@@ -2344,8 +2347,8 @@ class HiveMind {
                         const updateBeta2 = adjustedLearningRate * beta2Grad[j];
                         if (isValidNumber(updateGamma1)) {
                             const clippedUpdate = Math.min(
-                                Math.max(updateGamma1, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
+                                Math.max(updateGamma1, -this.#gradientClippingThreshold * 1.5),
+                                this.#gradientClippingThreshold * 1.5
                             );
                             transformer.layerNormWeights[layer].gamma1[j] = isValidNumber(transformer.layerNormWeights[layer].gamma1[j])
                                 ? transformer.layerNormWeights[layer].gamma1[j] - clippedUpdate
@@ -2364,8 +2367,8 @@ class HiveMind {
                         }
                         if (isValidNumber(updateGamma2)) {
                             const clippedUpdate = Math.min(
-                                Math.max(updateGamma2, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
+                                Math.max(updateGamma2, -this.#gradientClippingThreshold * 1.5),
+                                this.#gradientClippingThreshold * 1.5
                             );
                             transformer.layerNormWeights[layer].gamma2[j] = isValidNumber(transformer.layerNormWeights[layer].gamma2[j])
                                 ? transformer.layerNormWeights[layer].gamma2[j] - clippedUpdate
@@ -2465,7 +2468,7 @@ class HiveMind {
                 ? val + transformer.outputBias[i]
                 : val
             );
-            return sigmoid(output[0]);
+            return this.#sigmoid(output[0]);
         });
 
         const ensembleWeights = this.#computeAttentionWeights(inputs, outputs);
@@ -2544,7 +2547,7 @@ class HiveMind {
                 ? val + transformer.outputBias[i]
                 : val
             );
-            individualOutputs[idx] = sigmoid(output[0]);
+            individualOutputs[idx] = this.#sigmoid(output[0]);
         });
 
         const ensembleWeights = this.#computeAttentionWeights(inputs, individualOutputs);
@@ -2684,7 +2687,7 @@ class HiveMind {
                     const updateGamma = adjustedLearningRate * gamma2Grad[i];
                     const updateBeta = adjustedLearningRate * beta2Grad[i];
                     this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += isValidNumber(updateGamma)
-                        ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
+                        ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold * 1.5), this.#gradientClippingThreshold * 1.5)
                         : 0;
                     this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += isValidNumber(updateBeta)
                         ? Math.min(Math.max(updateBeta, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
@@ -2788,7 +2791,7 @@ class HiveMind {
                         const updateGamma = adjustedLearningRate * gamma1Grad[j];
                         const updateBeta = adjustedLearningRate * beta1Grad[j];
                         this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma)
-                            ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
+                            ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold * 1.5), this.#gradientClippingThreshold * 1.5)
                             : 0;
                         this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta)
                             ? Math.min(Math.max(updateBeta, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
