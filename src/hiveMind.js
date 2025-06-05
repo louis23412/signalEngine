@@ -1051,7 +1051,9 @@ class HiveMind {
             if (
                 !Array.isArray(this.#attentionMemory[t]) ||
                 this.#attentionMemory[t].length === 0 ||
-                !this.#attentionMemory[t][0].every(row => Array.isArray(row) && row.length === this.#hiddenSize)
+                !Array.isArray(this.#attentionMemory[t][0]) ||
+                this.#attentionMemory[t][0].length !== this.#inputSize ||
+                !this.#attentionMemory[t][0].every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
             ) {
                 this.#attentionMemory[t] = Array(this.#contextWindow).fill().map(() =>
                     Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
