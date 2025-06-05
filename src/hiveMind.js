@@ -1297,15 +1297,17 @@ class HiveMind {
         }
 
         for (let i = 0; i < this.#ensembleSize; i++) {
-            const meanCorr = featureCorrelations[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / this.#inputSize || 0;
-            const specializationFactor = 1 + (isValidNumber(this.#specializationScores[i]) ? this.#specializationScores[i] * this.#swarmIntelligenceFactor * 2 : 0);
             for (let j = 0; j < this.#hiddenSize; j++) {
-                const grad = isValidNumber(meanCorr) ? meanCorr * specializationFactor : 0;
+                const inputIdx = j % this.#inputSize;
+                const corr = isValidNumber(featureCorrelations[i][inputIdx]) ? featureCorrelations[i][inputIdx] : 0;
+                const specializationFactor = 1 + (isValidNumber(this.#specializationScores[i]) ? this.#specializationScores[i] * this.#swarmIntelligenceFactor : 0);
+                const grad = corr * specializationFactor;
                 const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(grad)
-                    ? this.#adaptiveLearningRate[i] * grad * 2
+                    ? this.#adaptiveLearningRate[i] * grad
                     : 0;
                 this.#attentionWeightMatrix[i][j] += update;
-                this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * 0.005;
+                const noiseScale = 0.02 * (1 + this.#specializationScores[i]);
+                this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * noiseScale;
                 this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
             }
         }
@@ -1583,22 +1585,30 @@ class HiveMind {
     }
 
     #normalizeAttentionWeights() {
-        if (this.#trainingStepCount % 100 !== 0) return;
+        if (this.#trainingStepCount % 500 !== 0) return;
 
         for (let i = 0; i < this.#ensembleSize; i++) {
-            let norm = 0;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                    norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
+            const mean = this.#attentionWeightMatrix[i].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / this.#hiddenSize;
+            const variance = this.#attentionWeightMatrix[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.pow(val - mean, 2) : 0), 0) / this.#hiddenSize;
+
+            if (variance < 0.01) {
+                let norm = 0;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
+                        norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
+                    }
                 }
-            }
-            norm = Math.sqrt(norm) || 1;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                this.#attentionWeightMatrix[i][j] = isValidNumber(this.#attentionWeightMatrix[i][j])
-                    ? this.#attentionWeightMatrix[i][j] / norm
-                    : 0;
-                this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * 0.01;
-                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
+                norm = Math.sqrt(norm) || 1;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
+                        this.#attentionWeightMatrix[i][j] = this.#attentionWeightMatrix[i][j] / (norm * 0.5 + 0.5);
+                        const noiseScale = 0.01 * (1 + this.#specializationScores[i]);
+                        this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * noiseScale;
+                        this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
+                    } else {
+                        this.#attentionWeightMatrix[i][j] = 0;
+                    }
+                }
             }
         }
     }
