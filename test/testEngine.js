@@ -33,10 +33,43 @@ const countLines = () => {
     });
 };
 
-const formatSignal = (signal) => {
-    return `Signal => Action: ${signal.suggestedAction}, Multiplier: ${signal.multiplier.toFixed(3)}, ` +
-           `Entry: ${signal.entryPrice.toFixed(2)}, Sell: ${signal.sellPrice.toFixed(2)}, ` +
-           `Stop: ${signal.stopLoss.toFixed(2)}, Reward: ${signal.expectedReward}`;
+const formatSignal = (options = {}) => {
+    const {
+        totalCandles = null,
+        totalLines = null,
+        durationSec = null,
+        avgSignalTime = null,
+        estimatedTimeSec = null
+    } = options;
+
+    const ANSI_CYAN = '\x1B[36m';
+    const ANSI_RESET = '\x1B[0m';
+
+    let progressLine = '';
+    if (totalCandles !== null && totalLines !== null && durationSec !== null && avgSignalTime !== null && estimatedTimeSec !== null) {
+        progressLine = `Progress:\n${ANSI_CYAN}${totalCandles}/${totalLines}${ANSI_RESET} candles (${ANSI_CYAN}${((totalCandles / totalLines) * 100).toFixed(6)}%${ANSI_RESET}), ` +
+                       `Time: ${ANSI_CYAN}${durationSec.toFixed(3)}s${ANSI_RESET}, ` +
+                       `Avg Time: ${ANSI_CYAN}${avgSignalTime.toFixed(3)}s${ANSI_RESET}, ` +
+                       `ETA: ${ANSI_CYAN}${formatTime(estimatedTimeSec)}${ANSI_RESET}\n`;
+    }
+
+    const signalLine = `Signal:\n` +
+                      `Suggested Action: ${ANSI_CYAN}${signal.suggestedAction}${ANSI_RESET}, ` +
+                      `Multiplier: ${ANSI_CYAN}${signal.multiplier}${ANSI_RESET}, ` +
+                      `Expected Reward: ${ANSI_CYAN}${signal.expectedReward}${ANSI_RESET}\n` +
+                      `Entry Price: ${ANSI_CYAN}${signal.entryPrice}${ANSI_RESET}, ` +
+                      `Sell Price: ${ANSI_CYAN}${signal.sellPrice}${ANSI_RESET}, ` +
+                      `Stop Price: ${ANSI_CYAN}${signal.stopLoss}${ANSI_RESET}\n` +
+                      `Raw Confidence: ${ANSI_CYAN}${signal.rawConfidence}${ANSI_RESET}, ` +
+                      `Raw Threshold: ${ANSI_CYAN}${signal.rawThreshold}${ANSI_RESET}\n` +
+                      `Filtered Confidence: ${ANSI_CYAN}${signal.filteredConfidence}${ANSI_RESET}, ` +
+                      `Filtered Threshold: ${ANSI_CYAN}${signal.filteredThreshold}${ANSI_RESET}`;
+
+    process.stdout.write('\x1B[?25l');
+    process.stdout.cursorTo(0, 0);
+    process.stdout.write('\x1B[0J');
+    process.stdout.write(`-----------------------\n${progressLine}${signalLine}\n-----------------------`);
+    process.stdout.write('\x1B[?25h');
 };
 
 const processCandles = () => {
@@ -66,24 +99,10 @@ const processCandles = () => {
                 signalCount++;
 
                 const avgSignalTime = signalTimes.reduce((sum, time) => sum + time, 0) / signalTimes.length;
-
                 const remainingCandles = totalLines - totalCandles;
                 const estimatedTimeSec = remainingCandles * avgSignalTime;
 
-                process.stdout.write('\x1B[?25l');
-                process.stdout.cursorTo(0, 0);
-                process.stdout.write('\x1B[0J');
-
-                const progressLine = `Progress => ${totalCandles}/${totalLines} candles (${((totalCandles / totalLines) * 100).toFixed(6)}%), ` +
-                                    `Time: ${durationSec.toFixed(3)}s, ` +
-                                    `Avg Time: ${avgSignalTime.toFixed(3)}s, ` +
-                                    `ETA: ${formatTime(estimatedTimeSec)}`;
-                
-                console.log(signal)
-                console.log(progressLine)
-                console.log('---------------------------------------------------------')
-                process.stdout.write('\x1B[?25h');
-
+                formatSignal({ totalCandles, totalLines, durationSec, avgSignalTime, estimatedTimeSec });
             } catch (e) {
                 console.log(e);
                 process.exit();
@@ -93,7 +112,7 @@ const processCandles = () => {
 
     rd.on('close', () => {
         console.log(`\nCompleted. Total Candles: ${totalCandles}`);
-        console.log(formatSignal(signal));
+        formatSignal();
     });
 };
 
