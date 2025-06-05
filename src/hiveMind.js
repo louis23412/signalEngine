@@ -18,7 +18,7 @@ class HiveMind {
     #numLayers = 2;
     #feedForwardSize = 32;
     #ensembleSize = 128;
-    #contextWindow = 10;
+    #contextWindow = 50;
     #dropoutRate = 0.15;
     #learningRate = 0.01;
     #weightSharingRate = 0.1;
@@ -27,8 +27,8 @@ class HiveMind {
     #gradientClippingThreshold = 5.0;
     #swarmIntelligenceFactor = 0.3;
     #knowledgeDistillationLoss = 0.1;
-    #maxPerformanceHistory = 100;
-    #maxTrustHistory = 50;
+    #maxPerformanceHistory = 200;
+    #maxTrustHistory = 80;
     #adaptiveLearningRate = [];
     #transformers = [];
     #ensembleWeights = [];
