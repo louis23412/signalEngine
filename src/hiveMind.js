@@ -244,6 +244,7 @@ class HiveMind {
 
             const insertMetadata = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
             insertMetadata.run('trainingStepCount', this.#trainingStepCount.toString());
+            insertMetadata.run('swarmIntelligenceFactor', this.#swarmIntelligenceFactor.toString());
 
             const insertEnsembleWeights = db.prepare('INSERT OR REPLACE INTO ensemble_weights (idx, weight) VALUES (?, ?)');
             this.#ensembleWeights.forEach((weight, idx) => {
@@ -651,6 +652,10 @@ class HiveMind {
             const trainingStepCount = metadataStmt.get('trainingStepCount');
             if (trainingStepCount && isValidNumber(Number(trainingStepCount.value))) {
                 this.#trainingStepCount = Number(trainingStepCount.value);
+            }
+            const swarmIntelligenceFactor = metadataStmt.get('swarmIntelligenceFactor');
+            if (swarmIntelligenceFactor && isValidNumber(Number(swarmIntelligenceFactor.value))) {
+                this.#swarmIntelligenceFactor = Number(swarmIntelligenceFactor.value);
             }
 
             const ensembleWeightsStmt = db.prepare('SELECT idx, weight FROM ensemble_weights');
@@ -1546,6 +1551,40 @@ class HiveMind {
                 }
             }
         }
+    }
+
+    #adjustSwarmFactor(outputs) {
+        if (this.#trainingStepCount % 1000 !== 0) return;
+
+        if (
+            !Array.isArray(outputs) ||
+            outputs.length !== this.#ensembleSize ||
+            !outputs.every(isValidNumber)
+        ) {
+            return;
+        }
+
+        let diversityLoss = this.#computeDiversityLoss(outputs);
+        let normalizedDiversity = diversityLoss > 0.7 ? -1 : diversityLoss < 0.3 ? 1 : (0.5 - diversityLoss) / 0.2;
+
+        let perfMean = this.#performanceScores.reduce((sum, x) => sum + (isValidNumber(x) ? x : 0), 0) / this.#ensembleSize;
+        let perfVariance = Math.sqrt(
+            this.#performanceScores.reduce((sum, x) => sum + ((isValidNumber(x) ? x : 0) - perfMean) ** 2, 0) / this.#ensembleSize
+        ) || 0.1;
+        let normalizedPerfVariance = perfVariance > 0.5 ? -1 : perfVariance < 0.2 ? 1 : (0.35 - perfVariance) / 0.15;
+
+        let agreementMean = this.#agreementScores.reduce((sum, x) => sum + (isValidNumber(x) ? x : 0), 0) / this.#ensembleSize;
+        let normalizedAgreement = agreementMean > 0.8 ? -1 : agreementMean < 0.4 ? 1 : (0.6 - agreementMean) / 0.2;
+
+        let delta = 0.01;
+        let w_d = 0.4, w_p = 0.3, w_a = 0.3;
+        this.#swarmIntelligenceFactor += delta * (
+            w_d * (isValidNumber(normalizedDiversity) ? normalizedDiversity : 0) +
+            w_p * (isValidNumber(normalizedPerfVariance) ? normalizedPerfVariance : 0) +
+            w_a * (isValidNumber(normalizedAgreement) ? normalizedAgreement : 0)
+        );
+        this.#swarmIntelligenceFactor = Math.max(0.1, Math.min(0.5, this.#swarmIntelligenceFactor));
+        console.log(`Step ${this.#trainingStepCount}: swarmIntelligenceFactor = ${this.#swarmIntelligenceFactor}, DiversityLoss = ${diversityLoss}, PerfVariance = ${perfVariance}, AgreementMean = ${agreementMean}`);
     }
 
     #gelu(x) {
@@ -2544,6 +2583,7 @@ class HiveMind {
         this.#updateTrustScores();
         this.#computeSpecializationScores(inputs, individualOutputs);
         this.#updateAdaptiveLearningRates();
+        this.#adjustSwarmFactor(individualOutputs);
 
         this.#transformers.forEach((transformer, idx) => {
             const adjustedLearningRate = this.#adaptiveLearningRate[idx] * (0.5 + 0.5 * winRate);
