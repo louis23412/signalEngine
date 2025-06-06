@@ -21,12 +21,12 @@ class HiveMind {
     #contextWindow = 50;
     #dropoutRate = 0.15;
     #learningRate = 0.01;
+    #learningRateDecay = 0.00001;
     #weightSharingRate = 0.1;
     #diversityWeight = 0.5;
     #attentionScalingFactor = 1.0;
-    #gradientClippingThreshold = 5.0;
+    #gradientClippingThreshold = 1.0;
     #swarmIntelligenceFactor = 0.3;
-    #knowledgeDistillationLoss = 0.1;
     #maxPerformanceHistory = 200;
     #maxTrustHistory = 80;
     #adaptiveLearningRate = [];
@@ -1124,35 +1124,22 @@ class HiveMind {
             const biasSum = this.#attentionBias[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0);
             score = score / this.#inputSize + (isValidNumber(biasSum) ? biasSum / this.#hiddenSize : 0);
 
-            const historicalWeight = this.#historicalPerformance[t].length > 0
-                ? this.#historicalPerformance[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
-                this.#historicalPerformance[t].length
-                : 0;
-            const trustScore = this.#trustScoresHistory[t].length > 0
-                ? this.#trustScoresHistory[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) /
-                this.#trustScoresHistory[t].length
-                : 0.5;
+            const performanceScore = isValidNumber(this.#performanceScores[t]) ? this.#performanceScores[t] : 0.5;
             const specializationBoost = 1 + (isValidNumber(this.#specializationScores[t])
                 ? this.#specializationScores[t] * this.#swarmIntelligenceFactor
                 : 0);
 
-            attentionScores[t] = score * (0.5 + 0.2 * historicalWeight + 0.2 * trustScore + 0.1 * specializationBoost);
+            attentionScores[t] = score * (0.7 + 0.2 * performanceScore + 0.1 * specializationBoost);
         }
 
         const weights = this.#softmax(attentionScores.map(score => isValidNumber(score) ? score : 0));
 
         const finalWeights = weights.map((w, idx) => {
-            const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0;
+            const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
             const specializationFactor = 1 + (isValidNumber(this.#specializationScores[idx])
                 ? this.#specializationScores[idx] * this.#swarmIntelligenceFactor
                 : 0);
-            const trustScore = this.#trustScoresHistory[idx].length > 0
-                ? this.#trustScoresHistory[idx][this.#trustScoresHistory[idx].length - 1]
-                : 0.5;
-            const weight = 0.4 * w +
-                0.3 * performanceScore +
-                0.2 * specializationFactor +
-                0.1 * trustScore;
+            const weight = 0.6 * w + 0.3 * performanceScore + 0.1 * specializationFactor;
             return isValidNumber(weight) && weight >= 0 ? weight : 1 / this.#ensembleSize;
         });
 
@@ -1207,28 +1194,6 @@ class HiveMind {
         this.#normalizeEnsembleWeights();
     }
 
-    #normalizeSpecializationWeights() {
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            let norm = 0;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    if (isValidNumber(this.#specializationWeights[i][j][k])) {
-                        norm += Math.pow(this.#specializationWeights[i][j][k], 2);
-                    }
-                }
-            }
-            norm = Math.sqrt(norm) || 1;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    this.#specializationWeights[i][j][k] = isValidNumber(this.#specializationWeights[i][j][k])
-                        ? this.#specializationWeights[i][j][k] / norm + (Math.random() - 0.5) * 0.001
-                        : 0;
-                    this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -1.0), 1.0);
-                }
-            }
-        }
-    }
-
     #computeSpecializationScores(inputs, outputs) {
         if (
             !Array.isArray(inputs) ||
@@ -1267,12 +1232,8 @@ class HiveMind {
 
         this.#specializationScores = featureCorrelations.map((corr, idx) => {
             const meanCorr = corr.reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / corr.length || 0.5;
-            const trustFactor = this.#trustScoresHistory[idx].length > 0
-                ? this.#trustScoresHistory[idx][this.#trustScoresHistory[idx].length - 1]
-                : 0.5;
             const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
-            const input = Math.min(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * trustFactor + 0.2 * performanceFactor), 5);
-            return this.#sigmoid(input);
+            return this.#sigmoid(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.7 + 0.3 * performanceFactor));
         });
 
         const sumScores = this.#specializationScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
@@ -1285,9 +1246,8 @@ class HiveMind {
                     const inputIdx = (j + k) % this.#inputSize;
                     const corr = featureCorrelations[i][inputIdx];
                     if (isValidNumber(corr)) {
-                        const noise = (Math.random() - 0.5) * 0.005;
                         const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr) && isValidNumber(specializationFactor)
-                            ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor + noise, -0.02), 0.02)
+                            ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor, -0.01), 0.01)
                             : 0;
                         this.#specializationWeights[i][j][k] += update;
                         this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -1.0), 1.0);
@@ -1295,24 +1255,6 @@ class HiveMind {
                 }
             }
         }
-
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                const inputIdx = j % this.#inputSize;
-                const corr = isValidNumber(featureCorrelations[i][inputIdx]) ? featureCorrelations[i][inputIdx] : 0;
-                const specializationFactor = 1 + (isValidNumber(this.#specializationScores[i]) ? this.#specializationScores[i] * this.#swarmIntelligenceFactor : 0);
-                const grad = corr * specializationFactor;
-                const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(grad)
-                    ? this.#adaptiveLearningRate[i] * grad
-                    : 0;
-                this.#attentionWeightMatrix[i][j] += update;
-                const noiseScale = 0.02 * (1 + this.#specializationScores[i]);
-                this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * noiseScale;
-                this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
-            }
-        }
-
-        this.#normalizeSpecializationWeights();
     }
 
     #updateAdaptiveLearningRates() {
@@ -1326,19 +1268,19 @@ class HiveMind {
         }
 
         const performanceMean = this.#performanceScores.reduce((sum, score) => sum + score, 0) / this.#ensembleSize;
+        const performanceStd = Math.sqrt(
+            this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
+        ) || 0.1;
 
-        if (this.#performanceScores.every(score => Math.abs(score - performanceMean) < 1e-6)) {
-            this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
-            return;
-        }
+        const decayFactor = 1 / (1 + 0.00001 * this.#trainingStepCount);
 
         this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
             const performanceDiff = isValidNumber(this.#performanceScores[idx])
-                ? Math.min(Math.max(this.#performanceScores[idx] - performanceMean, -0.5), 0.5)
+                ? (this.#performanceScores[idx] - performanceMean) / (performanceStd + 1e-6)
                 : 0;
-            const adjustment = 1 + 0.2 * this.#sigmoid(performanceDiff * 5);
-            const newLr = this.#learningRate * adjustment;
-            return Math.min(Math.max(newLr, this.#learningRate * 0.5), this.#learningRate * 2);
+            const adjustment = 1 + 0.5 * this.#sigmoid(performanceDiff * 2);
+            const newLr = this.#learningRate * adjustment * decayFactor;
+            return Math.min(Math.max(newLr, this.#learningRate * 0.1), this.#learningRate * 5);
         });
     }
 
@@ -1585,29 +1527,22 @@ class HiveMind {
     }
 
     #normalizeAttentionWeights() {
-        if (this.#trainingStepCount % 500 !== 0) return;
+        if (this.#trainingStepCount % 5000 !== 0) return;
 
         for (let i = 0; i < this.#ensembleSize; i++) {
-            const mean = this.#attentionWeightMatrix[i].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / this.#hiddenSize;
-            const variance = this.#attentionWeightMatrix[i].reduce((sum, val) => sum + (isValidNumber(val) ? Math.pow(val - mean, 2) : 0), 0) / this.#hiddenSize;
-
-            if (variance < 0.01) {
-                let norm = 0;
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                        norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
-                    }
+            let norm = 0;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
+                    norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
                 }
-                norm = Math.sqrt(norm) || 1;
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                        this.#attentionWeightMatrix[i][j] = this.#attentionWeightMatrix[i][j] / (norm * 0.5 + 0.5);
-                        const noiseScale = 0.01 * (1 + this.#specializationScores[i]);
-                        this.#attentionWeightMatrix[i][j] += (Math.random() - 0.5) * noiseScale;
-                        this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
-                    } else {
-                        this.#attentionWeightMatrix[i][j] = 0;
-                    }
+            }
+            norm = Math.sqrt(norm) || 1;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
+                    this.#attentionWeightMatrix[i][j] = this.#attentionWeightMatrix[i][j] / norm;
+                    this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
+                } else {
+                    this.#attentionWeightMatrix[i][j] = 0;
                 }
             }
         }
@@ -2016,9 +1951,9 @@ class HiveMind {
         let targetOutput = topOutputs.reduce((sum, output, i) =>
             sum + (isValidNumber(output) && isValidNumber(normalizedTopWeights[i]) ? output * normalizedTopWeights[i] : 0), 0
         );
-        targetOutput = isValidNumber(targetOutput) ? targetOutput : target;
+        targetOutput = isValidNumber(targetOutput) ? 0.7 * targetOutput + 0.3 * target : target;
 
-        const diversityLoss = this.#computeDiversityLoss(outputs);
+        const diversityLoss = this.#computeDiversityLoss(outputs) * 0.5;
 
         this.#transformers.forEach((transformer, idx) => {
             if (topPerformers.includes(idx)) return;
@@ -2031,15 +1966,13 @@ class HiveMind {
                 : 0;
 
             let l2Reg = 0;
-            for (let t = 0; t < this.#ensembleSize; t++) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    if (isValidNumber(this.#attentionWeightMatrix[t][j])) {
-                        l2Reg += Math.pow(this.#attentionWeightMatrix[t][j], 2);
-                    }
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                if (isValidNumber(this.#attentionWeightMatrix[idx][j])) {
+                    l2Reg += Math.pow(this.#attentionWeightMatrix[idx][j], 2);
                 }
             }
-            const l2Loss = 0.0001 * l2Reg;
-            const totalLoss = this.#knowledgeDistillationLoss * klLoss + diversityLoss + l2Loss;
+            const l2Loss = 0.0005 * l2Reg;
+            const totalLoss = 0.5 * klLoss + diversityLoss + l2Loss;
 
             const adjustedLearningRate = this.#adaptiveLearningRate[idx];
             const grad = isValidNumber(totalLoss) ? totalLoss * adjustedLearningRate : 0;
@@ -2480,7 +2413,7 @@ class HiveMind {
                 ? val + transformer.outputBias[i]
                 : val
             );
-            return this.#sigmoid(output[0]);
+            return output[0];
         });
 
         const ensembleWeights = this.#computeAttentionWeights(inputs, outputs);
@@ -2494,7 +2427,7 @@ class HiveMind {
             }
         }
 
-        return [isValidNumber(finalOutput[0]) ? finalOutput[0] : 0];
+        return [this.#sigmoid(isValidNumber(finalOutput[0]) ? finalOutput[0] : 0)];
     }
 
     train(inputs, target, winRate = 0.5, shouldSave = true) {
@@ -2510,6 +2443,7 @@ class HiveMind {
             return;
         }
         this.#trainingStepCount++;
+        this.#learningRate = this.#learningRate / (1 + this.#learningRateDecay * this.#trainingStepCount);
 
         const individualOutputs = [];
         const layerOutputs = this.#transformers.map(() => []);
