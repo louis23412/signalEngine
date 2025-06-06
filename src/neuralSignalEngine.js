@@ -187,7 +187,7 @@ class NeuralSignalEngine {
     return (dynamicThreshold * (1 - 0.1 * confidenceProximity));
   }
 
-  #updateOpenTrades(candles) {
+  #updateOpenTrades(candles, status) {
     if (!Array.isArray(candles) || candles.length === 0) return;
 
     const minLow = Math.min(...candles.map(c => isValidNumber(c.low) ? c.low : Infinity));
@@ -258,7 +258,12 @@ class NeuralSignalEngine {
 
           const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
           const target = (trade.outcome + 1) / 2 * (0.8 + 0.2 * winRate);
-          this.#transformer.train(trade.features, target, winRate, tempCounter === closedTrades.length);
+          this.#transformer.train(
+            trade.features, 
+            target, 
+            winRate, 
+            (tempCounter === closedTrades.length) && (status === 'production')
+          );
         }
 
         for (const key of keysToDelete) {
@@ -335,13 +340,17 @@ class NeuralSignalEngine {
     }
   }
 
-  getSignal(candles) {
+  getSignal(candles, status = 'production') {
+    if (status !== 'production' && status !== 'training' && status !== 'dump') {
+      return { error : 'Invalid status. Valid options: production / training / dump' }
+    }
+
     const { error, candles: recentCandles } = this.#getRecentCandles(candles);
     if (error) {
       return { error };
     }
 
-    this.#updateOpenTrades(recentCandles);
+    this.#updateOpenTrades(recentCandles, status);
 
     const indicators = this.#indicators.compute(recentCandles);
     if (indicators.error) {
@@ -408,6 +417,10 @@ class NeuralSignalEngine {
     );
 
     const filteredDecision = this.#computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate);
+
+    if (status === 'dump') {
+      this.#transformer.dumpState()
+    }
 
     return {
       suggestedAction: filteredDecision.suggestedAction,

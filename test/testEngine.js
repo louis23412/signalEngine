@@ -88,7 +88,8 @@ const processCandles = () => {
         if (cache.length >= cacheSize) {
             try {
                 const startTime = process.hrtime.bigint();
-                signal = engine.getSignal(cache.slice(-cacheSize));
+                const status = totalCandles === totalLines ? 'dump' : 'training';
+                signal = engine.getSignal(cache.slice(-cacheSize), status);
                 const endTime = process.hrtime.bigint();
                 const durationSec = Number(endTime - startTime) / 1_000_000_000;
 

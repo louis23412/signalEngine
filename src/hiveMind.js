@@ -2909,6 +2909,10 @@ class HiveMind {
             this.#saveState();
         }
     }
+
+    dumpState() {
+        this.#saveState()
+    }
 }
 
 export default HiveMind;
