@@ -21,7 +21,6 @@ class HiveMind {
     #contextWindow = 50;
     #dropoutRate = 0.15;
     #learningRate = 0.01;
-    #learningRateDecay = 0.00001;
     #weightSharingRate = 0.1;
     #diversityWeight = 0.5;
     #attentionScalingFactor = 1.0;
@@ -1277,14 +1276,12 @@ class HiveMind {
             this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
         ) || 0.1;
 
-        const decayFactor = 1 / (1 + 0.00001 * this.#trainingStepCount);
-
         this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
             const performanceDiff = isValidNumber(this.#performanceScores[idx])
                 ? (this.#performanceScores[idx] - performanceMean) / (performanceStd + 1e-6)
                 : 0;
             const adjustment = 1 + 0.5 * this.#sigmoid(performanceDiff * 2);
-            const newLr = this.#learningRate * adjustment * decayFactor;
+            const newLr = this.#learningRate * adjustment;
             return Math.min(Math.max(newLr, this.#learningRate * 0.1), this.#learningRate * 5);
         });
     }
@@ -2482,7 +2479,6 @@ class HiveMind {
             return;
         }
         this.#trainingStepCount++;
-        this.#learningRate = this.#learningRate / (1 + this.#learningRateDecay * this.#trainingStepCount);
 
         const individualOutputs = [];
         const layerOutputs = this.#transformers.map(() => []);
