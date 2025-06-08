@@ -20,11 +20,11 @@ class HiveMind {
     #ensembleSize = 128;
     #contextWindow = 50;
     #dropoutRate = 0.15;
-    #learningRate = 0.01;
+    #learningRate = 0.001;
     #weightSharingRate = 0.1;
     #diversityWeight = 0.5;
     #attentionScalingFactor = 1.0;
-    #gradientClippingThreshold = 1.0;
+    #gradientClippingThreshold = 5.0;
     #swarmIntelligenceFactor = 0.3;
     #maxPerformanceHistory = 200;
     #maxTrustHistory = 80;
@@ -1530,8 +1530,6 @@ class HiveMind {
     }
 
     #normalizeAttentionWeights() {
-        if (this.#trainingStepCount % 5000 !== 0) return;
-
         for (let i = 0; i < this.#ensembleSize; i++) {
             let norm = 0;
             for (let j = 0; j < this.#hiddenSize; j++) {
