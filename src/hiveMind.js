@@ -1976,7 +1976,6 @@ class HiveMind {
             .map((score, idx) => ({ score: isValidNumber(score) ? score : 0, idx }))
             .sort((a, b) => b.score - a.score);
         const topPerformers = sortedIndices.slice(0, Math.floor(this.#ensembleSize * 0.25)).map(({ idx }) => idx);
-        const bottomPerformers = sortedIndices.slice(Math.floor(this.#ensembleSize * 0.25)).map(({ idx }) => idx);
 
         const topOutputs = topPerformers.map(idx => outputs[idx]);
         const topWeights = topPerformers.map(idx => this.#ensembleWeights[idx]);
@@ -2478,7 +2477,7 @@ class HiveMind {
         }
         this.#trainingStepCount++;
 
-        const individualOutputs = [];
+        const linearOutputs = [];
         const layerOutputs = this.#transformers.map(() => []);
         const activations = this.#transformers.map(() => []);
         const attentionIntermediates = this.#transformers.map(() => []);
@@ -2526,19 +2525,20 @@ class HiveMind {
                 ? val + transformer.outputBias[i]
                 : val
             );
-            individualOutputs[idx] = this.#sigmoid(output[0]);
+            linearOutputs[idx] = output[0];
         });
 
-        const ensembleWeights = this.#computeAttentionWeights(inputs, individualOutputs);
+        const ensembleWeights = this.#computeAttentionWeights(inputs, linearOutputs);
         this.#ensembleWeights = ensembleWeights;
         this.#normalizeEnsembleWeights();
-        const output = individualOutputs.reduce((sum, out, idx) =>
+        const finalLinearOutput = linearOutputs.reduce((sum, out, idx) =>
             sum + (isValidNumber(out) && isValidNumber(this.#ensembleWeights[idx]) ? out * this.#ensembleWeights[idx] : 0), 0
         );
-        const error = target - output;
+        const finalProbability = this.#sigmoid(finalLinearOutput);
+        const error = target - finalProbability;
 
         const dL_d_output = error;
-        const dL_d_w = individualOutputs.map(out => dL_d_output * out);
+        const dL_d_w = linearOutputs.map(out => dL_d_output * out);
 
         const dL_d_scores = Array(this.#ensembleSize).fill(0);
         for (let t = 0; t < this.#ensembleSize; t++) {
@@ -2559,7 +2559,8 @@ class HiveMind {
         }
 
         this.#performanceScores = this.#performanceScores.map((score, idx) => {
-            const individualError = Math.abs(target - individualOutputs[idx]);
+            const individualProbability = this.#sigmoid(linearOutputs[idx]);
+            const individualError = Math.abs(target - individualProbability);
             const newScore = 0.9 * score + 0.1 * (1 - individualError);
             this.#historicalPerformance[idx].push(isValidNumber(newScore) ? newScore : 0);
             if (this.#historicalPerformance[idx].length > this.#maxPerformanceHistory) {
@@ -2569,19 +2570,20 @@ class HiveMind {
         });
 
         this.#agreementScores = this.#agreementScores.map((score, idx) => {
-            const agreement = 1 - Math.abs(individualOutputs[idx] - output);
+            const individualProbability = this.#sigmoid(linearOutputs[idx]); // Transformer’s probability
+            const agreement = 1 - Math.abs(individualProbability - finalProbability); // Compare to ensemble probability
             const newScore = 0.9 * score + 0.1 * (isValidNumber(agreement) ? agreement : 0);
             return isValidNumber(newScore) ? newScore : 0;
         });
 
         this.#updateTrustScores();
-        this.#computeSpecializationScores(inputs, individualOutputs);
+        this.#computeSpecializationScores(inputs, linearOutputs);
         this.#updateAdaptiveLearningRates();
-        this.#adjustSwarmFactor(individualOutputs);
+        this.#adjustSwarmFactor(linearOutputs);
 
         this.#transformers.forEach((transformer, idx) => {
             const adjustedLearningRate = this.#adaptiveLearningRate[idx] * (0.5 + 0.5 * winRate);
-            const delta = Math.min(Math.max(error * output * (1 - output) * adjustedLearningRate, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+            const delta = Math.min(Math.max(error * finalLinearOutput * (1 - finalLinearOutput) * adjustedLearningRate, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
             let grad = Array(this.#hiddenSize).fill(0);
 
             for (let i = 0; i < this.#hiddenSize; i++) {
@@ -2867,7 +2869,7 @@ class HiveMind {
             }
         });
 
-        this.#distillKnowledge(individualOutputs, target);
+        this.#distillKnowledge(linearOutputs, target);
         if (this.#shouldCommunicate()) {
             this.#shareWeights();
         }
