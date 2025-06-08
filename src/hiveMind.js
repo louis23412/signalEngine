@@ -1211,21 +1211,20 @@ class HiveMind {
         }
 
         const featureCorrelations = Array(this.#ensembleSize).fill().map(() => Array(this.#inputSize).fill(0));
-
         const inputMean = inputs.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / inputs.length || 0;
         const outputMean = outputs.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / outputs.length || 0;
+        const inputStd = Math.sqrt(
+            inputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - inputMean) ** 2, 0) / inputs.length
+        ) || 1e-6;
+        const outputStd = Math.sqrt(
+            outputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - outputMean) ** 2, 0) / outputs.length
+        ) || 1e-6;
 
         for (let i = 0; i < this.#ensembleSize; i++) {
             for (let j = 0; j < this.#inputSize; j++) {
                 if (isValidNumber(inputs[j]) && isValidNumber(outputs[i])) {
                     const inputDiff = inputs[j] - inputMean;
                     const outputDiff = outputs[i] - outputMean;
-                    const inputStd = Math.sqrt(
-                        inputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - inputMean) ** 2, 0) / inputs.length
-                    ) || 1e-6;
-                    const outputStd = Math.sqrt(
-                        outputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - outputMean) ** 2, 0) / outputs.length
-                    ) || 1e-6;
                     const numerator = inputDiff * outputDiff;
                     featureCorrelations[i][j] = isValidNumber(numerator) && inputStd > 1e-6 && outputStd > 1e-6
                         ? Math.min(Math.max(numerator / (inputStd * outputStd), -1), 1)
@@ -1237,24 +1236,26 @@ class HiveMind {
         this.#specializationScores = featureCorrelations.map((corr, idx) => {
             const meanCorr = corr.reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / corr.length || 0.5;
             const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
-            return this.#sigmoid(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.7 + 0.3 * performanceFactor));
+            const outputVariance = Math.abs(outputs[idx] - outputMean) / (outputStd || 1e-6);
+            const diversityBoost = 0.3 * outputVariance;
+            return this.#sigmoid(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * performanceFactor + diversityBoost));
         });
 
-        const sumScores = this.#specializationScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
-        this.#specializationScores = this.#specializationScores.map(score => isValidNumber(score) ? score / sumScores : 0);
+        const maxScore = Math.max(...this.#specializationScores.map(score => isValidNumber(score) ? score : 0)) || 1;
+        this.#specializationScores = this.#specializationScores.map(score => isValidNumber(score) ? score / maxScore : 0);
 
         for (let i = 0; i < this.#ensembleSize; i++) {
-            const specializationFactor = 1 + this.#specializationScores[i] * this.#swarmIntelligenceFactor;
+            const specializationFactor = Math.min(Math.max(1 + this.#specializationScores[i] * this.#swarmIntelligenceFactor * 0.5, 0.5), 1.5);
             for (let j = 0; j < this.#hiddenSize; j++) {
                 for (let k = 0; k < this.#hiddenSize; k++) {
                     const inputIdx = (j + k) % this.#inputSize;
                     const corr = featureCorrelations[i][inputIdx];
                     if (isValidNumber(corr)) {
-                        const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr) && isValidNumber(specializationFactor)
-                            ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor, -0.01), 0.01)
+                        const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr)
+                            ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor * 0.1, -0.005), 0.005)
                             : 0;
                         this.#specializationWeights[i][j][k] += update;
-                        this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -1.0), 1.0);
+                        this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -0.5), 0.5);
                     }
                 }
             }
@@ -1581,7 +1582,6 @@ class HiveMind {
             w_a * (isValidNumber(normalizedAgreement) ? normalizedAgreement : 0)
         );
         this.#swarmIntelligenceFactor = Math.max(0.1, Math.min(0.5, this.#swarmIntelligenceFactor));
-        console.log(`Step ${this.#trainingStepCount}: swarmIntelligenceFactor = ${this.#swarmIntelligenceFactor}, DiversityLoss = ${diversityLoss}, PerfVariance = ${perfVariance}, AgreementMean = ${agreementMean}`);
     }
 
     #gelu(x) {
