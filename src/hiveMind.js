@@ -2467,26 +2467,20 @@ class HiveMind {
                         ? Math.min(Math.max(1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j], 0.5), 1.5)
                         : 1;
                     const gradUpdate = grad * transformer.outputWeights[i][j] * specializationFactor;
-                    const clippedUpdate = Math.min(
-                        Math.max(adjustedLearningRate * gradUpdate, -this.#gradientClippingThreshold),
-                        this.#gradientClippingThreshold
-                    );
+                    const update = adjustedLearningRate * gradUpdate;
                     transformer.outputWeights[i][j] = isValidNumber(transformer.outputWeights[i][j])
-                        ? transformer.outputWeights[i][j] - clippedUpdate
+                        ? transformer.outputWeights[i][j] - update
                         : 0;
-                    this.#gradientAccumulation[idx].outputWeights[i][j] += clippedUpdate;
+                    this.#gradientAccumulation[idx].outputWeights[i][j] += isValidNumber(update) ? update : 0;
                 }
             }
             for (let i = 0; i < this.#outputSize; i++) {
                 const gradUpdate = grad;
-                const clippedUpdate = Math.min(
-                    Math.max(adjustedLearningRate * gradUpdate, -this.#gradientClippingThreshold),
-                    this.#gradientClippingThreshold
-                );
+                const update = adjustedLearningRate * gradUpdate;
                 transformer.outputBias[i] = isValidNumber(transformer.outputBias[i])
-                    ? transformer.outputBias[i] - clippedUpdate
+                    ? transformer.outputBias[i] - update
                     : 0;
-                this.#gradientAccumulation[idx].outputBias[i] += clippedUpdate;
+                this.#gradientAccumulation[idx].outputBias[i] += isValidNumber(update) ? update : 0;
             }
 
             for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
@@ -2627,44 +2621,32 @@ class HiveMind {
                         const woUpdate = isValidNumber(woGrad[i][j]) ? woGrad[i][j] : 0;
 
                         if (isValidNumber(wqUpdate)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(adjustedLearningRate * wqUpdate * specializationFactor, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
+                            const update = adjustedLearningRate * wqUpdate * specializationFactor;
                             transformer.attentionWeights[layer].Wq[i][j] = isValidNumber(transformer.attentionWeights[layer].Wq[i][j])
-                                ? transformer.attentionWeights[layer].Wq[i][j] - clippedUpdate
+                                ? transformer.attentionWeights[layer].Wq[i][j] - update
                                 : 0;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += clippedUpdate;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += isValidNumber(update) ? update : 0;
                         }
                         if (isValidNumber(wkUpdate)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(adjustedLearningRate * wkUpdate * specializationFactor, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
+                            const update = adjustedLearningRate * wkUpdate * specializationFactor;
                             transformer.attentionWeights[layer].Wk[i][j] = isValidNumber(transformer.attentionWeights[layer].Wk[i][j])
-                                ? transformer.attentionWeights[layer].Wk[i][j] - clippedUpdate
+                                ? transformer.attentionWeights[layer].Wk[i][j] - update
                                 : 0;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += clippedUpdate;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += isValidNumber(update) ? update : 0;
                         }
                         if (isValidNumber(wvUpdate)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(adjustedLearningRate * wvUpdate * specializationFactor, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
+                            const update = adjustedLearningRate * wvUpdate * specializationFactor;
                             transformer.attentionWeights[layer].Wv[i][j] = isValidNumber(transformer.attentionWeights[layer].Wv[i][j])
-                                ? transformer.attentionWeights[layer].Wv[i][j] - clippedUpdate
+                                ? transformer.attentionWeights[layer].Wv[i][j] - update
                                 : 0;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += clippedUpdate;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += isValidNumber(update) ? update : 0;
                         }
                         if (isValidNumber(woUpdate)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(adjustedLearningRate * woUpdate * specializationFactor, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
+                            const update = adjustedLearningRate * woUpdate * specializationFactor;
                             transformer.attentionWeights[layer].Wo[i][j] = isValidNumber(transformer.attentionWeights[layer].Wo[i][j])
-                                ? transformer.attentionWeights[layer].Wo[i][j] - clippedUpdate
+                                ? transformer.attentionWeights[layer].Wo[i][j] - update
                                 : 0;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += clippedUpdate;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += isValidNumber(update) ? update : 0;
                         }
                     }
                 }
@@ -2694,30 +2676,18 @@ class HiveMind {
                             ? Math.min(Math.max(1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize], 0.5), 1.5)
                             : 1;
                         const update = adjustedLearningRate * ffnGrad[j] * ffnInput[i] * specializationFactor;
-                        if (isValidNumber(update)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(update, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
-                            transformer.ffnWeights[layer].W1[i][j] = isValidNumber(transformer.ffnWeights[layer].W1[i][j])
-                                ? transformer.ffnWeights[layer].W1[i][j] - clippedUpdate
-                                : 0;
-                            this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j] += clippedUpdate;
-                        }
+                        transformer.ffnWeights[layer].W1[i][j] = isValidNumber(transformer.ffnWeights[layer].W1[i][j])
+                            ? transformer.ffnWeights[layer].W1[i][j] - update
+                            : 0;
+                        this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j] += isValidNumber(update) ? update : 0;
                     }
                 }
                 for (let i = 0; i < this.#feedForwardSize; i++) {
                     const update = adjustedLearningRate * ffnGrad[i];
-                    if (isValidNumber(update)) {
-                        const clippedUpdate = Math.min(
-                            Math.max(update, -this.#gradientClippingThreshold),
-                            this.#gradientClippingThreshold
-                        );
-                        transformer.ffnWeights[layer].b1[i] = isValidNumber(transformer.ffnWeights[layer].b1[i])
-                            ? transformer.ffnWeights[layer].b1[i] - clippedUpdate
-                            : 0;
-                        this.#gradientAccumulation[idx].ffnWeights[layer].b1[i] += clippedUpdate;
-                    }
+                    transformer.ffnWeights[layer].b1[i] = isValidNumber(transformer.ffnWeights[layer].b1[i])
+                        ? transformer.ffnWeights[layer].b1[i] - update
+                        : 0;
+                    this.#gradientAccumulation[idx].ffnWeights[layer].b1[i] += isValidNumber(update) ? update : 0;
                 }
                 for (let i = 0; i < this.#feedForwardSize; i++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
@@ -2725,30 +2695,18 @@ class HiveMind {
                             ? Math.min(Math.max(1 + this.#specializationScores[idx] * this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize], 0.5), 1.5)
                             : 1;
                         const update = adjustedLearningRate * grad * activated[i] * specializationFactor;
-                        if (isValidNumber(update)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(update, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
-                            transformer.ffnWeights[layer].W2[i][j] = isValidNumber(transformer.ffnWeights[layer].W2[i][j])
-                                ? transformer.ffnWeights[layer].W2[i][j] - clippedUpdate
-                                : 0;
-                            this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j] += clippedUpdate;
-                        }
+                        transformer.ffnWeights[layer].W2[i][j] = isValidNumber(transformer.ffnWeights[layer].W2[i][j])
+                            ? transformer.ffnWeights[layer].W2[i][j] - update
+                            : 0;
+                        this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j] += isValidNumber(update) ? update : 0;
                     }
                 }
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     const update = adjustedLearningRate * grad;
-                    if (isValidNumber(update)) {
-                        const clippedUpdate = Math.min(
-                            Math.max(update, -this.#gradientClippingThreshold),
-                            this.#gradientClippingThreshold
-                        );
-                        transformer.ffnWeights[layer].b2[i] = isValidNumber(transformer.ffnWeights[layer].b2[i])
-                            ? transformer.ffnWeights[layer].b2[i] - clippedUpdate
-                            : 0;
-                        this.#gradientAccumulation[idx].ffnWeights[layer].b2[i] += clippedUpdate;
-                    }
+                    transformer.ffnWeights[layer].b2[i] = isValidNumber(transformer.ffnWeights[layer].b2[i])
+                        ? transformer.ffnWeights[layer].b2[i] - update
+                        : 0;
+                    this.#gradientAccumulation[idx].ffnWeights[layer].b2[i] += isValidNumber(update) ? update : 0;
                 }
 
                 const normInput = attentionInput;
@@ -2774,49 +2732,28 @@ class HiveMind {
                         const updateBeta1 = adjustedLearningRate * beta1Grad[j];
                         const updateGamma2 = adjustedLearningRate * gamma2Grad[j];
                         const updateBeta2 = adjustedLearningRate * beta2Grad[j];
-                        if (isValidNumber(updateGamma1)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(updateGamma1, -this.#gradientClippingThreshold * 1.5),
-                                this.#gradientClippingThreshold * 1.5
-                            );
-                            transformer.layerNormWeights[layer].gamma1[j] = isValidNumber(transformer.layerNormWeights[layer].gamma1[j])
-                                ? transformer.layerNormWeights[layer].gamma1[j] - clippedUpdate
-                                : 1;
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += clippedUpdate;
-                        }
-                        if (isValidNumber(updateBeta1)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(updateBeta1, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
-                            transformer.layerNormWeights[layer].beta1[j] = isValidNumber(transformer.layerNormWeights[layer].beta1[j])
-                                ? transformer.layerNormWeights[layer].beta1[j] - clippedUpdate
-                                : 0;
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += clippedUpdate;
-                        }
-                        if (isValidNumber(updateGamma2)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(updateGamma2, -this.#gradientClippingThreshold * 1.5),
-                                this.#gradientClippingThreshold * 1.5
-                            );
-                            transformer.layerNormWeights[layer].gamma2[j] = isValidNumber(transformer.layerNormWeights[layer].gamma2[j])
-                                ? transformer.layerNormWeights[layer].gamma2[j] - clippedUpdate
-                                : 1;
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[j] += clippedUpdate;
-                        }
-                        if (isValidNumber(updateBeta2)) {
-                            const clippedUpdate = Math.min(
-                                Math.max(updateBeta2, -this.#gradientClippingThreshold),
-                                this.#gradientClippingThreshold
-                            );
-                            transformer.layerNormWeights[layer].beta2[j] = isValidNumber(transformer.layerNormWeights[layer].beta2[j])
-                                ? transformer.layerNormWeights[layer].beta2[j] - clippedUpdate
-                                : 0;
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[j] += clippedUpdate;
-                        }
+                        transformer.layerNormWeights[layer].gamma1[j] = isValidNumber(transformer.layerNormWeights[layer].gamma1[j])
+                            ? transformer.layerNormWeights[layer].gamma1[j] - updateGamma1
+                            : 1;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma1) ? updateGamma1 : 0;
+                        transformer.layerNormWeights[layer].beta1[j] = isValidNumber(transformer.layerNormWeights[layer].beta1[j])
+                            ? transformer.layerNormWeights[layer].beta1[j] - updateBeta1
+                            : 0;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta1) ? updateBeta1 : 0;
+                        transformer.layerNormWeights[layer].gamma2[j] = isValidNumber(transformer.layerNormWeights[layer].gamma2[j])
+                            ? transformer.layerNormWeights[layer].gamma2[j] - updateGamma2
+                            : 1;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[j] += isValidNumber(updateGamma2) ? updateGamma2 : 0;
+                        transformer.layerNormWeights[layer].beta2[j] = isValidNumber(transformer.layerNormWeights[layer].beta2[j])
+                            ? transformer.layerNormWeights[layer].beta2[j] - updateBeta2
+                            : 0;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[j] += isValidNumber(updateBeta2) ? updateBeta2 : 0;
                     }
                 }
-            }});
+            }
+
+            this.#scaleGradients(idx);
+        });
 
         this.#gradientAccumulation = this.#gradientAccumulation.map(() => ({
             outputWeights: Array(this.#hiddenSize).fill().map(() => Array(this.#outputSize).fill(0)),
@@ -3318,11 +3255,6 @@ class HiveMind {
 
         if (shouldSave) {
             this.#saveState();
-        }
-
-        if (this.#trainingStepCount % 2000 === 0) {
-            this.#saveState()
-            process.exit()
         }
     }
 
