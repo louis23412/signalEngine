@@ -1564,11 +1564,66 @@ class HiveMind {
         }
     }
 
-    #normalizeAttentionMemory() {
+    #stabilizeAttentionContext() {
+        const computeSpectralNorm = (matrix) => {
+            if (!Array.isArray(matrix) || !matrix.every(row => Array.isArray(row) && row.every(isValidNumber)) || matrix.length === 0 || matrix[0].length === 0) {
+                return 1;
+            }
+
+            const rows = matrix.length;
+            const cols = matrix[0].length;
+
+            let u = Array(cols).fill().map(() => Math.random());
+            let v = Array(rows).fill(0);
+            const uNormInit = Math.sqrt(u.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
+            u = u.map(x => isValidNumber(x) ? x / uNormInit : 0);
+
+            const maxIter = 5;
+            for (let iter = 0; iter < maxIter; iter++) {
+                v = Array(rows).fill(0);
+                for (let i = 0; i < rows; i++) {
+                    for (let j = 0; j < cols; j++) {
+                        if (isValidNumber(matrix[i][j]) && isValidNumber(u[j])) {
+                            v[i] += matrix[i][j] * u[j];
+                        }
+                    }
+                }
+                const vNorm = Math.sqrt(v.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
+                v = v.map(x => isValidNumber(x) ? x / vNorm : 0);
+
+                u = Array(cols).fill(0);
+                for (let j = 0; j < cols; j++) {
+                    for (let i = 0; i < rows; i++) {
+                        if (isValidNumber(matrix[i][j]) && isValidNumber(v[i])) {
+                            u[j] += matrix[i][j] * v[i];
+                        }
+                    }
+                }
+                const uNorm = Math.sqrt(u.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
+                u = u.map(x => isValidNumber(x) ? x / uNorm : 0);
+            }
+
+            let norm = 0;
+            const temp = Array(rows).fill(0);
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    if (isValidNumber(matrix[i][j]) && isValidNumber(u[j])) {
+                        temp[i] += matrix[i][j] * u[j];
+                    }
+                }
+            }
+            for (let i = 0; i < rows; i++) {
+                if (isValidNumber(temp[i]) && isValidNumber(v[i])) {
+                    norm += temp[i] * v[i];
+                }
+            }
+            return Math.abs(norm) || 1;
+        };
+
         for (let t = 0; t < this.#ensembleSize; t++) {
             if (
                 !Array.isArray(this.#attentionMemory[t]) ||
-                this.#attentionMemory[t].length === 0 ||
+                this.#attentionMemory[t].length !== this.#contextWindow ||
                 !this.#attentionMemory[t].every(
                     seq => Array.isArray(seq) && seq.length === this.#inputSize && seq.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
                 )
@@ -1578,24 +1633,60 @@ class HiveMind {
                 );
             }
 
-            for (let i = 0; i < this.#attentionMemory[t].length; i++) {
+            let varianceSum = 0;
+            let count = 0;
+            for (let i = 0; i < this.#contextWindow; i++) {
                 for (let j = 0; j < this.#inputSize; j++) {
-                    let norm = 0;
-                    for (let k = 0; k < this.#hiddenSize; k++) {
-                        if (isValidNumber(this.#attentionMemory[t][i][j][k])) {
-                            norm += Math.pow(this.#attentionMemory[t][i][j][k], 2);
-                        }
-                    }
-                    norm = Math.sqrt(norm) || 1;
+                    const mean = this.#attentionMemory[t][i][j].reduce((sum, x) => sum + (isValidNumber(x) ? x : 0), 0) / this.#hiddenSize || 0;
+                    varianceSum += this.#attentionMemory[t][i][j].reduce((sum, x) => sum + (isValidNumber(x) ? Math.pow(x - mean, 2) : 0), 0);
+                    count += this.#hiddenSize;
+                }
+            }
+            const memoryVariance = count > 0 ? varianceSum / count : 1;
+            const dynamicDecay = Math.min(0.95, Math.max(0.85, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance)));
 
+            const performanceFactor = isValidNumber(this.#performanceScores[t]) ? this.#performanceScores[t] : 0.5;
+            const specializationFactor = isValidNumber(this.#specializationScores[t]) ? 1 + this.#specializationScores[t] * (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) : 1;
+            const adaptiveScale = Math.min(1.5, Math.max(0.5, performanceFactor * specializationFactor));
+
+            for (let i = 0; i < this.#contextWindow; i++) {
+                const sequenceMatrix = this.#attentionMemory[t][i];
+                const spectralNorm = computeSpectralNorm(sequenceMatrix);
+                const normScale = spectralNorm > 1 ? 1 / spectralNorm : 1;
+
+                for (let j = 0; j < this.#inputSize; j++) {
                     for (let k = 0; k < this.#hiddenSize; k++) {
                         if (isValidNumber(this.#attentionMemory[t][i][j][k])) {
-                            this.#attentionMemory[t][i][j][k] = this.#attentionMemory[t][i][j][k] / norm;
-                            this.#attentionMemory[t][i][j][k] = Math.min(Math.max(this.#attentionMemory[t][i][j][k], -1.0), 1.0);
+                            let value = this.#attentionMemory[t][i][j][k] * normScale * adaptiveScale;
+                            const prevValue = i > 0 ? this.#attentionMemory[t][i-1][j][k] : 0;
+                            value = dynamicDecay * value + (1 - dynamicDecay) * prevValue;
+                            this.#attentionMemory[t][i][j][k] = value;
                         } else {
                             this.#attentionMemory[t][i][j][k] = 0;
                         }
                     }
+                }
+            }
+
+            if (this.#attentionMemory[t].length > this.#contextWindow) {
+                const importanceScores = this.#attentionMemory[t].map((seq, idx) => {
+                    let norm = 0;
+                    for (let j = 0; j < this.#inputSize; j++) {
+                        for (let k = 0; k < this.#hiddenSize; k++) {
+                            if (isValidNumber(seq[j][k])) {
+                                norm += Math.pow(seq[j][k], 2);
+                            }
+                        }
+                    }
+                    return { index: idx, norm: Math.sqrt(norm) };
+                });
+                importanceScores.sort((a, b) => b.norm - a.norm);
+                const keepIndices = importanceScores.slice(0, this.#contextWindow).map(s => s.index).sort((a, b) => a - b);
+                this.#attentionMemory[t] = keepIndices.map(idx => this.#attentionMemory[t][idx]);
+                while (this.#attentionMemory[t].length < this.#contextWindow) {
+                    this.#attentionMemory[t].push(
+                        Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
+                    );
                 }
             }
         }
@@ -2926,7 +3017,7 @@ class HiveMind {
             this.#shareWeights();
         }
         this.#normalizeAttentionWeights();
-        this.#normalizeAttentionMemory();
+        this.#stabilizeAttentionContext();
 
         if (shouldSave) {
             this.#saveState();
