@@ -18,16 +18,16 @@ class HiveMind {
     #numLayers = 2;
     #feedForwardSize = 32;
     #ensembleSize = 128;
-    #contextWindow = 50;
-    #dropoutRate = 0.15;
+    #contextWindow = 100;
+    #dropoutRate = 0.1;
     #learningRate = 0.001;
     #weightSharingRate = 0.1;
     #diversityWeight = 0.5;
-    #attentionScalingFactor = 1.0;
-    #gradientClippingThreshold = 5.0;
-    #swarmIntelligenceFactor = 0.3;
-    #maxPerformanceHistory = 200;
-    #maxTrustHistory = 80;
+    #attentionScalingFactor = 1;
+    #gradientClippingThreshold = 1;
+    #swarmIntelligenceFactor = 0.25;
+    #maxPerformanceHistory = 500;
+    #maxTrustHistory = 250;
     #adaptiveLearningRate = [];
     #transformers = [];
     #ensembleWeights = [];
@@ -1549,6 +1549,43 @@ class HiveMind {
         }
     }
 
+    #normalizeAttentionMemory() {
+        for (let t = 0; t < this.#ensembleSize; t++) {
+            if (
+                !Array.isArray(this.#attentionMemory[t]) ||
+                this.#attentionMemory[t].length === 0 ||
+                !this.#attentionMemory[t].every(
+                    seq => Array.isArray(seq) && seq.length === this.#inputSize && seq.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
+                )
+            ) {
+                this.#attentionMemory[t] = Array(this.#contextWindow).fill().map(() =>
+                    Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
+                );
+            }
+
+            for (let i = 0; i < this.#attentionMemory[t].length; i++) {
+                for (let j = 0; j < this.#inputSize; j++) {
+                    let norm = 0;
+                    for (let k = 0; k < this.#hiddenSize; k++) {
+                        if (isValidNumber(this.#attentionMemory[t][i][j][k])) {
+                            norm += Math.pow(this.#attentionMemory[t][i][j][k], 2);
+                        }
+                    }
+                    norm = Math.sqrt(norm) || 1;
+
+                    for (let k = 0; k < this.#hiddenSize; k++) {
+                        if (isValidNumber(this.#attentionMemory[t][i][j][k])) {
+                            this.#attentionMemory[t][i][j][k] = this.#attentionMemory[t][i][j][k] / norm;
+                            this.#attentionMemory[t][i][j][k] = Math.min(Math.max(this.#attentionMemory[t][i][j][k], -1.0), 1.0);
+                        } else {
+                            this.#attentionMemory[t][i][j][k] = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #adjustSwarmFactor(outputs) {
         if (this.#trainingStepCount % 1000 !== 0) return;
 
@@ -2874,6 +2911,7 @@ class HiveMind {
             this.#shareWeights();
         }
         this.#normalizeAttentionWeights();
+        this.#normalizeAttentionMemory();
 
         if (shouldSave) {
             this.#saveState();
