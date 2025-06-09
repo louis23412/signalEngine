@@ -1374,7 +1374,7 @@ class HiveMind {
                             : t.attentionWeights[layer].Wq[i][j] || 0;
                         const decay = isValidNumber(t.attentionWeights[layer].Wq[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wq[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                            (1 - momentumFactor) * (update - decay);
                         t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
 
                         const wkUpdate = isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
@@ -1382,7 +1382,7 @@ class HiveMind {
                             : t.attentionWeights[layer].Wk[i][j] || 0;
                         const wkDecay = isValidNumber(t.attentionWeights[layer].Wk[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wk[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(wkUpdate - wkDecay, -1), 1);
+                            (1 - momentumFactor) * (wkUpdate - wkDecay);
                         t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
 
                         const wvUpdate = isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
@@ -1390,7 +1390,7 @@ class HiveMind {
                             : t.attentionWeights[layer].Wv[i][j] || 0;
                         const wvDecay = isValidNumber(t.attentionWeights[layer].Wv[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wv[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(wvUpdate - wvDecay, -1), 1);
+                            (1 - momentumFactor) * (wvUpdate - wvDecay);
                         t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
 
                         const woUpdate = isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
@@ -1398,7 +1398,7 @@ class HiveMind {
                             : t.attentionWeights[layer].Wo[i][j] ||0;
                         const woDecay = isValidNumber(t.attentionWeights[layer].Wo[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wo[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(woUpdate - woDecay, -1), 1);
+                            (1 - momentumFactor) * (woUpdate - woDecay);
                         t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
                     }
                 }
@@ -1413,7 +1413,7 @@ class HiveMind {
                             : t.ffnWeights[layer].W1[i][j] || 0;
                         const decay = isValidNumber(t.ffnWeights[layer].W1[i][j]) ? this.#weightDecayRate * t.ffnWeights[layer].W1[i][j] : 0;
                         this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                            (1 - momentumFactor) * (update - decay);
                         t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
                     }
                 }
@@ -1427,7 +1427,7 @@ class HiveMind {
                             : t.ffnWeights[layer].W2[i][j] || 0;
                         const decay = isValidNumber(t.ffnWeights[layer].W2[i][j]) ? this.#weightDecayRate * t.ffnWeights[layer].W2[i][j] : 0;
                         this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                            (1 - momentumFactor) * (update - decay);
                         t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
                     }
                 }
@@ -1438,7 +1438,7 @@ class HiveMind {
                         : t.ffnWeights[layer].b1[i] || 0;
                     const decay = isValidNumber(t.ffnWeights[layer].b1[i]) ? this.#weightDecayRate * t.ffnWeights[layer].b1[i] : 0;
                     this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                        (1 - momentumFactor) * (update - decay);
                     t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
                 }
                 for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
@@ -1447,7 +1447,7 @@ class HiveMind {
                         : t.ffnWeights[layer].b2[i] || 0;
                     const decay = isValidNumber(t.ffnWeights[layer].b2[i]) ? this.#weightDecayRate * t.ffnWeights[layer].b2[i] : 0;
                     this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                        (1 - momentumFactor) * (update - decay);
                     t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
                 }
 
@@ -1457,7 +1457,7 @@ class HiveMind {
                         : t.layerNormWeights[layer].gamma1[i] || 1;
                     const gamma1Decay = isValidNumber(t.layerNormWeights[layer].gamma1[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].gamma1[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(gamma1Update - gamma1Decay, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                        (1 - momentumFactor) * (gamma1Update - gamma1Decay);
                     t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
 
                     const beta1Update = isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
@@ -1465,7 +1465,7 @@ class HiveMind {
                         : t.layerNormWeights[layer].beta1[i] || 0;
                     const beta1Decay = isValidNumber(t.layerNormWeights[layer].beta1[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].beta1[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(beta1Update - beta1Decay, -1), 1);
+                        (1 - momentumFactor) * (beta1Update - beta1Decay);
                     t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
 
                     const gamma2Update = isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
@@ -1473,7 +1473,7 @@ class HiveMind {
                         : t.layerNormWeights[layer].gamma2[i] || 1;
                     const gamma2Decay = isValidNumber(t.layerNormWeights[layer].gamma2[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].gamma2[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(gamma2Update - gamma2Decay, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                        (1 - momentumFactor) * (gamma2Update - gamma2Decay);
                     t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
 
                     const beta2Update = isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
@@ -1481,7 +1481,7 @@ class HiveMind {
                         : t.layerNormWeights[layer].beta2[i] || 0;
                     const beta2Decay = isValidNumber(t.layerNormWeights[layer].beta2[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].beta2[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(beta2Update - beta2Decay, -1), 1);
+                        (1 - momentumFactor) * (beta2Update - beta2Decay);
                     t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
                 }
             });
@@ -1508,7 +1508,7 @@ class HiveMind {
                         : t.outputWeights[i][j] || 0;
                     const decay = isValidNumber(t.outputWeights[i][j]) ? this.#weightDecayRate * t.outputWeights[i][j] : 0;
                     this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
-                        (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                        (1 - momentumFactor) * (update - decay);
                     t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
                 }
             }
@@ -1519,10 +1519,12 @@ class HiveMind {
                     : t.outputBias[i] || 0;
                 const decay = isValidNumber(t.outputBias[i]) ? this.#weightDecayRate * t.outputBias[i] : 0;
                 this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
-                    (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
+                    (1 - momentumFactor) * (update - decay);
                 t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
             }
         });
+
+        this.#normalizeWeights();
     }
 
     #normalizeEnsembleWeights() {
@@ -1688,6 +1690,312 @@ class HiveMind {
                         Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
                     );
                 }
+            }
+        }
+    }
+
+    #computeSpectralNorm(matrix) {
+        if (!Array.isArray(matrix) || !matrix.every(row => Array.isArray(row) && row.every(isValidNumber)) || matrix.length === 0 || matrix[0].length === 0) {
+            return 1;
+        }
+        const rows = matrix.length;
+        const cols = matrix[0].length;
+        let u = Array(cols).fill().map(() => Math.random());
+        let v = Array(rows).fill(0);
+        const uNormInit = Math.sqrt(u.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
+        u = u.map(x => isValidNumber(x) ? x / uNormInit : 0);
+        const maxIter = 5;
+        for (let iter = 0; iter < maxIter; iter++) {
+            v = Array(rows).fill(0);
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    if (isValidNumber(matrix[i][j]) && isValidNumber(u[j])) {
+                        v[i] += matrix[i][j] * u[j];
+                    }
+                }
+            }
+            const vNorm = Math.sqrt(v.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
+            v = v.map(x => isValidNumber(x) ? x / vNorm : 0);
+            u = Array(cols).fill(0);
+            for (let j = 0; j < cols; j++) {
+                for (let i = 0; i < rows; i++) {
+                    if (isValidNumber(matrix[i][j]) && isValidNumber(v[i])) {
+                        u[j] += matrix[i][j] * v[i];
+                    }
+                }
+            }
+            const uNorm = Math.sqrt(u.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
+            u = u.map(x => isValidNumber(x) ? x / uNorm : 0);
+        }
+        let norm = 0;
+        const temp = Array(rows).fill(0);
+        for (let i = 0; i < rows; i++) {
+            for (let j = 0; j < cols; j++) {
+                if (isValidNumber(matrix[i][j]) && isValidNumber(u[j])) {
+                    temp[i] += matrix[i][j] * u[j];
+                }
+            }
+        }
+        for (let i = 0; i < rows; i++) {
+            if (isValidNumber(temp[i]) && isValidNumber(v[i])) {
+                norm += temp[i] * v[i];
+            }
+        }
+        return Math.abs(norm) || 1;
+    }
+
+    #scaleGradients(idx) {
+        const clipThresholdMatrix = 0.1;
+        const clipThresholdVector = 0.1;
+
+        // Output weights
+        const outputWeightsGrad = this.#gradientAccumulation[idx].outputWeights;
+        let spectralNorm = this.#computeSpectralNorm(outputWeightsGrad);
+        if (spectralNorm > clipThresholdMatrix) {
+            const scale = clipThresholdMatrix / spectralNorm;
+            for (let i = 0; i < outputWeightsGrad.length; i++) {
+                for (let j = 0; j < outputWeightsGrad[i].length; j++) {
+                    outputWeightsGrad[i][j] *= scale;
+                }
+            }
+        }
+
+        // Output bias
+        const outputBiasGrad = this.#gradientAccumulation[idx].outputBias;
+        let l2Norm = Math.sqrt(outputBiasGrad.reduce((sum, val) => sum + val * val, 0));
+        if (l2Norm > clipThresholdVector) {
+            const scale = clipThresholdVector / l2Norm;
+            for (let i = 0; i < outputBiasGrad.length; i++) {
+                outputBiasGrad[i] *= scale;
+            }
+        }
+
+        for (let layer = 0; layer < this.#numLayers; layer++) {
+            // Attention weights
+            ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
+                const gradMatrix = this.#gradientAccumulation[idx].attentionWeights[layer][key];
+                spectralNorm = this.#computeSpectralNorm(gradMatrix);
+                if (spectralNorm > clipThresholdMatrix) {
+                    const scale = clipThresholdMatrix / spectralNorm;
+                    for (let i = 0; i < gradMatrix.length; i++) {
+                        for (let j = 0; j < gradMatrix[i].length; j++) {
+                            gradMatrix[i][j] *= scale;
+                        }
+                    }
+                }
+            });
+
+            // Feedforward weights
+            ['W1', 'W2'].forEach(key => {
+                const gradMatrix = this.#gradientAccumulation[idx].ffnWeights[layer][key];
+                spectralNorm = this.#computeSpectralNorm(gradMatrix);
+                if (spectralNorm > clipThresholdMatrix) {
+                    const scale = clipThresholdMatrix / spectralNorm;
+                    for (let i = 0; i < gradMatrix.length; i++) {
+                        for (let j = 0; j < gradMatrix[i].length; j++) {
+                            gradMatrix[i][j] *= scale;
+                        }
+                    }
+                }
+            });
+
+            // Feedforward biases
+            ['b1', 'b2'].forEach(key => {
+                const gradVector = this.#gradientAccumulation[idx].ffnWeights[layer][key];
+                l2Norm = Math.sqrt(gradVector.reduce((sum, val) => sum + val * val, 0));
+                if (l2Norm > clipThresholdVector) {
+                    const scale = clipThresholdVector / l2Norm;
+                    for (let i = 0; i < gradVector.length; i++) {
+                        gradVector[i] *= scale;
+                    }
+                }
+            });
+
+            // Layer norm parameters
+            ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
+                const gradVector = this.#gradientAccumulation[idx].layerNormWeights[layer][key];
+                l2Norm = Math.sqrt(gradVector.reduce((sum, val) => sum + val * val, 0));
+                if (l2Norm > clipThresholdVector) {
+                    const scale = clipThresholdVector / l2Norm;
+                    for (let i = 0; i < gradVector.length; i++) {
+                        gradVector[i] *= scale;
+                    }
+                }
+            });
+        }
+
+        // Attention bias
+        const attentionBiasGrad = this.#gradientAccumulation[idx].attentionBias;
+        l2Norm = Math.sqrt(attentionBiasGrad.reduce((sum, val) => sum + val * val, 0));
+        if (l2Norm > clipThresholdVector) {
+            const scale = clipThresholdVector / l2Norm;
+            for (let i = 0; i < attentionBiasGrad.length; i++) {
+                attentionBiasGrad[i] *= scale;
+            }
+        }
+    }
+
+    #normalizeWeights() {
+        const normThreshold = 1.5;
+
+        for (let idx = 0; idx < this.#ensembleSize; idx++) {
+            const transformer = this.#transformers[idx];
+
+            // Output weights
+            let spectralNorm = this.#computeSpectralNorm(transformer.outputWeights);
+            if (spectralNorm > normThreshold) {
+                const scale = normThreshold / spectralNorm;
+                for (let i = 0; i < transformer.outputWeights.length; i++) {
+                    for (let j = 0; j < transformer.outputWeights[i].length; j++) {
+                        transformer.outputWeights[i][j] *= scale;
+                    }
+                }
+            }
+
+            // Output bias
+            let l2Norm = Math.sqrt(transformer.outputBias.reduce((sum, val) => sum + val * val, 0));
+            if (l2Norm > normThreshold) {
+                const scale = normThreshold / l2Norm;
+                for (let i = 0; i < transformer.outputBias.length; i++) {
+                    transformer.outputBias[i] *= scale;
+                }
+            }
+
+            for (let layer = 0; layer < this.#numLayers; layer++) {
+                // Attention weights
+                ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
+                    const weightMatrix = transformer.attentionWeights[layer][key];
+                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
+                    if (spectralNorm > normThreshold) {
+                        const scale = normThreshold / spectralNorm;
+                        for (let i = 0; i < weightMatrix.length; i++) {
+                            for (let j = 0; j < weightMatrix[i].length; j++) {
+                                weightMatrix[i][j] *= scale;
+                            }
+                        }
+                    }
+                });
+
+                // Feedforward weights
+                ['W1', 'W2'].forEach(key => {
+                    const weightMatrix = transformer.ffnWeights[layer][key];
+                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
+                    if (spectralNorm > normThreshold) {
+                        const scale = normThreshold / spectralNorm;
+                        for (let i = 0; i < weightMatrix.length; i++) {
+                            for (let j = 0; j < weightMatrix[i].length; j++) {
+                                weightMatrix[i][j] *= scale;
+                            }
+                        }
+                    }
+                });
+
+                // Feedforward biases
+                ['b1', 'b2'].forEach(key => {
+                    const biasVector = transformer.ffnWeights[layer][key];
+                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => sum + val * val, 0));
+                    if (l2Norm > normThreshold) {
+                        const scale = normThreshold / l2Norm;
+                        for (let i = 0; i < biasVector.length; i++) {
+                            biasVector[i] *= scale;
+                        }
+                    }
+                });
+
+                // Layer norm parameters
+                ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
+                    const normVector = transformer.layerNormWeights[layer][key];
+                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => sum + val * val, 0));
+                    if (l2Norm > normThreshold) {
+                        const scale = normThreshold / l2Norm;
+                        for (let i = 0; i < normVector.length; i++) {
+                            normVector[i] *= scale;
+                        }
+                    }
+                });
+            }
+
+            // Attention bias
+            l2Norm = Math.sqrt(this.#attentionBias[idx].reduce((sum, val) => sum + val * val, 0));
+            if (l2Norm > normThreshold) {
+                const scale = normThreshold / l2Norm;
+                for (let i = 0; i < this.#attentionBias[idx].length; i++) {
+                    this.#attentionBias[idx][i] *= scale;
+                }
+            }
+
+            // Attention weight matrix
+            l2Norm = Math.sqrt(this.#attentionWeightMatrix[idx].reduce((sum, val) => sum + val * val, 0));
+            if (l2Norm > normThreshold) {
+                const scale = normThreshold / l2Norm;
+                for (let i = 0; i < this.#attentionWeightMatrix[idx].length; i++) {
+                    this.#attentionWeightMatrix[idx][i] *= scale;
+                }
+            }
+
+            // Momentum weights (similar structure)
+            const momentum = this.#momentumWeights[idx];
+            spectralNorm = this.#computeSpectralNorm(momentum.outputWeights);
+            if (spectralNorm > normThreshold) {
+                const scale = normThreshold / spectralNorm;
+                for (let i = 0; i < momentum.outputWeights.length; i++) {
+                    for (let j = 0; j < momentum.outputWeights[i].length; j++) {
+                        momentum.outputWeights[i][j] *= scale;
+                    }
+                }
+            }
+            l2Norm = Math.sqrt(momentum.outputBias.reduce((sum, val) => sum + val * val, 0));
+            if (l2Norm > normThreshold) {
+                const scale = normThreshold / l2Norm;
+                for (let i = 0; i < momentum.outputBias.length; i++) {
+                    momentum.outputBias[i] *= scale;
+                }
+            }
+            for (let layer = 0; layer < this.#numLayers; layer++) {
+                ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
+                    const weightMatrix = momentum.attentionWeights[layer][key];
+                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
+                    if (spectralNorm > normThreshold) {
+                        const scale = normThreshold / spectralNorm;
+                        for (let i = 0; i < weightMatrix.length; i++) {
+                            for (let j = 0; j < weightMatrix[i].length; j++) {
+                                weightMatrix[i][j] *= scale;
+                            }
+                        }
+                    }
+                });
+                ['W1', 'W2'].forEach(key => {
+                    const weightMatrix = momentum.ffnWeights[layer][key];
+                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
+                    if (spectralNorm > normThreshold) {
+                        const scale = normThreshold / spectralNorm;
+                        for (let i = 0; i < weightMatrix.length; i++) {
+                            for (let j = 0; j < weightMatrix[i].length; j++) {
+                                weightMatrix[i][j] *= scale;
+                            }
+                        }
+                    }
+                });
+                ['b1', 'b2'].forEach(key => {
+                    const biasVector = momentum.ffnWeights[layer][key];
+                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => sum + val * val, 0));
+                    if (l2Norm > normThreshold) {
+                        const scale = normThreshold / l2Norm;
+                        for (let i = 0; i < biasVector.length; i++) {
+                            biasVector[i] *= scale;
+                        }
+                    }
+                });
+                ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
+                    const normVector = momentum.layerNormWeights[layer][key];
+                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => sum + val * val, 0));
+                    if (l2Norm > normThreshold) {
+                        const scale = normThreshold / l2Norm;
+                        for (let i = 0; i < normVector.length; i++) {
+                            normVector[i] *= scale;
+                        }
+                    }
+                });
             }
         }
     }
@@ -2734,8 +3042,7 @@ class HiveMind {
                     const gradUpdate = isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) && isValidNumber(layerOutputs[idx][this.#numLayers][0][i])
                         ? delta * this.#ensembleWeights[idx] * layerOutputs[idx][this.#numLayers][0][i]
                         : 0;
-                    const clippedUpdate = Math.min(Math.max(gradUpdate, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
-                    this.#gradientAccumulation[idx].outputWeights[i][j] += clippedUpdate;
+                    this.#gradientAccumulation[idx].outputWeights[i][j] += gradUpdate;
                     grad[i] += isValidNumber(delta) && isValidNumber(transformer.outputWeights[i][j])
                         ? delta * transformer.outputWeights[i][j]
                         : 0;
@@ -2771,30 +3078,22 @@ class HiveMind {
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         const update = adjustedLearningRate * ffnGrad[j] * ffnInput[i];
-                        this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j] += isValidNumber(update)
-                            ? Math.min(Math.max(update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                            : 0;
+                        this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j] += isValidNumber(update) ? update : 0;
                     }
                 }
                 for (let i = 0; i < this.#feedForwardSize; i++) {
                     const update = adjustedLearningRate * ffnGrad[i];
-                    this.#gradientAccumulation[idx].ffnWeights[layer].b1[i] += isValidNumber(update)
-                        ? Math.min(Math.max(update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                        : 0;
+                    this.#gradientAccumulation[idx].ffnWeights[layer].b1[i] += isValidNumber(update) ? update : 0;
                 }
                 for (let i = 0; i < this.#feedForwardSize; i++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         const update = adjustedLearningRate * grad[j] * activated[i];
-                        this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j] += isValidNumber(update)
-                            ? Math.min(Math.max(update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                            : 0;
+                        this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j] += isValidNumber(update) ? update : 0;
                     }
                 }
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     const update = adjustedLearningRate * grad[i];
-                    this.#gradientAccumulation[idx].ffnWeights[layer].b2[i] += isValidNumber(update)
-                        ? Math.min(Math.max(update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                        : 0;
+                    this.#gradientAccumulation[idx].ffnWeights[layer].b2[i] += isValidNumber(update) ? update : 0;
                 }
 
                 const normAttentionGrad = grad.slice();
@@ -2811,12 +3110,8 @@ class HiveMind {
                     beta2Grad[i] = isValidNumber(normAttentionGrad[i]) ? normAttentionGrad[i] : 0;
                     const updateGamma = adjustedLearningRate * gamma2Grad[i];
                     const updateBeta = adjustedLearningRate * beta2Grad[i];
-                    this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += isValidNumber(updateGamma)
-                        ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold * 1.5), this.#gradientClippingThreshold * 1.5)
-                        : 0;
-                    this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += isValidNumber(updateBeta)
-                        ? Math.min(Math.max(updateBeta, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                        : 0;
+                    this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += isValidNumber(updateGamma) ? updateGamma : 0;
+                    this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += isValidNumber(updateBeta) ? updateBeta : 0;
                 }
 
                 const attentionGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
@@ -2882,20 +3177,20 @@ class HiveMind {
                             ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
                             : 1;
                         if (isValidNumber(wqUpdate)) {
-                            const clippedUpdate = Math.min(Math.max(adjustedLearningRate * wqUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += clippedUpdate;
+                            const update = adjustedLearningRate * wqUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += isValidNumber(update) ? update : 0;
                         }
                         if (isValidNumber(wkUpdate)) {
-                            const clippedUpdate = Math.min(Math.max(adjustedLearningRate * wkUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += clippedUpdate;
+                            const update = adjustedLearningRate * wkUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += isValidNumber(update) ? update : 0;
                         }
                         if (isValidNumber(wvUpdate)) {
-                            const clippedUpdate = Math.min(Math.max(adjustedLearningRate * wvUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += clippedUpdate;
+                            const update = adjustedLearningRate * wvUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += isValidNumber(update) ? update : 0;
                         }
                         if (isValidNumber(woUpdate)) {
-                            const clippedUpdate = Math.min(Math.max(adjustedLearningRate * woUpdate * specializationFactor, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += clippedUpdate;
+                            const update = adjustedLearningRate * woUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += isValidNumber(update) ? update : 0;
                         }
                     }
                 }
@@ -2915,17 +3210,15 @@ class HiveMind {
                         beta1Grad[j] = isValidNumber(normXGrad[i][j]) ? normXGrad[i][j] : 0;
                         const updateGamma = adjustedLearningRate * gamma1Grad[j];
                         const updateBeta = adjustedLearningRate * beta1Grad[j];
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma)
-                            ? Math.min(Math.max(updateGamma, -this.#gradientClippingThreshold * 1.5), this.#gradientClippingThreshold * 1.5)
-                            : 0;
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta)
-                            ? Math.min(Math.max(updateBeta, -this.#gradientClippingThreshold), this.#gradientClippingThreshold)
-                            : 0;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma) ? updateGamma : 0;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta) ? updateBeta : 0;
                     }
                 }
                 grad = qGrad[0];
             }
         });
+
+        this.#normalizeWeights();
 
         this.#transformers.forEach((transformer, idx) => {
             for (let i = 0; i < this.#hiddenSize; i++) {
@@ -3002,14 +3295,18 @@ class HiveMind {
                 const biasUpdate = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i])
                     ? this.#gradientAccumulation[idx].attentionBias[i] + l2PenaltyBias
                     : l2PenaltyBias;
-                this.#attentionBias[idx][i] -= Math.min(Math.max(biasUpdate, -0.1), 0.1);
+                this.#attentionBias[idx][i] -= isValidNumber(biasUpdate) ? biasUpdate : 0;
 
                 const l2PenaltyWeight = 0.001 * this.#attentionWeightMatrix[idx][i];
                 const weightUpdate = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i])
                     ? this.#gradientAccumulation[idx].attentionBias[i] + l2PenaltyWeight
                     : l2PenaltyWeight;
-                this.#attentionWeightMatrix[idx][i] -= Math.min(Math.max(weightUpdate, -0.1), 0.1);
+                this.#attentionWeightMatrix[idx][i] -= isValidNumber(weightUpdate) ? weightUpdate : 0;
             }
+        });
+
+        this.#transformers.forEach((_, idx) => {
+            this.#scaleGradients(idx);
         });
 
         this.#distillKnowledge(linearOutputs, target);
@@ -3021,6 +3318,11 @@ class HiveMind {
 
         if (shouldSave) {
             this.#saveState();
+        }
+
+        if (this.#trainingStepCount % 2000 === 0) {
+            this.#saveState()
+            process.exit()
         }
     }
 
