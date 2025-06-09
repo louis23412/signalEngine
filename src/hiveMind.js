@@ -1582,6 +1582,23 @@ class HiveMind {
         this.#swarmIntelligenceFactor = Math.max(0.1, Math.min(0.5, this.#swarmIntelligenceFactor));
     }
 
+    #normalizeArray(arr, targetMagnitude = 1.0, minMagnitude = 1e-6) {
+        if (!Array.isArray(arr) || !arr.every(val => isValidNumber(val))) {
+            return arr.map(() => 0);
+        }
+        const is2D = Array.isArray(arr[0]);
+        let flatArr = is2D ? arr.flat() : arr;
+        const magnitude = Math.sqrt(flatArr.reduce((sum, val) => sum + val * val, 0));
+        if (magnitude < minMagnitude) {
+            return is2D ? arr.map(row => row.map(() => 0)) : arr.map(() => 0);
+        }
+        const scale = targetMagnitude / magnitude;
+        if (is2D) {
+            return arr.map(row => row.map(val => isValidNumber(val) ? val * scale : 0));
+        }
+        return flatArr.map(val => isValidNumber(val) ? val * scale : 0);
+    }
+
     #gelu(x) {
         if (!isValidNumber(x)) return 0;
         return 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * Math.pow(x, 3))));
@@ -1666,7 +1683,7 @@ class HiveMind {
             )
         ) {
             this.#attentionMemory[transformerIdx] = Array(this.#contextWindow).fill().map(() =>
-                Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
+                Array(this.#inputSize).fill().map(() => this.#normalizeArray(Array(this.#hiddenSize).fill(0), 1.0))
             );
         }
 
@@ -1841,7 +1858,14 @@ class HiveMind {
         if (this.#attentionMemory[transformerIdx].length >= this.#contextWindow) {
             this.#attentionMemory[transformerIdx].shift();
         }
-        this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice()));
+
+        const decayFactor = 0.95;
+        this.#attentionMemory[transformerIdx] = this.#attentionMemory[transformerIdx].map(seq =>
+            seq.map(row => row.map(val => isValidNumber(val) ? val * decayFactor : 0))
+        );
+
+        const normalizedOutput = finalOutput.map(row => this.#normalizeArray(row, 1.0));
+        this.#attentionMemory[transformerIdx].push(normalizedOutput);
 
         return {
             output: finalOutput,
