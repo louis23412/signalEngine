@@ -25,6 +25,7 @@ class HiveMind {
     #diversityWeight = 0.5;
     #attentionScalingFactor = 1;
     #gradientClippingThreshold = 1;
+    #weightDecayRate = 0.005;
     #swarmIntelligenceFactor = 0.25;
     #maxPerformanceHistory = 500;
     #maxTrustHistory = 250;
@@ -1371,29 +1372,33 @@ class HiveMind {
                         const update = isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wq[i][j] || 0;
+                        const decay = isValidNumber(t.attentionWeights[layer].Wq[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wq[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                            (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                         t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
 
                         const wkUpdate = isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wk[i][j] || 0;
+                        const wkDecay = isValidNumber(t.attentionWeights[layer].Wk[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wk[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(wkUpdate, -1), 1);
+                            (1 - momentumFactor) * Math.min(Math.max(wkUpdate - wkDecay, -1), 1);
                         t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
 
                         const wvUpdate = isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wv[i][j] || 0;
+                        const wvDecay = isValidNumber(t.attentionWeights[layer].Wv[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wv[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(wvUpdate, -1), 1);
+                            (1 - momentumFactor) * Math.min(Math.max(wvUpdate - wvDecay, -1), 1);
                         t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
 
                         const woUpdate = isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
-                            : t.attentionWeights[layer].Wo[i][j] || 0;
+                            : t.attentionWeights[layer].Wo[i][j] ||0;
+                        const woDecay = isValidNumber(t.attentionWeights[layer].Wo[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wo[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(woUpdate, -1), 1);
+                            (1 - momentumFactor) * Math.min(Math.max(woUpdate - woDecay, -1), 1);
                         t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
                     }
                 }
@@ -1406,8 +1411,9 @@ class HiveMind {
                         const update = isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
                             ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
                             : t.ffnWeights[layer].W1[i][j] || 0;
+                        const decay = isValidNumber(t.ffnWeights[layer].W1[i][j]) ? this.#weightDecayRate * t.ffnWeights[layer].W1[i][j] : 0;
                         this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                            (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                         t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
                     }
                 }
@@ -1419,8 +1425,9 @@ class HiveMind {
                         const update = isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
                             ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
                             : t.ffnWeights[layer].W2[i][j] || 0;
+                        const decay = isValidNumber(t.ffnWeights[layer].W2[i][j]) ? this.#weightDecayRate * t.ffnWeights[layer].W2[i][j] : 0;
                         this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
-                            (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                            (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                         t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
                     }
                 }
@@ -1429,16 +1436,18 @@ class HiveMind {
                     const update = isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
                         ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
                         : t.ffnWeights[layer].b1[i] || 0;
+                    const decay = isValidNumber(t.ffnWeights[layer].b1[i]) ? this.#weightDecayRate * t.ffnWeights[layer].b1[i] : 0;
                     this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                     t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
                 }
                 for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
                     const update = isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
                         ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
                         : t.ffnWeights[layer].b2[i] || 0;
+                    const decay = isValidNumber(t.ffnWeights[layer].b2[i]) ? this.#weightDecayRate * t.ffnWeights[layer].b2[i] : 0;
                     this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                     t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
                 }
 
@@ -1446,29 +1455,33 @@ class HiveMind {
                     const gamma1Update = isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
                         : t.layerNormWeights[layer].gamma1[i] || 1;
+                    const gamma1Decay = isValidNumber(t.layerNormWeights[layer].gamma1[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].gamma1[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(gamma1Update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                        (1 - momentumFactor) * Math.min(Math.max(gamma1Update - gamma1Decay, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
                     t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
 
                     const beta1Update = isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
                         : t.layerNormWeights[layer].beta1[i] || 0;
+                    const beta1Decay = isValidNumber(t.layerNormWeights[layer].beta1[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].beta1[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(beta1Update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(beta1Update - beta1Decay, -1), 1);
                     t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
 
                     const gamma2Update = isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
                         : t.layerNormWeights[layer].gamma2[i] || 1;
+                    const gamma2Decay = isValidNumber(t.layerNormWeights[layer].gamma2[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].gamma2[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(gamma2Update, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+                        (1 - momentumFactor) * Math.min(Math.max(gamma2Update - gamma2Decay, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
                     t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
 
                     const beta2Update = isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
                         : t.layerNormWeights[layer].beta2[i] || 0;
+                    const beta2Decay = isValidNumber(t.layerNormWeights[layer].beta2[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].beta2[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
-                        (1 - momentumFactor) * Math.min(Math.max(beta2Update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(beta2Update - beta2Decay, -1), 1);
                     t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
                 }
             });
@@ -1493,8 +1506,9 @@ class HiveMind {
                     const update = isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
                         ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
                         : t.outputWeights[i][j] || 0;
+                    const decay = isValidNumber(t.outputWeights[i][j]) ? this.#weightDecayRate * t.outputWeights[i][j] : 0;
                     this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
-                        (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                        (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                     t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
                 }
             }
@@ -1503,8 +1517,9 @@ class HiveMind {
                 const update = isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
                     ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
                     : t.outputBias[i] || 0;
+                const decay = isValidNumber(t.outputBias[i]) ? this.#weightDecayRate * t.outputBias[i] : 0;
                 this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
-                    (1 - momentumFactor) * Math.min(Math.max(update, -1), 1);
+                    (1 - momentumFactor) * Math.min(Math.max(update - decay, -1), 1);
                 t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
             }
         });
@@ -2607,8 +2622,8 @@ class HiveMind {
         });
 
         this.#agreementScores = this.#agreementScores.map((score, idx) => {
-            const individualProbability = this.#sigmoid(linearOutputs[idx]); // Transformer’s probability
-            const agreement = 1 - Math.abs(individualProbability - finalProbability); // Compare to ensemble probability
+            const individualProbability = this.#sigmoid(linearOutputs[idx]);
+            const agreement = 1 - Math.abs(individualProbability - finalProbability);
             const newScore = 0.9 * score + 0.1 * (isValidNumber(agreement) ? agreement : 0);
             return isValidNumber(newScore) ? newScore : 0;
         });
