@@ -1251,12 +1251,22 @@ class HiveMind {
                 for (let k = 0; k < this.#hiddenSize; k++) {
                     const inputIdx = (j + k) % this.#inputSize;
                     const corr = featureCorrelations[i][inputIdx];
-                    if (isValidNumber(corr)) {
-                        const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr)
-                            ? Math.min(Math.max(this.#adaptiveLearningRate[i] * corr * specializationFactor * 0.1, -0.005), 0.005)
-                            : 0;
-                        this.#specializationWeights[i][j][k] += update;
-                        this.#specializationWeights[i][j][k] = Math.min(Math.max(this.#specializationWeights[i][j][k], -0.5), 0.5);
+                    const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr)
+                        ? this.#adaptiveLearningRate[i] * corr * specializationFactor * 0.1
+                        : 0;
+                    this.#specializationWeights[i][j][k] += update;
+                }
+            }
+        }
+
+        for (let i = 0; i < this.#ensembleSize; i++) {
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                const specMatrix = this.#specializationWeights[i][j];
+                const spectralNorm = this.#computeSpectralNorm(specMatrix);
+                if (spectralNorm > 1.5) {
+                    const scale = 1.5 / spectralNorm;
+                    for (let k = 0; k < specMatrix.length; k++) {
+                        specMatrix[k] *= scale;
                     }
                 }
             }
