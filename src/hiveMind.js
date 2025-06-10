@@ -1735,7 +1735,6 @@ class HiveMind {
         const clipThresholdMatrix = 0.1;
         const clipThresholdVector = 0.1;
 
-        // Output weights
         const outputWeightsGrad = this.#gradientAccumulation[idx].outputWeights;
         let spectralNorm = this.#computeSpectralNorm(outputWeightsGrad);
         if (spectralNorm > clipThresholdMatrix) {
@@ -1747,7 +1746,6 @@ class HiveMind {
             }
         }
 
-        // Output bias
         const outputBiasGrad = this.#gradientAccumulation[idx].outputBias;
         let l2Norm = Math.sqrt(outputBiasGrad.reduce((sum, val) => sum + val * val, 0));
         if (l2Norm > clipThresholdVector) {
@@ -1758,7 +1756,6 @@ class HiveMind {
         }
 
         for (let layer = 0; layer < this.#numLayers; layer++) {
-            // Attention weights
             ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                 const gradMatrix = this.#gradientAccumulation[idx].attentionWeights[layer][key];
                 spectralNorm = this.#computeSpectralNorm(gradMatrix);
@@ -1772,7 +1769,6 @@ class HiveMind {
                 }
             });
 
-            // Feedforward weights
             ['W1', 'W2'].forEach(key => {
                 const gradMatrix = this.#gradientAccumulation[idx].ffnWeights[layer][key];
                 spectralNorm = this.#computeSpectralNorm(gradMatrix);
@@ -1786,7 +1782,6 @@ class HiveMind {
                 }
             });
 
-            // Feedforward biases
             ['b1', 'b2'].forEach(key => {
                 const gradVector = this.#gradientAccumulation[idx].ffnWeights[layer][key];
                 l2Norm = Math.sqrt(gradVector.reduce((sum, val) => sum + val * val, 0));
@@ -1798,7 +1793,6 @@ class HiveMind {
                 }
             });
 
-            // Layer norm parameters
             ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
                 const gradVector = this.#gradientAccumulation[idx].layerNormWeights[layer][key];
                 l2Norm = Math.sqrt(gradVector.reduce((sum, val) => sum + val * val, 0));
@@ -1811,7 +1805,6 @@ class HiveMind {
             });
         }
 
-        // Attention bias
         const attentionBiasGrad = this.#gradientAccumulation[idx].attentionBias;
         l2Norm = Math.sqrt(attentionBiasGrad.reduce((sum, val) => sum + val * val, 0));
         if (l2Norm > clipThresholdVector) {
@@ -1822,7 +1815,7 @@ class HiveMind {
         }
     }
 
-    #normalizeWeights() {
+    #regulateWeights() {
         for (let i = 0; i < this.#ensembleSize; i++) {
             let norm = 0;
             for (let j = 0; j < this.#hiddenSize; j++) {
@@ -1840,12 +1833,54 @@ class HiveMind {
             }
         }
 
-        const normThreshold = 1.5;
+        const normThreshold = 2.5;
 
         for (let idx = 0; idx < this.#ensembleSize; idx++) {
             const transformer = this.#transformers[idx];
 
-            // Output weights
+            const applyWeightDecay = (matrixOrVector, isMatrix = true, weightType = 'generic') => {
+                const baseDecayRate = this.#weightDecayRate / 10;
+                let dynamicDecayRate;
+
+                const l2Norm = isMatrix
+                    ? Math.sqrt(matrixOrVector.reduce((sum, row) => sum + row.reduce((s, val) => s + val * val, 0), 0))
+                    : Math.sqrt(matrixOrVector.reduce((sum, val) => sum + val * val, 0));
+
+                const decayFactors = {
+                    'Wq': 0.8,
+                    'Wk': 0.8,
+                    'Wv': 0.8,
+                    'Wo': 0.8,
+                    'W1': 1.2,
+                    'W2': 1.2,
+                    'b1': 0.5,
+                    'b2': 0.5,
+                    'outputWeights': 1.0,
+                    'outputBias': 0.5,
+                    'gamma1': 0.5,
+                    'beta1': 0.5,
+                    'gamma2': 0.5,
+                    'beta2': 0.5,
+                    'attentionBias': 0.5,
+                    'attentionWeightMatrix': 0.8
+                };
+
+                const normFactor = Math.min(1, l2Norm / normThreshold);
+                dynamicDecayRate = baseDecayRate * (decayFactors[weightType] || 1.0) * normFactor;
+
+                if (isMatrix) {
+                    for (let i = 0; i < matrixOrVector.length; i++) {
+                        for (let j = 0; j < matrixOrVector[i].length; j++) {
+                            matrixOrVector[i][j] *= (1 - dynamicDecayRate);
+                        }
+                    }
+                } else {
+                    for (let i = 0; i < matrixOrVector.length; i++) {
+                        matrixOrVector[i] *= (1 - dynamicDecayRate);
+                    }
+                }
+            };
+
             let spectralNorm = this.#computeSpectralNorm(transformer.outputWeights);
             if (spectralNorm > normThreshold) {
                 const scale = normThreshold / spectralNorm;
@@ -1855,8 +1890,8 @@ class HiveMind {
                     }
                 }
             }
+            applyWeightDecay(transformer.outputWeights, true, 'outputWeights');
 
-            // Output bias
             let l2Norm = Math.sqrt(transformer.outputBias.reduce((sum, val) => sum + val * val, 0));
             if (l2Norm > normThreshold) {
                 const scale = normThreshold / l2Norm;
@@ -1864,9 +1899,9 @@ class HiveMind {
                     transformer.outputBias[i] *= scale;
                 }
             }
+            applyWeightDecay(transformer.outputBias, false, 'outputBias');
 
             for (let layer = 0; layer < this.#numLayers; layer++) {
-                // Attention weights
                 ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                     const weightMatrix = transformer.attentionWeights[layer][key];
                     spectralNorm = this.#computeSpectralNorm(weightMatrix);
@@ -1878,9 +1913,9 @@ class HiveMind {
                             }
                         }
                     }
+                    applyWeightDecay(weightMatrix, true, key);
                 });
 
-                // Feedforward weights
                 ['W1', 'W2'].forEach(key => {
                     const weightMatrix = transformer.ffnWeights[layer][key];
                     spectralNorm = this.#computeSpectralNorm(weightMatrix);
@@ -1892,9 +1927,9 @@ class HiveMind {
                             }
                         }
                     }
+                    applyWeightDecay(weightMatrix, true, key);
                 });
 
-                // Feedforward biases
                 ['b1', 'b2'].forEach(key => {
                     const biasVector = transformer.ffnWeights[layer][key];
                     l2Norm = Math.sqrt(biasVector.reduce((sum, val) => sum + val * val, 0));
@@ -1904,9 +1939,9 @@ class HiveMind {
                             biasVector[i] *= scale;
                         }
                     }
+                    applyWeightDecay(biasVector, false, key);
                 });
 
-                // Layer norm parameters
                 ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
                     const normVector = transformer.layerNormWeights[layer][key];
                     l2Norm = Math.sqrt(normVector.reduce((sum, val) => sum + val * val, 0));
@@ -1916,10 +1951,10 @@ class HiveMind {
                             normVector[i] *= scale;
                         }
                     }
+                    applyWeightDecay(normVector, false, key);
                 });
             }
 
-            // Attention bias
             l2Norm = Math.sqrt(this.#attentionBias[idx].reduce((sum, val) => sum + val * val, 0));
             if (l2Norm > normThreshold) {
                 const scale = normThreshold / l2Norm;
@@ -1927,8 +1962,8 @@ class HiveMind {
                     this.#attentionBias[idx][i] *= scale;
                 }
             }
+            applyWeightDecay(this.#attentionBias[idx], false, 'attentionBias');
 
-            // Attention weight matrix
             l2Norm = Math.sqrt(this.#attentionWeightMatrix[idx].reduce((sum, val) => sum + val * val, 0));
             if (l2Norm > normThreshold) {
                 const scale = normThreshold / l2Norm;
@@ -1936,8 +1971,8 @@ class HiveMind {
                     this.#attentionWeightMatrix[idx][i] *= scale;
                 }
             }
+            applyWeightDecay(this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix');
 
-            // Momentum weights (similar structure)
             const momentum = this.#momentumWeights[idx];
             spectralNorm = this.#computeSpectralNorm(momentum.outputWeights);
             if (spectralNorm > normThreshold) {
@@ -1948,6 +1983,8 @@ class HiveMind {
                     }
                 }
             }
+            applyWeightDecay(momentum.outputWeights, true, 'outputWeights');
+
             l2Norm = Math.sqrt(momentum.outputBias.reduce((sum, val) => sum + val * val, 0));
             if (l2Norm > normThreshold) {
                 const scale = normThreshold / l2Norm;
@@ -1955,6 +1992,8 @@ class HiveMind {
                     momentum.outputBias[i] *= scale;
                 }
             }
+            applyWeightDecay(momentum.outputBias, false, 'outputBias');
+
             for (let layer = 0; layer < this.#numLayers; layer++) {
                 ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                     const weightMatrix = momentum.attentionWeights[layer][key];
@@ -1967,6 +2006,7 @@ class HiveMind {
                             }
                         }
                     }
+                    applyWeightDecay(weightMatrix, true, key);
                 });
                 ['W1', 'W2'].forEach(key => {
                     const weightMatrix = momentum.ffnWeights[layer][key];
@@ -1979,6 +2019,7 @@ class HiveMind {
                             }
                         }
                     }
+                    applyWeightDecay(weightMatrix, true, key);
                 });
                 ['b1', 'b2'].forEach(key => {
                     const biasVector = momentum.ffnWeights[layer][key];
@@ -1989,6 +2030,7 @@ class HiveMind {
                             biasVector[i] *= scale;
                         }
                     }
+                    applyWeightDecay(biasVector, false, key);
                 });
                 ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
                     const normVector = momentum.layerNormWeights[layer][key];
@@ -1999,6 +2041,7 @@ class HiveMind {
                             normVector[i] *= scale;
                         }
                     }
+                    applyWeightDecay(normVector, false, key);
                 });
             }
         }
@@ -3250,7 +3293,7 @@ class HiveMind {
             this.#shareWeights();
         }
 
-        this.#normalizeWeights();
+        this.#regulateWeights();
         this.#stabilizeAttentionContext();
 
         if (shouldSave) {
