@@ -24,7 +24,6 @@ class HiveMind {
     #weightSharingRate = 0.1;
     #diversityWeight = 0.5;
     #attentionScalingFactor = 1;
-    #gradientClippingThreshold = 1;
     #weightDecayRate = 0.005;
     #swarmIntelligenceFactor = 0.25;
     #maxPerformanceHistory = 500;
@@ -1533,8 +1532,6 @@ class HiveMind {
                 t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
             }
         });
-
-        this.#normalizeWeights();
     }
 
     #normalizeEnsembleWeights() {
@@ -1553,26 +1550,6 @@ class HiveMind {
         if (Math.abs(finalSum - 1) > 1e-6) {
             const maxIndex = this.#ensembleWeights.indexOf(Math.max(...this.#ensembleWeights));
             this.#ensembleWeights[maxIndex] += 1 - finalSum;
-        }
-    }
-
-    #normalizeAttentionWeights() {
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            let norm = 0;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                    norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
-                }
-            }
-            norm = Math.sqrt(norm) || 1;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                    this.#attentionWeightMatrix[i][j] = this.#attentionWeightMatrix[i][j] / norm;
-                    this.#attentionWeightMatrix[i][j] = Math.min(Math.max(this.#attentionWeightMatrix[i][j], -1.0), 1.0);
-                } else {
-                    this.#attentionWeightMatrix[i][j] = 0;
-                }
-            }
         }
     }
 
@@ -1846,6 +1823,23 @@ class HiveMind {
     }
 
     #normalizeWeights() {
+        for (let i = 0; i < this.#ensembleSize; i++) {
+            let norm = 0;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
+                    norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
+                }
+            }
+            norm = Math.sqrt(norm) || 1;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
+                    this.#attentionWeightMatrix[i][j] = this.#attentionWeightMatrix[i][j] / norm;
+                } else {
+                    this.#attentionWeightMatrix[i][j] = 0;
+                }
+            }
+        }
+
         const normThreshold = 1.5;
 
         for (let idx = 0; idx < this.#ensembleSize; idx++) {
@@ -2761,8 +2755,6 @@ class HiveMind {
                     }
                 }
             }
-
-            this.#scaleGradients(idx);
         });
 
         this.#gradientAccumulation = this.#gradientAccumulation.map(() => ({
@@ -2981,7 +2973,7 @@ class HiveMind {
 
         this.#transformers.forEach((transformer, idx) => {
             const adjustedLearningRate = this.#adaptiveLearningRate[idx] * (0.5 + 0.5 * winRate);
-            const delta = Math.min(Math.max(error * finalLinearOutput * (1 - finalLinearOutput) * adjustedLearningRate, -this.#gradientClippingThreshold), this.#gradientClippingThreshold);
+            const delta = error * finalLinearOutput * (1 - finalLinearOutput) * adjustedLearningRate
             let grad = Array(this.#hiddenSize).fill(0);
 
             for (let i = 0; i < this.#hiddenSize; i++) {
@@ -3165,9 +3157,9 @@ class HiveMind {
             }
         });
 
-        this.#normalizeWeights();
-
         this.#transformers.forEach((transformer, idx) => {
+            this.#scaleGradients(idx);
+
             for (let i = 0; i < this.#hiddenSize; i++) {
                 for (let j = 0; j < this.#outputSize; j++) {
                     transformer.outputWeights[i][j] -= isValidNumber(this.#gradientAccumulation[idx].outputWeights[i][j])
@@ -3252,15 +3244,13 @@ class HiveMind {
             }
         });
 
-        this.#transformers.forEach((_, idx) => {
-            this.#scaleGradients(idx);
-        });
-
         this.#distillKnowledge(linearOutputs, target);
+
         if (this.#shouldCommunicate()) {
             this.#shareWeights();
         }
-        this.#normalizeAttentionWeights();
+
+        this.#normalizeWeights();
         this.#stabilizeAttentionContext();
 
         if (shouldSave) {
