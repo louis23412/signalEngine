@@ -26,8 +26,8 @@ class HiveMind {
     #attentionScalingFactor = 1;
     #weightDecayRate = 0.005;
     #swarmIntelligenceFactor = 0.25;
-    #maxPerformanceHistory = 500;
-    #maxTrustHistory = 250;
+    #maxPerformanceHistory = 1000;
+    #maxTrustHistory = 500;
     #adaptiveLearningRate = [];
     #transformers = [];
     #ensembleWeights = [];
@@ -1381,33 +1381,29 @@ class HiveMind {
                         const update = isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wq[i][j] || 0;
-                        const decay = isValidNumber(t.attentionWeights[layer].Wq[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wq[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
-                            (1 - momentumFactor) * (update - decay);
+                            (1 - momentumFactor) * update;
                         t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
 
                         const wkUpdate = isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wk[i][j] || 0;
-                        const wkDecay = isValidNumber(t.attentionWeights[layer].Wk[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wk[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
-                            (1 - momentumFactor) * (wkUpdate - wkDecay);
+                            (1 - momentumFactor) * wkUpdate;
                         t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
 
                         const wvUpdate = isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wv[i][j] || 0;
-                        const wvDecay = isValidNumber(t.attentionWeights[layer].Wv[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wv[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
-                            (1 - momentumFactor) * (wvUpdate - wvDecay);
+                            (1 - momentumFactor) * wvUpdate;
                         t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
 
                         const woUpdate = isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
                             ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
                             : t.attentionWeights[layer].Wo[i][j] ||0;
-                        const woDecay = isValidNumber(t.attentionWeights[layer].Wo[i][j]) ? this.#weightDecayRate * t.attentionWeights[layer].Wo[i][j] : 0;
                         this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
-                            (1 - momentumFactor) * (woUpdate - woDecay);
+                            (1 - momentumFactor) * woUpdate;
                         t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
                     }
                 }
@@ -1420,9 +1416,8 @@ class HiveMind {
                         const update = isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
                             ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
                             : t.ffnWeights[layer].W1[i][j] || 0;
-                        const decay = isValidNumber(t.ffnWeights[layer].W1[i][j]) ? this.#weightDecayRate * t.ffnWeights[layer].W1[i][j] : 0;
                         this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
-                            (1 - momentumFactor) * (update - decay);
+                            (1 - momentumFactor) * update;
                         t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
                     }
                 }
@@ -1434,9 +1429,8 @@ class HiveMind {
                         const update = isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
                             ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
                             : t.ffnWeights[layer].W2[i][j] || 0;
-                        const decay = isValidNumber(t.ffnWeights[layer].W2[i][j]) ? this.#weightDecayRate * t.ffnWeights[layer].W2[i][j] : 0;
                         this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
-                            (1 - momentumFactor) * (update - decay);
+                            (1 - momentumFactor) * update;
                         t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
                     }
                 }
@@ -1445,18 +1439,16 @@ class HiveMind {
                     const update = isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
                         ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
                         : t.ffnWeights[layer].b1[i] || 0;
-                    const decay = isValidNumber(t.ffnWeights[layer].b1[i]) ? this.#weightDecayRate * t.ffnWeights[layer].b1[i] : 0;
                     this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
-                        (1 - momentumFactor) * (update - decay);
+                        (1 - momentumFactor) * update;
                     t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
                 }
                 for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
                     const update = isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
                         ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
                         : t.ffnWeights[layer].b2[i] || 0;
-                    const decay = isValidNumber(t.ffnWeights[layer].b2[i]) ? this.#weightDecayRate * t.ffnWeights[layer].b2[i] : 0;
                     this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
-                        (1 - momentumFactor) * (update - decay);
+                        (1 - momentumFactor) * update;
                     t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
                 }
 
@@ -1464,33 +1456,29 @@ class HiveMind {
                     const gamma1Update = isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
                         : t.layerNormWeights[layer].gamma1[i] || 1;
-                    const gamma1Decay = isValidNumber(t.layerNormWeights[layer].gamma1[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].gamma1[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-                        (1 - momentumFactor) * (gamma1Update - gamma1Decay);
+                        (1 - momentumFactor) * gamma1Update;
                     t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
 
                     const beta1Update = isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
                         : t.layerNormWeights[layer].beta1[i] || 0;
-                    const beta1Decay = isValidNumber(t.layerNormWeights[layer].beta1[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].beta1[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
-                        (1 - momentumFactor) * (beta1Update - beta1Decay);
+                        (1 - momentumFactor) * beta1Update;
                     t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
 
                     const gamma2Update = isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
                         : t.layerNormWeights[layer].gamma2[i] || 1;
-                    const gamma2Decay = isValidNumber(t.layerNormWeights[layer].gamma2[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].gamma2[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-                        (1 - momentumFactor) * (gamma2Update - gamma2Decay);
+                        (1 - momentumFactor) * gamma2Update;
                     t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
 
                     const beta2Update = isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
                         ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
                         : t.layerNormWeights[layer].beta2[i] || 0;
-                    const beta2Decay = isValidNumber(t.layerNormWeights[layer].beta2[i]) ? this.#weightDecayRate * t.layerNormWeights[layer].beta2[i] : 0;
                     this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
-                        (1 - momentumFactor) * (beta2Update - beta2Decay);
+                        (1 - momentumFactor) * beta2Update;
                     t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
                 }
             });
@@ -1515,9 +1503,8 @@ class HiveMind {
                     const update = isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
                         ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
                         : t.outputWeights[i][j] || 0;
-                    const decay = isValidNumber(t.outputWeights[i][j]) ? this.#weightDecayRate * t.outputWeights[i][j] : 0;
                     this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
-                        (1 - momentumFactor) * (update - decay);
+                        (1 - momentumFactor) * update;
                     t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
                 }
             }
@@ -1526,9 +1513,8 @@ class HiveMind {
                 const update = isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
                     ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
                     : t.outputBias[i] || 0;
-                const decay = isValidNumber(t.outputBias[i]) ? this.#weightDecayRate * t.outputBias[i] : 0;
                 this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
-                    (1 - momentumFactor) * (update - decay);
+                    (1 - momentumFactor) * update;
                 t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
             }
         });
@@ -1816,87 +1802,97 @@ class HiveMind {
     }
 
     #regulateWeights() {
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            let norm = 0;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                    norm += Math.pow(this.#attentionWeightMatrix[i][j], 2);
-                }
-            }
-            norm = Math.sqrt(norm) || 1;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                if (isValidNumber(this.#attentionWeightMatrix[i][j])) {
-                    this.#attentionWeightMatrix[i][j] = this.#attentionWeightMatrix[i][j] / norm;
-                } else {
-                    this.#attentionWeightMatrix[i][j] = 0;
-                }
-            }
-        }
-
-        const normThreshold = 2.5;
+        const diversityPenalty = 0.01;
+        const layerDecaySchedule = [1.2, 1.0];
 
         for (let idx = 0; idx < this.#ensembleSize; idx++) {
             const transformer = this.#transformers[idx];
+            const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
+            const specializationFactor = isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0.5;
 
-            const applyWeightDecay = (matrixOrVector, isMatrix = true, weightType = 'generic') => {
-                const baseDecayRate = this.#weightDecayRate / 10;
-                let dynamicDecayRate;
+            const baseDecayRate = this.#weightDecayRate / 10;
+            const perfAdjustedDecayRate = baseDecayRate * (1 - performanceFactor);
 
-                const l2Norm = isMatrix
-                    ? Math.sqrt(matrixOrVector.reduce((sum, row) => sum + row.reduce((s, val) => s + val * val, 0), 0))
-                    : Math.sqrt(matrixOrVector.reduce((sum, val) => sum + val * val, 0));
+            const applyWeightDecay = (matrixOrVector, isMatrix = true, weightType = 'generic', layer = null) => {
+                let dynamicDecayRate = perfAdjustedDecayRate;
+
+                if (layer !== null && layer < layerDecaySchedule.length) {
+                    dynamicDecayRate *= layerDecaySchedule[layer];
+                }
 
                 const decayFactors = {
-                    'Wq': 0.8,
-                    'Wk': 0.8,
-                    'Wv': 0.8,
-                    'Wo': 0.8,
-                    'W1': 1.2,
-                    'W2': 1.2,
-                    'b1': 0.5,
-                    'b2': 0.5,
-                    'outputWeights': 1.0,
-                    'outputBias': 0.5,
-                    'gamma1': 0.5,
-                    'beta1': 0.5,
-                    'gamma2': 0.5,
-                    'beta2': 0.5,
-                    'attentionBias': 0.5,
-                    'attentionWeightMatrix': 0.8
+                    'Wq': 0.8, 'Wk': 0.8, 'Wv': 0.8, 'Wo': 0.8,
+                    'W1': 1.2, 'W2': 1.2, 'b1': 0.5, 'b2': 0.5,
+                    'outputWeights': 1.0, 'outputBias': 0.5,
+                    'gamma1': 0.5, 'beta1': 0.5, 'gamma2': 0.5, 'beta2': 0.5,
+                    'attentionBias': 0.5, 'attentionWeightMatrix': 0.8,
+                    'specializationWeights': 0.6
                 };
+                dynamicDecayRate *= decayFactors[weightType] || 1.0;
 
-                const normFactor = Math.min(1, l2Norm / normThreshold);
-                dynamicDecayRate = baseDecayRate * (decayFactors[weightType] || 1.0) * normFactor;
+                if (this.#gradientAccumulation[idx][weightType]) {
+                    const gradNorm = this.#computeGradientNorm(this.#gradientAccumulation[idx][weightType], isMatrix);
+                    dynamicDecayRate *= Math.max(0.1, 1 - gradNorm / 10);
+                }
 
                 if (isMatrix) {
                     for (let i = 0; i < matrixOrVector.length; i++) {
                         for (let j = 0; j < matrixOrVector[i].length; j++) {
-                            matrixOrVector[i][j] *= (1 - dynamicDecayRate);
+                            if (isValidNumber(matrixOrVector[i][j])) {
+                                matrixOrVector[i][j] *= (1 - dynamicDecayRate);
+                            } else {
+                                matrixOrVector[i][j] = 0;
+                            }
                         }
                     }
                 } else {
                     for (let i = 0; i < matrixOrVector.length; i++) {
-                        matrixOrVector[i] *= (1 - dynamicDecayRate);
+                        if (isValidNumber(matrixOrVector[i])) {
+                            matrixOrVector[i] *= (1 - dynamicDecayRate);
+                        } else {
+                            matrixOrVector[i] = 0;
+                        }
                     }
                 }
             };
 
-            let spectralNorm = this.#computeSpectralNorm(transformer.outputWeights);
-            if (spectralNorm > normThreshold) {
-                const scale = normThreshold / spectralNorm;
-                for (let i = 0; i < transformer.outputWeights.length; i++) {
-                    for (let j = 0; j < transformer.outputWeights[i].length; j++) {
-                        transformer.outputWeights[i][j] *= scale;
+            let norm = Math.sqrt(this.#attentionWeightMatrix[idx].reduce((sum, val) => 
+                sum + (isValidNumber(val) ? val * val : 0), 0)) || 1;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                this.#attentionWeightMatrix[idx][j] = isValidNumber(this.#attentionWeightMatrix[idx][j]) 
+                    ? this.#attentionWeightMatrix[idx][j] / norm 
+                    : 0;
+            }
+
+            const diversityLoss = this.#computeDiversityLoss(this.#transformers.map(t => t.outputWeights.flat()));
+            const dynamicThreshold = 2.5 * (1 + diversityLoss);
+
+            const applySpectralNorm = (matrix, threshold) => {
+                const spectralNorm = this.#computeSpectralNorm(matrix);
+                if (spectralNorm > threshold) {
+                    const scale = threshold / spectralNorm;
+                    for (let i = 0; i < matrix.length; i++) {
+                        for (let j = 0; j < matrix[i].length; j++) {
+                            if (isValidNumber(matrix[i][j])) {
+                                matrix[i][j] *= scale;
+                            } else {
+                                matrix[i][j] = 0;
+                            }
+                        }
                     }
                 }
-            }
-            applyWeightDecay(transformer.outputWeights, true, 'outputWeights');
+            };
 
-            let l2Norm = Math.sqrt(transformer.outputBias.reduce((sum, val) => sum + val * val, 0));
-            if (l2Norm > normThreshold) {
-                const scale = normThreshold / l2Norm;
+            applySpectralNorm(transformer.outputWeights, dynamicThreshold);
+            applyWeightDecay(transformer.outputWeights, true, 'outputWeights');
+            let l2Norm = Math.sqrt(transformer.outputBias.reduce((sum, val) => 
+                sum + (isValidNumber(val) ? val * val : 0), 0));
+            if (l2Norm > dynamicThreshold) {
+                const scale = dynamicThreshold / l2Norm;
                 for (let i = 0; i < transformer.outputBias.length; i++) {
-                    transformer.outputBias[i] *= scale;
+                    transformer.outputBias[i] = isValidNumber(transformer.outputBias[i]) 
+                        ? transformer.outputBias[i] * scale 
+                        : 0;
                 }
             }
             applyWeightDecay(transformer.outputBias, false, 'outputBias');
@@ -1904,92 +1900,102 @@ class HiveMind {
             for (let layer = 0; layer < this.#numLayers; layer++) {
                 ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                     const weightMatrix = transformer.attentionWeights[layer][key];
-                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
-                    if (spectralNorm > normThreshold) {
-                        const scale = normThreshold / spectralNorm;
-                        for (let i = 0; i < weightMatrix.length; i++) {
-                            for (let j = 0; j < weightMatrix[i].length; j++) {
-                                weightMatrix[i][j] *= scale;
-                            }
-                        }
-                    }
-                    applyWeightDecay(weightMatrix, true, key);
+                    applySpectralNorm(weightMatrix, dynamicThreshold);
+                    applyWeightDecay(weightMatrix, true, key, layer);
                 });
 
                 ['W1', 'W2'].forEach(key => {
                     const weightMatrix = transformer.ffnWeights[layer][key];
-                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
-                    if (spectralNorm > normThreshold) {
-                        const scale = normThreshold / spectralNorm;
-                        for (let i = 0; i < weightMatrix.length; i++) {
-                            for (let j = 0; j < weightMatrix[i].length; j++) {
-                                weightMatrix[i][j] *= scale;
-                            }
-                        }
-                    }
-                    applyWeightDecay(weightMatrix, true, key);
+                    applySpectralNorm(weightMatrix, dynamicThreshold);
+                    applyWeightDecay(weightMatrix, true, key, layer);
                 });
 
                 ['b1', 'b2'].forEach(key => {
                     const biasVector = transformer.ffnWeights[layer][key];
-                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => sum + val * val, 0));
-                    if (l2Norm > normThreshold) {
-                        const scale = normThreshold / l2Norm;
+                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => 
+                        sum + (isValidNumber(val) ? val * val : 0), 0));
+                    if (l2Norm > dynamicThreshold) {
+                        const scale = dynamicThreshold / l2Norm;
                         for (let i = 0; i < biasVector.length; i++) {
-                            biasVector[i] *= scale;
+                            biasVector[i] = isValidNumber(biasVector[i]) ? biasVector[i] * scale : 0;
                         }
                     }
-                    applyWeightDecay(biasVector, false, key);
+                    applyWeightDecay(biasVector, false, key, layer);
                 });
 
                 ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
                     const normVector = transformer.layerNormWeights[layer][key];
-                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => sum + val * val, 0));
-                    if (l2Norm > normThreshold) {
-                        const scale = normThreshold / l2Norm;
+                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => 
+                        sum + (isValidNumber(val) ? val * val : 0), 0));
+                    if (l2Norm > dynamicThreshold) {
+                        const scale = dynamicThreshold / l2Norm;
                         for (let i = 0; i < normVector.length; i++) {
-                            normVector[i] *= scale;
+                            normVector[i] = isValidNumber(normVector[i]) ? normVector[i] * scale : 0;
                         }
                     }
-                    applyWeightDecay(normVector, false, key);
+                    applyWeightDecay(normVector, false, key, layer);
                 });
             }
 
-            l2Norm = Math.sqrt(this.#attentionBias[idx].reduce((sum, val) => sum + val * val, 0));
-            if (l2Norm > normThreshold) {
-                const scale = normThreshold / l2Norm;
+            l2Norm = Math.sqrt(this.#attentionBias[idx].reduce((sum, val) => 
+                sum + (isValidNumber(val) ? val * val : 0), 0));
+            if (l2Norm > dynamicThreshold) {
+                const scale = dynamicThreshold / l2Norm;
                 for (let i = 0; i < this.#attentionBias[idx].length; i++) {
-                    this.#attentionBias[idx][i] *= scale;
+                    this.#attentionBias[idx][i] = isValidNumber(this.#attentionBias[idx][i]) 
+                        ? this.#attentionBias[idx][i] * scale 
+                        : 0;
                 }
             }
             applyWeightDecay(this.#attentionBias[idx], false, 'attentionBias');
 
-            l2Norm = Math.sqrt(this.#attentionWeightMatrix[idx].reduce((sum, val) => sum + val * val, 0));
-            if (l2Norm > normThreshold) {
-                const scale = normThreshold / l2Norm;
+            l2Norm = Math.sqrt(this.#attentionWeightMatrix[idx].reduce((sum, val) => 
+                sum + (isValidNumber(val) ? val * val : 0), 0));
+            if (l2Norm > dynamicThreshold) {
+                const scale = dynamicThreshold / l2Norm;
                 for (let i = 0; i < this.#attentionWeightMatrix[idx].length; i++) {
-                    this.#attentionWeightMatrix[idx][i] *= scale;
+                    this.#attentionWeightMatrix[idx][i] = isValidNumber(this.#attentionWeightMatrix[idx][i]) 
+                        ? this.#attentionWeightMatrix[idx][i] * scale 
+                        : 0;
                 }
             }
             applyWeightDecay(this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix');
 
-            const momentum = this.#momentumWeights[idx];
-            spectralNorm = this.#computeSpectralNorm(momentum.outputWeights);
-            if (spectralNorm > normThreshold) {
-                const scale = normThreshold / spectralNorm;
-                for (let i = 0; i < momentum.outputWeights.length; i++) {
-                    for (let j = 0; j < momentum.outputWeights[i].length; j++) {
-                        momentum.outputWeights[i][j] *= scale;
+            for (let i = 0; i < this.#hiddenSize; i++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    const specDecayRate = baseDecayRate * (1 + specializationFactor);
+                    if (isValidNumber(this.#specializationWeights[idx][i][j])) {
+                        this.#specializationWeights[idx][i][j] *= (1 - specDecayRate);
+                    } else {
+                        this.#specializationWeights[idx][i][j] = 0;
                     }
                 }
             }
-            applyWeightDecay(momentum.outputWeights, true, 'outputWeights');
 
-            l2Norm = Math.sqrt(momentum.outputBias.reduce((sum, val) => sum + val * val, 0));
-            if (l2Norm > normThreshold) {
-                const scale = normThreshold / l2Norm;
+            for (let otherIdx = 0; otherIdx < this.#ensembleSize; otherIdx++) {
+                if (otherIdx === idx) continue;
+                const similarity = this.#computeWeightSimilarity(transformer.outputWeights, this.#transformers[otherIdx].outputWeights);
+                const penalty = diversityPenalty * similarity;
+                for (let i = 0; i < transformer.outputWeights.length; i++) {
+                    for (let j = 0; j < transformer.outputWeights[i].length; j++) {
+                        if (isValidNumber(transformer.outputWeights[i][j])) {
+                            transformer.outputWeights[i][j] -= penalty * transformer.outputWeights[i][j];
+                        }
+                    }
+                }
+            }
+
+            const momentum = this.#momentumWeights[idx];
+            applySpectralNorm(momentum.outputWeights, dynamicThreshold);
+            applyWeightDecay(momentum.outputWeights, true, 'outputWeights');
+            l2Norm = Math.sqrt(momentum.outputBias.reduce((sum, val) => 
+                sum + (isValidNumber(val) ? val * val : 0), 0));
+            if (l2Norm > dynamicThreshold) {
+                const scale = dynamicThreshold / l2Norm;
                 for (let i = 0; i < momentum.outputBias.length; i++) {
-                    momentum.outputBias[i] *= scale;
+                    momentum.outputBias[i] = isValidNumber(momentum.outputBias[i]) 
+                        ? momentum.outputBias[i] * scale 
+                        : 0;
                 }
             }
             applyWeightDecay(momentum.outputBias, false, 'outputBias');
@@ -1997,54 +2003,66 @@ class HiveMind {
             for (let layer = 0; layer < this.#numLayers; layer++) {
                 ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                     const weightMatrix = momentum.attentionWeights[layer][key];
-                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
-                    if (spectralNorm > normThreshold) {
-                        const scale = normThreshold / spectralNorm;
-                        for (let i = 0; i < weightMatrix.length; i++) {
-                            for (let j = 0; j < weightMatrix[i].length; j++) {
-                                weightMatrix[i][j] *= scale;
-                            }
-                        }
-                    }
-                    applyWeightDecay(weightMatrix, true, key);
+                    applySpectralNorm(weightMatrix, dynamicThreshold);
+                    applyWeightDecay(weightMatrix, true, key, layer);
                 });
                 ['W1', 'W2'].forEach(key => {
                     const weightMatrix = momentum.ffnWeights[layer][key];
-                    spectralNorm = this.#computeSpectralNorm(weightMatrix);
-                    if (spectralNorm > normThreshold) {
-                        const scale = normThreshold / spectralNorm;
-                        for (let i = 0; i < weightMatrix.length; i++) {
-                            for (let j = 0; j < weightMatrix[i].length; j++) {
-                                weightMatrix[i][j] *= scale;
-                            }
-                        }
-                    }
-                    applyWeightDecay(weightMatrix, true, key);
+                    applySpectralNorm(weightMatrix, dynamicThreshold);
+                    applyWeightDecay(weightMatrix, true, key, layer);
                 });
                 ['b1', 'b2'].forEach(key => {
                     const biasVector = momentum.ffnWeights[layer][key];
-                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => sum + val * val, 0));
-                    if (l2Norm > normThreshold) {
-                        const scale = normThreshold / l2Norm;
+                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => 
+                        sum + (isValidNumber(val) ? val * val : 0), 0));
+                    if (l2Norm > dynamicThreshold) {
+                        const scale = dynamicThreshold / l2Norm;
                         for (let i = 0; i < biasVector.length; i++) {
-                            biasVector[i] *= scale;
+                            biasVector[i] = isValidNumber(biasVector[i]) ? biasVector[i] * scale : 0;
                         }
                     }
-                    applyWeightDecay(biasVector, false, key);
+                    applyWeightDecay(biasVector, false, key, layer);
                 });
                 ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
                     const normVector = momentum.layerNormWeights[layer][key];
-                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => sum + val * val, 0));
-                    if (l2Norm > normThreshold) {
-                        const scale = normThreshold / l2Norm;
+                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => 
+                        sum + (isValidNumber(val) ? val * val : 0), 0));
+                    if (l2Norm > dynamicThreshold) {
+                        const scale = dynamicThreshold / l2Norm;
                         for (let i = 0; i < normVector.length; i++) {
-                            normVector[i] *= scale;
+                            normVector[i] = isValidNumber(normVector[i]) ? normVector[i] * scale : 0;
                         }
                     }
-                    applyWeightDecay(normVector, false, key);
+                    applyWeightDecay(normVector, false, key, layer);
                 });
             }
         }
+
+        this.#gradientAccumulation = this.#createWeightStructure();
+    }
+
+    #computeGradientNorm(grad, isMatrix) {
+        if (isMatrix) {
+            return Math.sqrt(grad.reduce((sum, row) => 
+                sum + row.reduce((s, val) => s + (isValidNumber(val) ? val * val : 0), 0), 0)) || 1;
+        } else {
+            return Math.sqrt(grad.reduce((sum, val) => 
+                sum + (isValidNumber(val) ? val * val : 0), 0)) || 1;
+        }
+    }
+
+    #computeWeightSimilarity(weights1, weights2) {
+        let dotProduct = 0, norm1 = 0, norm2 = 0;
+        for (let i = 0; i < weights1.length; i++) {
+            for (let j = 0; j < weights1[i].length; j++) {
+                if (isValidNumber(weights1[i][j]) && isValidNumber(weights2[i][j])) {
+                    dotProduct += weights1[i][j] * weights2[i][j];
+                    norm1 += weights1[i][j] * weights1[i][j];
+                    norm2 += weights2[i][j] * weights2[i][j];
+                }
+            }
+        }
+        return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2) + 1e-6);
     }
 
     #adjustSwarmFactor(outputs) {
@@ -2799,30 +2817,6 @@ class HiveMind {
                 }
             }
         });
-
-        this.#gradientAccumulation = this.#gradientAccumulation.map(() => ({
-            outputWeights: Array(this.#hiddenSize).fill().map(() => Array(this.#outputSize).fill(0)),
-            outputBias: Array(this.#outputSize).fill(0),
-            attentionWeights: Array(this.#numLayers).fill().map(() => ({
-                Wq: Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
-                Wk: Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
-                Wv: Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
-                Wo: Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0))
-            })),
-            ffnWeights: Array(this.#numLayers).fill().map(() => ({
-                W1: Array(this.#hiddenSize).fill().map(() => Array(this.#feedForwardSize).fill(0)),
-                W2: Array(this.#feedForwardSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
-                b1: Array(this.#feedForwardSize).fill(0),
-                b2: Array(this.#hiddenSize).fill(0)
-            })),
-            layerNormWeights: Array(this.#numLayers).fill().map(() => ({
-                gamma1: Array(this.#hiddenSize).fill(0),
-                beta1: Array(this.#hiddenSize).fill(0),
-                gamma2: Array(this.#hiddenSize).fill(0),
-                beta2: Array(this.#hiddenSize).fill(0)
-            })),
-            attentionBias: Array(this.#hiddenSize).fill(0)
-        }));
     }
 
     forward(inputs) {
