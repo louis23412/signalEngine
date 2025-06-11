@@ -21,6 +21,7 @@ class HiveMind {
     #contextWindow = 100;
     #dropoutRate = 0.1;
     #learningRate = 0.001;
+    #learningRateDecay = 1e-6;
     #weightSharingRate = 0.1;
     #diversityWeight = 0.5;
     #attentionScalingFactor = 1;
@@ -29,6 +30,8 @@ class HiveMind {
     #maxPerformanceHistory = 1000;
     #maxTrustHistory = 500;
     #adaptiveLearningRate = [];
+    #integral = [];
+    #previousError = [];
     #transformers = [];
     #ensembleWeights = [];
     #momentumWeights = [];
@@ -97,6 +100,9 @@ class HiveMind {
             outputBias: Array(this.#outputSize).fill(0)
         }));
 
+        this.#integral = Array(this.#ensembleSize).fill(0);
+        this.#previousError = Array(this.#ensembleSize).fill(0);
+
         this.#normalizeEnsembleWeights();
         this.#loadState();
     }
@@ -152,6 +158,14 @@ class HiveMind {
                 CREATE TABLE IF NOT EXISTS adaptive_learning_rate (
                     idx INTEGER PRIMARY KEY,
                     rate REAL
+                );
+                CREATE TABLE IF NOT EXISTS integral (
+                    idx INTEGER PRIMARY KEY,
+                    value REAL
+                );
+                CREATE TABLE IF NOT EXISTS previous_error (
+                    idx INTEGER PRIMARY KEY,
+                    value REAL
                 );
                 CREATE TABLE IF NOT EXISTS attention_weight_matrix (
                     idx INTEGER,
@@ -295,6 +309,20 @@ class HiveMind {
             this.#adaptiveLearningRate.forEach((rate, idx) => {
                 if (isValidNumber(rate)) {
                     insertAdaptiveLearningRate.run(idx, rate);
+                }
+            });
+
+            const insertIntegral = db.prepare('INSERT OR REPLACE INTO integral (idx, value) VALUES (?, ?)');
+            this.#integral.forEach((value, idx) => {
+                if (isValidNumber(value)) {
+                    insertIntegral.run(idx, value);
+                }
+            });
+
+            const insertPreviousError = db.prepare('INSERT OR REPLACE INTO previous_error (idx, value) VALUES (?, ?)');
+            this.#previousError.forEach((value, idx) => {
+                if (isValidNumber(value)) {
+                    insertPreviousError.run(idx, value);
                 }
             });
 
@@ -713,6 +741,22 @@ class HiveMind {
             adaptiveLearningRates.forEach(({ idx, rate }) => {
                 if (isValidNumber(rate) && idx >= 0 && idx < this.#ensembleSize) {
                     this.#adaptiveLearningRate[idx] = rate;
+                }
+            });
+
+            const integralStmt = db.prepare('SELECT idx, value FROM integral');
+            const integrals = integralStmt.all();
+            integrals.forEach(({ idx, value }) => {
+                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#integral[idx] = value;
+                }
+            });
+
+            const previousErrorStmt = db.prepare('SELECT idx, value FROM previous_error');
+            const previousErrors = previousErrorStmt.all();
+            previousErrors.forEach(({ idx, value }) => {
+                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#previousError[idx] = value;
                 }
             });
 
@@ -1286,14 +1330,23 @@ class HiveMind {
         const performanceStd = Math.sqrt(
             this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
         ) || 0.1;
+        const baseLr = this.#learningRate / (1 + this.#learningRateDecay * this.#trainingStepCount);
+
+        const Kp = 0.1;
+        const Ki = 0.01;
+        const Kd = 0.05;
+        const integralClamp = 10;
 
         this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
-            const performanceDiff = isValidNumber(this.#performanceScores[idx])
-                ? (this.#performanceScores[idx] - performanceMean) / (performanceStd + 1e-6)
-                : 0;
-            const adjustment = 1 + 0.5 * this.#sigmoid(performanceDiff * 2);
-            const newLr = this.#learningRate * adjustment;
-            return Math.min(Math.max(newLr, this.#learningRate * 0.1), this.#learningRate * 5);
+            const error = (performanceMean - this.#performanceScores[idx]) / (performanceStd + 1e-6);
+            this.#integral[idx] += error;
+            this.#integral[idx] = Math.max(-integralClamp, Math.min(this.#integral[idx], integralClamp));
+            const derivative = error - this.#previousError[idx];
+            this.#previousError[idx] = error;
+            const PID = Kp * error + Ki * this.#integral[idx] + Kd * derivative;
+            const adjustment = 1 + PID;
+            const newLr = baseLr * adjustment;
+            return Math.min(Math.max(newLr, baseLr * 0.1), baseLr * 5);
         });
     }
 
