@@ -62,7 +62,7 @@ class NeuralSignalEngine {
         patternScore REAL NOT NULL,
         features TEXT NOT NULL,
         stateKey TEXT NOT NULL,
-        dynamicThreshold REAL NOT NULL
+        Threshold REAL NOT NULL
       );
       CREATE TABLE IF NOT EXISTS candles (
         timestamp TEXT PRIMARY KEY,
@@ -128,29 +128,60 @@ class NeuralSignalEngine {
     return { error: null, candles: recentCandles };
   }
 
+  #robustNormalize(data, count = 1, lowerPercentile = 0.05, upperPercentile = 0.95) {
+    if (!Array.isArray(data) || data.length < 2) return Array(count).fill(0);
+    
+    const actualCount = Math.min(count, data.length);
+    const valuesToNormalize = data.slice(-actualCount);
+    
+    if (!valuesToNormalize.every(isValidNumber)) return Array(actualCount).fill(0);
+    
+    const sortedData = [...data].sort((a, b) => a - b);
+    const lowerIdx = Math.floor(lowerPercentile * sortedData.length);
+    const upperIdx = Math.ceil(upperPercentile * sortedData.length) - 1;
+    const min = sortedData[lowerIdx];
+    const max = sortedData[upperIdx];
+    
+    if (!isValidNumber(min) || !isValidNumber(max) || max === min) return Array(actualCount).fill(0);
+    
+    return valuesToNormalize.map(value => truncateToDecimals(Math.min(1, Math.max(0, (value - min) / (max - min))), 4));
+  };
+
   #extractFeatures(data) {
-    const normalize = (value, min, max) => {
-      if (!isValidNumber(value) || !isValidNumber(min) || !isValidNumber(max) || max === min) return 0;
-      return Math.min(1, Math.max(0, (value - min) / (max - min)));
-    };
-    return [
-      truncateToDecimals(normalize(data.rsi[data.rsi.length - 1], data.rsiMin, data.rsiMax), 6),
-      truncateToDecimals(normalize(data.macd[data.macd.length - 1].MACD - data.macd[data.macd.length - 1].signal, data.macdMin, data.macdMax), 6),
-      truncateToDecimals(normalize(data.atr[data.atr.length - 1], data.atrMin, data.atrMax), 6),
-      truncateToDecimals(Math.min(1, Math.max(-1, data.volumeZScore / 3)), 6),
-      data.isTrending,
-      data.isRanging
-    ];
+    const normalizedRsi = this.#robustNormalize(data.rsi, 10);
+    const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, 10);
+    const normalizedEma100 = this.#robustNormalize(data.ema100, 10);
+    const normalizedStochasticDiff = this.#robustNormalize(data.stochasticDiff, 10);
+    const normalizedBollingerPercentB = this.#robustNormalize(data.bollingerPercentB, 10);
+    const normalizedObv = this.#robustNormalize(data.obv, 10);
+    const normalizedAdx = this.#robustNormalize(data.adx, 10);
+    const normalizedCci = this.#robustNormalize(data.cci, 10);
+    const normalizedWilliamsR = this.#robustNormalize(data.williamsR, 10);
+    const normalizedCmf = this.#robustNormalize(data.cmf, 10);
+
+    const result = Array.from({ length: 10 }, (_, i) => [
+        normalizedRsi[i],
+        normalizedMacdDiff[i],
+        normalizedEma100[i],
+        normalizedStochasticDiff[i],
+        normalizedBollingerPercentB[i],
+        normalizedObv[i],
+        normalizedAdx[i],
+        normalizedCci[i],
+        normalizedWilliamsR[i],
+        normalizedCmf[i]
+    ]);
+
+    return result;
   }
 
   #generateFeatureKey(features) {
-    if (!Array.isArray(features) || features.length !== 6) return 'default';
-    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 10000) / 10000 : 0);
+    if (!Array.isArray(features) || features.length !== 10) return 'default';
+    const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000) / 1000 : 0);
     return quantized.join('|');
   }
 
-  #scorePattern(features) {
-    const key = this.#generateFeatureKey(features);
+  #scorePattern(features, key) {
     const stmt = this.#db.prepare(`SELECT score, features, usage_count, win_count FROM patterns WHERE bucket_key = ?`);
     const patterns = stmt.all(key);
     if (!patterns || patterns.length === 0) return 0;
@@ -170,23 +201,6 @@ class NeuralSignalEngine {
     return matchCount > 0 ? totalScore / matchCount : 0;
   }
 
-  #computeDynamicThreshold(data, confidence, baseThreshold = this.#config.baseConfidenceThreshold, winRate = 0.5) {
-    const normalize = (value, min, max) => {
-      if (!isValidNumber(value) || !isValidNumber(min) || !isValidNumber(max) || max === min) return 0.5;
-      return Math.min(1, Math.max(0, (value - min) / (max - min)));
-    };
-    const atrNorm = normalize(data.atr[data.atr.length - 1], data.atrMin, data.atrMax);
-    const rsiNorm = normalize(data.rsi[data.rsi.length - 1], data.rsiMin, data.rsiMax);
-    const volumeNorm = isValidNumber(data.volumeZScore) ? Math.abs(data.volumeZScore) / 3 : 0;
-    const volatilityScore = (atrNorm + volumeNorm + rsiNorm * 0.5) / 2.5;
-    const marketCondition = data.isTrending ? 0.8 : data.isRanging ? 1.2 : 1.0;
-    let dynamicThreshold = baseThreshold * volatilityScore * marketCondition * (1 - 0.2 * winRate);
-    dynamicThreshold = Math.max(40, Math.min(80, isValidNumber(dynamicThreshold) ? dynamicThreshold : 60));
-    if (!isValidNumber(confidence)) return parseFloat(dynamicThreshold.toFixed(3));
-    const confidenceProximity = Math.abs(confidence - dynamicThreshold) / 100;
-    return (dynamicThreshold * (1 - 0.1 * confidenceProximity));
-  }
-
   #updateOpenTrades(candles, status) {
     if (!Array.isArray(candles) || candles.length === 0) return;
 
@@ -195,7 +209,7 @@ class NeuralSignalEngine {
     if (!isValidNumber(minLow) || !isValidNumber(maxHigh)) return;
 
     const tradesStmt = this.#db.prepare(`
-      SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, dynamicThreshold
+      SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, Threshold
       FROM open_trades
       WHERE sellPrice BETWEEN ? AND ? OR stopLoss BETWEEN ? AND ?
     `);
@@ -221,8 +235,8 @@ class NeuralSignalEngine {
             reward: outcome * (trade.confidence / 100),
             patternScore: trade.patternScore,
             features,
-            stateKey: trade.stateKey,
-            dynamicThreshold: trade.dynamicThreshold
+            key: trade.stateKey,
+            threshold: trade.threshold
           });
           keysToDelete.add(trade.timestamp);
           break;
@@ -246,24 +260,31 @@ class NeuralSignalEngine {
         let tempCounter = 0
         for (const trade of closedTrades) {
           tempCounter++
-          const key = this.#generateFeatureKey(trade.features);
-          const pattern = patternStmt.get(key, JSON.stringify(trade.features));
+          const pattern = patternStmt.get(trade.key, JSON.stringify(trade.features.at(-1)));
           const isWin = trade.outcome > 0 ? 1 : 0;
           const usageCount = pattern ? pattern.usage_count + 1 : 1;
           const winCount = pattern ? pattern.win_count + isWin : isWin;
-          insertPatternStmt.run(key, JSON.stringify(trade.features), trade.reward, usageCount, winCount);
+          insertPatternStmt.run(trade.key, JSON.stringify(trade.features.at(-1)), trade.reward, usageCount, winCount);
 
-          const existingQ = this.#db.prepare(`SELECT buy, hold FROM qtable WHERE state_key = ?`).get(trade.stateKey) || { buy: 0, hold: 0 };
-          updateQTableStmt.run(trade.stateKey, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.stateKey);
+          const existingQ = this.#db.prepare(`SELECT buy, hold FROM qtable WHERE state_key = ?`).get(trade.key) || { buy: 0, hold: 0 };
+          updateQTableStmt.run(trade.key, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.key);
 
           const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
           const target = (trade.outcome + 1) / 2 * (0.8 + 0.2 * winRate);
+
+          console.log(`Training triggered with .train for open trade: ${tempCounter} / ${closedTrades.length}...`)
+          const startTime = process.hrtime();
+
           this.#transformer.train(
-            trade.features, 
+            trade.features.flat(), 
             target, 
             winRate, 
             (tempCounter === closedTrades.length) && (status === 'production')
           );
+
+          const diff = process.hrtime(startTime);
+          const executionTime = (diff[0] * 1e9 + diff[1]) / 1e9;
+          console.log(`Training complete! - Execution time: ${executionTime} seconds`);
         }
 
         for (const key of keysToDelete) {
@@ -271,72 +292,6 @@ class NeuralSignalEngine {
         }
       });
       transaction();
-    }
-  }
-
-  #computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate) {
-    if (
-      !qValues ||
-      !isValidNumber(confidence) ||
-      !isValidNumber(dynamicThreshold) ||
-      !Array.isArray(features) ||
-      features.length !== 6 ||
-      !features.every(isValidNumber) ||
-      !isValidNumber(patternScore) ||
-      !isValidNumber(winRate)
-    ) {
-      return 'hold';
-    }
-
-    const qBuy = isValidNumber(qValues.buy) ? qValues.buy : 0;
-    const qHold = isValidNumber(qValues.hold) ? qValues.hold : 0;
-    const maxQ = Math.max(qBuy, qHold, 1e-6);
-    const temperature = 0.5 + 0.5 * winRate;
-    const expBuy = Math.exp((qBuy - maxQ) / temperature);
-    const expHold = Math.exp((qHold - maxQ) / temperature);
-    const sumExp = expBuy + expHold || 1;
-    const probBuy = expBuy / sumExp;
-    const probHold = expHold / sumExp;
-
-    const renyiEntropy = -Math.log2(probBuy ** 2 + probHold ** 2 + 1e-6) / Math.log2(2);
-    const normalizedEntropy = Math.min(1, renyiEntropy);
-
-    const priorConfidence = 0.5;
-    const evidenceStrength = 1 + patternScore * (0.5 + 0.5 * winRate);
-    const bayesianConfidence = (confidence * evidenceStrength + priorConfidence * 0.1) / (evidenceStrength + 0.1);
-    const riskAdjustedConfidence = bayesianConfidence * (1 - 0.3 * normalizedEntropy * (1 - winRate));
-
-    const featureNorm = Math.sqrt(features.reduce((sum, f) => sum + f ** 2, 0)) || 1;
-    const normalizedFeatures = features.map(f => f / featureNorm);
-    const idealBuyFeature = [1, 1, 0.5, 0, 1, 0];
-    const idealHoldFeature = [0.5, 0, 0.5, 0, 0, 1];
-    const buySimilarity = normalizedFeatures.reduce((sum, f, i) => sum + f * idealBuyFeature[i], 0) / (Math.sqrt(idealBuyFeature.reduce((sum, f) => sum + f ** 2, 0)) || 1);
-    const holdSimilarity = normalizedFeatures.reduce((sum, f, i) => sum + f * idealHoldFeature[i], 0) / (Math.sqrt(idealHoldFeature.reduce((sum, f) => sum + f ** 2, 0)) || 1);
-    const contextScore = buySimilarity / (buySimilarity + holdSimilarity + 1e-6);
-
-    const featureVariance = features.reduce((sum, f) => sum + (f - 0.5) ** 2, 0) / features.length;
-    const volatilityScore = Math.sqrt(featureVariance) * (1 + 0.2 * normalizedEntropy);
-    const patternReliability = patternScore > 0 ? 1 + 0.3 * patternScore : 1;
-    const marketStability = winRate > 0.5 ? 1 + 0.2 * (winRate - 0.5) : 1 - 0.2 * (0.5 - winRate);
-    const riskScore = 0.4 * volatilityScore + 0.4 * (1 - patternReliability) + 0.2 * (1 - marketStability);
-
-    const baseThreshold = dynamicThreshold * patternReliability * (1 - 0.2 * normalizedEntropy);
-    const logisticAdjustment = 1 / (1 + Math.exp(-10 * (contextScore - 0.5)));
-    const adaptiveThreshold = baseThreshold * (0.6 + 0.4 * logisticAdjustment) * (0.7 + 0.3 * winRate);
-
-    const decisionScore = (
-      0.5 * riskAdjustedConfidence * probBuy +
-      0.3 * contextScore +
-      0.2 * patternScore * winRate
-    ) * (1 - 0.1 * riskScore);
-
-    const hysteresisFactor = 1.05;
-    const buyThreshold = adaptiveThreshold * (probBuy > probHold ? 1 : hysteresisFactor);
-
-    return {
-      suggestedAction : decisionScore >= buyThreshold ? 'buy' : 'hold',
-      decisionScore,
-      buyThreshold
     }
   }
 
@@ -358,20 +313,26 @@ class NeuralSignalEngine {
     }
 
     const features = this.#extractFeatures(indicators);
-    const patternScore = this.#scorePattern(features);
-    const confidence = this.#transformer.forward(features)[0] * 100 * (1 + patternScore);
+    const key = this.#generateFeatureKey(features.at(-1));
+    const patternScore = this.#scorePattern(features.at(-1), key);
 
-    const key = this.#generateFeatureKey(features);
     const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
-    const pattern = patternStmt.get(key, JSON.stringify(features));
-    const winRate = pattern && pattern.usage_count > 0
-      ? pattern.win_count / pattern.usage_count
-      : 0;
+    const pattern = patternStmt.get(key, JSON.stringify(features.at(-1)));
 
-    const dynamicThreshold = this.#computeDynamicThreshold(indicators, confidence, this.#config.baseConfidenceThreshold, winRate);
-    const multiplier = this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * Math.max(0, (confidence - dynamicThreshold) / (100 - dynamicThreshold));
-    let sellPrice = indicators.lastClose + this.#config.atrFactor * (indicators.atr[indicators.atr.length - 1] || 0);
-    let stopLoss = indicators.lastClose - this.#config.stopFactor * (indicators.atr[indicators.atr.length - 1] || 0);
+    console.log(`Prediction triggered with .forward for key: ${key}...`)
+    const startTime = process.hrtime();
+
+    const confidence = this.#transformer.forward(features.flat())[0] * 100 * (1 + patternScore);
+
+    const diff = process.hrtime(startTime);
+    const executionTime = (diff[0] * 1e9 + diff[1]) / 1e9;
+    console.log(`Prediction complete! (${confidence} %) Execution time: ${executionTime} seconds`);
+
+    const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
+    const multiplier = Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier);
+    
+    let sellPrice = indicators.lastClose + this.#config.atrFactor * indicators.lastAtr;
+    let stopLoss = indicators.lastClose - this.#config.stopFactor * indicators.lastAtr;
     sellPrice = isValidNumber(sellPrice) && sellPrice > indicators.lastClose && sellPrice <= indicators.lastClose * 1.3 ? sellPrice : indicators.lastClose * 1.001;
     stopLoss = isValidNumber(stopLoss) && stopLoss < indicators.lastClose && stopLoss > 0 && stopLoss >= indicators.lastClose * 0.7 ? stopLoss : indicators.lastClose * 0.999;
 
@@ -381,11 +342,10 @@ class NeuralSignalEngine {
       ? (adjustedSellPrice - indicators.lastClose) / indicators.lastClose
       : 0;
 
-    const stateKey = this.#generateFeatureKey(features);
     const qTableStmt = this.#db.prepare(`SELECT buy, hold FROM qtable WHERE state_key = ?`);
-    let qValues = qTableStmt.get(stateKey);
+    let qValues = qTableStmt.get(key);
     if (!qValues) {
-      this.#db.prepare(`INSERT OR IGNORE INTO qtable (state_key, buy, hold) VALUES (?, 0, 0)`).run(stateKey);
+      this.#db.prepare(`INSERT OR IGNORE INTO qtable (state_key, buy, hold) VALUES (?, 0, 0)`).run(key);
       qValues = { buy: 0, hold: 0 };
     }
 
@@ -397,11 +357,11 @@ class NeuralSignalEngine {
         INSERT OR IGNORE INTO patterns (bucket_key, features, score, usage_count, win_count)
         VALUES (?, ?, ?, 0, 0)
       `);
-      insertPatternStmt.run(key, JSON.stringify(features), patternScore);
+      insertPatternStmt.run(key, JSON.stringify(features.at(-1)), patternScore);
     }
 
     const insertTradeStmt = this.#db.prepare(`
-      INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, dynamicThreshold)
+      INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, threshold)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     insertTradeStmt.run(
@@ -412,28 +372,23 @@ class NeuralSignalEngine {
       confidence,
       patternScore,
       JSON.stringify(features),
-      stateKey,
-      dynamicThreshold
+      key,
+      this.#config.baseConfidenceThreshold
     );
-
-    const filteredDecision = this.#computeAdvancedAction(qValues, confidence, dynamicThreshold, features, patternScore, winRate);
 
     if (status === 'dump') {
       this.#transformer.dumpState()
     }
 
     return {
-      suggestedAction: filteredDecision.suggestedAction,
       entryPrice,
       sellPrice: isValidNumber(sellPrice) ? truncateToDecimals(sellPrice, 2) : 0,
       stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
       multiplier: isValidNumber(multiplier) ? truncateToDecimals(multiplier, 3) : this.#config.minMultiplier,
       expectedReward: truncateToDecimals(expectedReward, 8),
-      rawConfidence: confidence,
-      rawThreshold: dynamicThreshold,
-      filteredConfidence: filteredDecision.decisionScore,
-      filteredThreshold: filteredDecision.buyThreshold
-    };
+      confidence: confidence,
+      threshold: this.#config.baseConfidenceThreshold
+    }
   }
 }
 

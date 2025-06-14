@@ -7,51 +7,58 @@ const isValidNumber = (value) => {
 class IndicatorProcessor {
   compute(candles) {
     if (!Array.isArray(candles) || candles.length < 11) return { error: true };
+
     const validCandles = candles.filter(c =>
       isValidNumber(c.close) && isValidNumber(c.high) && isValidNumber(c.low) &&
       isValidNumber(c.volume) && c.volume >= 0 && isValidNumber(c.timestamp)
     );
+
     if (validCandles.length < 11) {
       return { error: true };
     }
+    
     const close = validCandles.map(c => Number(c.close));
     const high = validCandles.map(c => Number(c.high));
     const low = validCandles.map(c => Number(c.low));
     const volume = validCandles.map(c => Number(c.volume));
     const lastClose = close[close.length - 1];
-    const volumeMean = volume.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / volume.length || 1;
-    const volumeStd = Math.sqrt(
-      volume.reduce((sum, v) => sum + (isValidNumber(v) ? (v - volumeMean) ** 2 : 0), 0) / volume.length
-    ) || 1;
-    const volumeZScore = isValidNumber(volume[volume.length - 1])
-      ? (volume[volume.length - 1] - volumeMean) / volumeStd
-      : 0;
-    const indicators = {
-      close,
-      high,
-      low,
-      volume,
+
+    const rsi = this.#computeRSI(close, 14);
+    const macd = this.#computeMACD(close, 8, 21, 5);
+    const atr = this.#computeATR(high, low, close, 14);
+    const ema100 = this.#computeEMA(close, 100);
+    const stochastic = this.#computeStochastic(high, low, close, 14, 3, 3);
+    const bollinger = this.#computeBollingerBands(close, 20, 2);
+    const obv = this.#computeOBV(close, volume);
+    const adx = this.#computeADX(high, low, close, 14);
+    const cci = this.#computeCCI(high, low, close, 20);
+    const williamsR = this.#computeWilliamsR(high, low, close, 14);
+    const cmf = this.#computeCMF(high, low, close, volume, 20);
+
+    const macdDiff = macd.map(m => m.MACD - m.signal);
+    const stochasticDiff = stochastic.map(s => s.K - s.D);
+    const bollingerPercentB = bollinger.map((b, i) => {
+      const closePrice = close[i + 19];
+      const denominator = b.upper - b.lower;
+      return denominator > 0 && isValidNumber(closePrice) 
+        ? (closePrice - b.lower) / denominator 
+        : 0.5;
+    });
+
+    return {
       lastClose,
-      volumeZScore: Math.min(Math.max(volumeZScore, -3), 3),
-      rsi: this.#computeRSI(close, 14),
-      macd: this.#computeMACD(close, 8, 21, 5),
-      atr: this.#computeATR(high, low, close, 14),
-      isTrending: 0,
-      isRanging: 0,
-      marketPhase: 'neutral'
+      lastAtr: atr.at(-1),
+      rsi,
+      macdDiff,
+      ema100,
+      stochasticDiff,
+      bollingerPercentB,
+      obv,
+      adx,
+      cci,
+      williamsR,
+      cmf
     };
-    const lastMacd = indicators.macd[indicators.macd.length - 1];
-    const lastRsi = indicators.rsi[indicators.rsi.length - 1];
-    indicators.isTrending = lastMacd && isValidNumber(lastMacd.MACD) && isValidNumber(lastMacd.signal) && lastMacd.MACD > lastMacd.signal ? 1 : 0;
-    indicators.isRanging = isValidNumber(lastRsi) && lastRsi > 30 && lastRsi < 70 ? 1 : 0;
-    indicators.marketPhase = indicators.isTrending ? 'trending' : indicators.isRanging ? 'ranging' : 'volatile';
-    indicators.rsiMin = Math.min(...indicators.rsi.filter(isValidNumber)) || 0;
-    indicators.rsiMax = Math.max(...indicators.rsi.filter(isValidNumber)) || 100;
-    indicators.macdMin = Math.min(...indicators.macd.map(m => m.MACD - m.signal).filter(isValidNumber)) || -1;
-    indicators.macdMax = Math.max(...indicators.macd.map(m => m.MACD - m.signal).filter(isValidNumber)) || 1;
-    indicators.atrMin = Math.min(...indicators.atr.filter(isValidNumber)) || 0;
-    indicators.atrMax = Math.max(...indicators.atr.filter(isValidNumber)) || 1;
-    return indicators;
   }
 
   #computeRSI(values, period) {
@@ -120,10 +127,10 @@ class IndicatorProcessor {
     const initialValues = values.slice(0, period);
     const initialAvg = initialValues.reduce((sum, v) => sum + v, 0) / period;
     if (!isValidNumber(initialAvg)) return new Array(values.length).fill(0);
-    ema[period - 1] = Math.min(Math.max(initialAvg, -10000), 10000);
+    ema[period - 1] = Math.min(Math.max(initialAvg, -5000), 5000);
     for (let i = period; i < values.length; i++) {
       const next = alpha * values[i] + (1 - alpha) * ema[i - 1];
-      ema[i] = isValidNumber(next) ? Math.min(Math.max(next, -10000), 10000) : 0;
+      ema[i] = isValidNumber(next) ? Math.min(Math.max(next, -5000), 5000) : 0;
     }
     for (let i = 0; i < period - 1; i++) {
       ema[i] = 0;
@@ -154,6 +161,202 @@ class IndicatorProcessor {
       atr[j] = isValidNumber(next) ? Math.min(Math.max(next, 0), 1000) : 0;
     }
     return atr;
+  }
+
+  #computeStochastic(high, low, close, period, kSmoothing, dSmoothing) {
+    if (
+      !Array.isArray(high) || high.length < period + kSmoothing + dSmoothing - 1 ||
+      high.length !== low.length || low.length !== close.length ||
+      !high.every(isValidNumber) || !low.every(isValidNumber) || !close.every(isValidNumber)
+    ) {
+      return new Array(Math.max(0, high.length - period - kSmoothing - dSmoothing + 2)).fill({ K: 50, D: 50 });
+    }
+    const kValues = new Array(high.length - period + 1).fill(50);
+    for (let i = period - 1; i < high.length; i++) {
+      const periodHigh = Math.max(...high.slice(i - period + 1, i + 1));
+      const periodLow = Math.min(...low.slice(i - period + 1, i + 1));
+      const denominator = periodHigh - periodLow;
+      const k = denominator > 0 ? ((close[i] - periodLow) / denominator) * 100 : 50;
+      kValues[i - period + 1] = isValidNumber(k) ? Math.min(Math.max(k, 0), 100) : 50;
+    }
+    const kSmoothed = this.#computeEMA(kValues, kSmoothing);
+    const dValues = this.#computeEMA(kSmoothed.slice(0, kSmoothed.length - dSmoothing + 1), dSmoothing);
+    const stochastic = new Array(kSmoothed.length - dSmoothing + 1).fill({ K: 50, D: 50 });
+    for (let i = dSmoothing - 1, j = 0; i < kSmoothed.length; i++, j++) {
+      stochastic[j] = {
+        K: isValidNumber(kSmoothed[i]) ? kSmoothed[i] : 50,
+        D: isValidNumber(dValues[j]) ? dValues[j] : 50
+      };
+    }
+    return stochastic;
+  }
+
+  #computeBollingerBands(values, period, stdDevMultiplier) {
+    if (!Array.isArray(values) || values.length < period || !values.every(isValidNumber)) {
+      return new Array(values.length - period + 1).fill({ middle: 0, upper: 0, lower: 0 });
+    }
+    const bands = new Array(values.length - period + 1);
+    for (let i = period - 1, j = 0; i < values.length; i++, j++) {
+      const periodValues = values.slice(i - period + 1, i + 1);
+      const sma = periodValues.reduce((sum, v) => sum + v, 0) / period;
+      const variance = periodValues.reduce((sum, v) => sum + Math.pow(v - sma, 2), 0) / period;
+      const stdDev = Math.sqrt(variance);
+      const upper = sma + stdDevMultiplier * stdDev;
+      const lower = sma - stdDevMultiplier * stdDev;
+      bands[j] = {
+        middle: isValidNumber(sma) ? sma : 0,
+        upper: isValidNumber(upper) ? upper : 0,
+        lower: isValidNumber(lower) ? lower : 0
+      };
+    }
+    return bands;
+  }
+
+  #computeOBV(close, volume) {
+    if (
+      !Array.isArray(close) || close.length < 2 ||
+      close.length !== volume.length ||
+      !close.every(isValidNumber) || !volume.every(isValidNumber)
+    ) {
+      return new Array(close.length).fill(0);
+    }
+    const obv = new Array(close.length).fill(0);
+    obv[0] = 0; // Initial OBV is 0
+    for (let i = 1; i < close.length; i++) {
+      const prevClose = close[i - 1];
+      const currClose = close[i];
+      const currVolume = volume[i];
+      if (!isValidNumber(prevClose) || !isValidNumber(currClose) || !isValidNumber(currVolume)) {
+        obv[i] = obv[i - 1];
+        continue;
+      }
+      obv[i] = obv[i - 1] + (currClose > prevClose ? currVolume : currClose < prevClose ? -currVolume : 0);
+      obv[i] = isValidNumber(obv[i]) ? Math.min(Math.max(obv[i], -1e9), 1e9) : obv[i - 1];
+    }
+    return obv;
+  }
+
+  #computeADX(high, low, close, period) {
+    if (
+      !Array.isArray(high) || high.length < period + 1 ||
+      high.length !== low.length || low.length !== close.length ||
+      !high.every(isValidNumber) || !low.every(isValidNumber) || !close.every(isValidNumber)
+    ) {
+      return new Array(Math.max(0, high.length - period)).fill(50);
+    }
+    const dmPlus = new Array(high.length - 1).fill(0);
+    const dmMinus = new Array(high.length - 1).fill(0);
+    const tr = new Array(high.length - 1).fill(0);
+    for (let i = 1; i < high.length; i++) {
+      const highDiff = high[i] - high[i - 1];
+      const lowDiff = low[i - 1] - low[i];
+      dmPlus[i - 1] = highDiff > lowDiff && highDiff > 0 ? highDiff : 0;
+      dmMinus[i - 1] = lowDiff > highDiff && lowDiff > 0 ? lowDiff : 0;
+      const highLow = high[i] - low[i];
+      const highClose = Math.abs(high[i] - close[i - 1]);
+      const lowClose = Math.abs(low[i] - close[i - 1]);
+      tr[i - 1] = Math.max(highLow, highClose, lowClose);
+    }
+    const atr = this.#computeEMA(tr, period);
+    const smoothedDmPlus = this.#computeEMA(dmPlus, period);
+    const smoothedDmMinus = this.#computeEMA(dmMinus, period);
+    const diPlus = new Array(smoothedDmPlus.length).fill(0);
+    const diMinus = new Array(smoothedDmMinus.length).fill(0);
+    for (let i = 0; i < diPlus.length; i++) {
+      diPlus[i] = atr[i] > 0 ? (smoothedDmPlus[i] / atr[i]) * 100 : 0;
+      diMinus[i] = atr[i] > 0 ? (smoothedDmMinus[i] / atr[i]) * 100 : 0;
+    }
+    const adx = new Array(diPlus.length).fill(50);
+    for (let i = 0; i < diPlus.length; i++) {
+      const diDiff = Math.abs(diPlus[i] - diMinus[i]);
+      const diSum = diPlus[i] + diMinus[i];
+      const dx = diSum > 0 ? (diDiff / diSum) * 100 : 50;
+      adx[i] = isValidNumber(dx) ? dx : 50;
+    }
+    const smoothedAdx = this.#computeEMA(adx, period);
+    return smoothedAdx.slice(period - 1).map(v => isValidNumber(v) ? Math.min(Math.max(v, 0), 100) : 50);
+  }
+
+  #computeCCI(high, low, close, period) {
+    if (
+      !Array.isArray(high) || high.length < period ||
+      high.length !== low.length || low.length !== close.length ||
+      !high.every(isValidNumber) || !low.every(isValidNumber) || !close.every(isValidNumber)
+    ) {
+      return new Array(Math.max(0, high.length - period + 1)).fill(0);
+    }
+    const cci = new Array(high.length - period + 1);
+    for (let i = period - 1, j = 0; i < high.length; i++, j++) {
+      const typicalPrices = high.slice(i - period + 1, i + 1).map((h, k) => 
+        (h + low[i - period + 1 + k] + close[i - period + 1 + k]) / 3
+      );
+      const sma = typicalPrices.reduce((sum, v) => sum + v, 0) / period;
+      const meanDeviation = typicalPrices.reduce((sum, v) => sum + Math.abs(v - sma), 0) / period;
+      const currentTypicalPrice = (high[i] + low[i] + close[i]) / 3;
+      cci[j] = meanDeviation > 0 
+        ? (currentTypicalPrice - sma) / (0.015 * meanDeviation)
+        : 0;
+      cci[j] = isValidNumber(cci[j]) ? Math.min(Math.max(cci[j], -1000), 1000) : 0;
+    }
+    return cci;
+  }
+
+  #computeWilliamsR(high, low, close, period) {
+    if (
+      !Array.isArray(high) || high.length < period ||
+      high.length !== low.length || low.length !== close.length ||
+      !high.every(isValidNumber) || !low.every(isValidNumber) || !close.every(isValidNumber)
+    ) {
+      return new Array(Math.max(0, high.length - period + 1)).fill(-50);
+    }
+    const williamsR = new Array(high.length - period + 1);
+    for (let i = period - 1, j = 0; i < high.length; i++, j++) {
+      const periodHigh = Math.max(...high.slice(i - period + 1, i + 1));
+      const periodLow = Math.min(...low.slice(i - period + 1, i + 1));
+      const denominator = periodHigh - periodLow;
+      const r = denominator > 0 
+        ? ((periodHigh - close[i]) / denominator) * -100 
+        : -50;
+      williamsR[j] = isValidNumber(r) ? Math.min(Math.max(r, -100), 0) : -50;
+    }
+    return williamsR;
+  }
+
+  #computeCMF(high, low, close, volume, period) {
+    if (
+      !Array.isArray(high) || high.length < period ||
+      high.length !== low.length || low.length !== close.length || volume.length !== close.length ||
+      !high.every(isValidNumber) || !low.every(isValidNumber) || 
+      !close.every(isValidNumber) || !volume.every(isValidNumber)
+    ) {
+      return new Array(Math.max(0, high.length - period + 1)).fill(0);
+    }
+    const cmf = new Array(high.length - period + 1);
+    for (let i = period - 1, j = 0; i < high.length; i++, j++) {
+      let moneyFlowSum = 0;
+      let volumeSum = 0;
+      let validCandles = 0;
+      for (let k = i - period + 1; k <= i; k++) {
+        const highLow = high[k] - low[k];
+        if (!isValidNumber(highLow) || !isValidNumber(close[k]) || !isValidNumber(volume[k])) {
+          continue;
+        }
+        const moneyFlowMultiplier = highLow > 0 
+          ? ((close[k] - low[k]) - (high[k] - close[k])) / highLow 
+          : 0;
+        const moneyFlowVolume = moneyFlowMultiplier * volume[k];
+        if (isValidNumber(moneyFlowVolume)) {
+          moneyFlowSum += moneyFlowVolume;
+          volumeSum += volume[k];
+          validCandles++;
+        }
+      }
+      cmf[j] = validCandles > 0 && volumeSum > 0 
+        ? moneyFlowSum / volumeSum 
+        : 0;
+      cmf[j] = isValidNumber(cmf[j]) ? Math.min(Math.max(cmf[j], -1), 1) : 0;
+    }
+    return cmf;
   }
 }
 
