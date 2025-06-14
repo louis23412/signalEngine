@@ -3003,15 +3003,12 @@ class HiveMind {
         return [this.#sigmoid(isValidNumber(finalOutput[0]) ? finalOutput[0] : 0)];
     }
 
-    train(inputs, target, winRate = 0.5, shouldSave = true) {
+    train(inputs, target, shouldSave = true) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
             !inputs.every(isValidNumber) ||
-            !isValidNumber(target) ||
-            !isValidNumber(winRate) ||
-            winRate < 0 ||
-            winRate > 1
+            !isValidNumber(target)
         ) {
             return;
         }
@@ -3122,7 +3119,7 @@ class HiveMind {
         this.#adjustSwarmFactor(linearOutputs);
 
         this.#transformers.forEach((transformer, idx) => {
-            const adjustedLearningRate = this.#adaptiveLearningRate[idx] * (0.5 + 0.5 * winRate);
+            const adjustedLearningRate = this.#adaptiveLearningRate[idx];
             const delta = error * finalLinearOutput * (1 - finalLinearOutput) * adjustedLearningRate
             let grad = Array(this.#hiddenSize).fill(0);
 

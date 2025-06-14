@@ -81,7 +81,7 @@ class NeuralSignalEngine {
 
   #getRecentCandles(candles) {
     if (!Array.isArray(candles) || candles.length === 0) {
-      return { error: 'Invalid candle array type or length', candles: [] };
+      return { error: 'Invalid candle array type or length', recentCandles: [], fullCandles: [] };
     }
 
     const newCandles = candles.filter(c =>
@@ -95,14 +95,16 @@ class NeuralSignalEngine {
     );
 
     let recentCandles = [];
+    let fullCandles = [];
     const transaction = this.#db.transaction(() => {
       if (newCandles.length > 0) {
         const insertCandleStmt = this.#db.prepare(`
           INSERT OR IGNORE INTO candles (timestamp, open, high, low, close, volume)
           VALUES (?, ?, ?, ?, ?, ?)
         `);
+        const insertedTimestamps = [];
         for (const candle of newCandles) {
-          insertCandleStmt.run(
+          const result = insertCandleStmt.run(
             candle.timestamp,
             candle.open,
             candle.high,
@@ -110,22 +112,40 @@ class NeuralSignalEngine {
             candle.close,
             candle.volume
           );
+
+          if (result.changes > 0) {
+            insertedTimestamps.push(candle.timestamp);
+          }
+        }
+
+        if (insertedTimestamps.length > 0) {
+          const placeholders = insertedTimestamps.map(() => '?').join(',');
+          const fetchRecentStmt = this.#db.prepare(`
+            SELECT * FROM candles WHERE timestamp IN (${placeholders}) ORDER BY timestamp ASC
+          `);
+          recentCandles = fetchRecentStmt.all(...insertedTimestamps);
         }
       }
 
-      const fetchCandlesStmt = this.#db.prepare(`SELECT * FROM candles ORDER BY timestamp ASC LIMIT 1000`);
-      recentCandles = fetchCandlesStmt.all();
+      const fetchCandlesStmt = this.#db.prepare(`
+        SELECT * FROM candles ORDER BY timestamp ASC LIMIT 1000
+      `);
+      fullCandles = fetchCandlesStmt.all();
 
-      const cleanupStmt = this.#db.prepare(`DELETE FROM candles WHERE timestamp NOT IN (SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT 1000)`);
+      const cleanupStmt = this.#db.prepare(`
+        DELETE FROM candles WHERE timestamp NOT IN (
+          SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT 1000
+        )
+      `);
       cleanupStmt.run();
     });
     transaction();
 
-    if (recentCandles.length === 0) {
-      return { error: 'No valid candles available', candles: [] };
+    if (fullCandles.length === 0) {
+      return { error: 'No valid candles available', recentCandles: [], fullCandles: [] };
     }
 
-    return { error: null, candles: recentCandles };
+    return { error: null, recentCandles, fullCandles };
   }
 
   #robustNormalize(data, count = 1, lowerPercentile = 0.05, upperPercentile = 0.95) {
@@ -148,18 +168,20 @@ class NeuralSignalEngine {
   };
 
   #extractFeatures(data) {
-    const normalizedRsi = this.#robustNormalize(data.rsi, 10);
-    const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, 10);
-    const normalizedEma100 = this.#robustNormalize(data.ema100, 10);
-    const normalizedStochasticDiff = this.#robustNormalize(data.stochasticDiff, 10);
-    const normalizedBollingerPercentB = this.#robustNormalize(data.bollingerPercentB, 10);
-    const normalizedObv = this.#robustNormalize(data.obv, 10);
-    const normalizedAdx = this.#robustNormalize(data.adx, 10);
-    const normalizedCci = this.#robustNormalize(data.cci, 10);
-    const normalizedWilliamsR = this.#robustNormalize(data.williamsR, 10);
-    const normalizedCmf = this.#robustNormalize(data.cmf, 10);
+    const candleCount = 10
 
-    const result = Array.from({ length: 10 }, (_, i) => [
+    const normalizedRsi = this.#robustNormalize(data.rsi, candleCount);
+    const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, candleCount);
+    const normalizedEma100 = this.#robustNormalize(data.ema100, candleCount);
+    const normalizedStochasticDiff = this.#robustNormalize(data.stochasticDiff, candleCount);
+    const normalizedBollingerPercentB = this.#robustNormalize(data.bollingerPercentB, candleCount);
+    const normalizedObv = this.#robustNormalize(data.obv, candleCount);
+    const normalizedAdx = this.#robustNormalize(data.adx, candleCount);
+    const normalizedCci = this.#robustNormalize(data.cci, candleCount);
+    const normalizedWilliamsR = this.#robustNormalize(data.williamsR, candleCount);
+    const normalizedCmf = this.#robustNormalize(data.cmf, candleCount);
+
+    const result = Array.from({ length: candleCount }, (_, i) => [
         normalizedRsi[i],
         normalizedMacdDiff[i],
         normalizedEma100[i],
@@ -204,16 +226,13 @@ class NeuralSignalEngine {
   #updateOpenTrades(candles, status) {
     if (!Array.isArray(candles) || candles.length === 0) return;
 
-    const minLow = Math.min(...candles.map(c => isValidNumber(c.low) ? c.low : Infinity));
-    const maxHigh = Math.max(...candles.map(c => isValidNumber(c.high) ? c.high : -Infinity));
-    if (!isValidNumber(minLow) || !isValidNumber(maxHigh)) return;
-
     const tradesStmt = this.#db.prepare(`
       SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, Threshold
       FROM open_trades
-      WHERE sellPrice BETWEEN ? AND ? OR stopLoss BETWEEN ? AND ?
     `);
-    const trades = tradesStmt.all(minLow, maxHigh, minLow, maxHigh);
+    const trades = tradesStmt.all();
+
+    console.log(`Current open trade simulations: ${trades.length}`)
 
     const closedTrades = [];
     const keysToDelete = new Set();
@@ -270,15 +289,20 @@ class NeuralSignalEngine {
           updateQTableStmt.run(trade.key, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.key);
 
           const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
-          const target = (trade.outcome + 1) / 2 * (0.8 + 0.2 * winRate);
 
-          console.log(`Training triggered with .train for open trade: ${tempCounter} / ${closedTrades.length}...`)
+          const baseTarget = (trade.outcome + 1) / 2;
+          const confidenceThreshold = this.#config.baseConfidenceThreshold / 100;
+          const effectiveWinRate = usageCount < 5 ? Math.min(winRate, 0.5 + 0.3 * usageCount / 5) : winRate;
+          const winRateBoost = 0.7 + 0.3 * effectiveWinRate;
+          const adjustedBaseTarget = trade.outcome < -0.3 ? baseTarget * 0.5 : Math.max(baseTarget, confidenceThreshold);
+          const target = Math.min(1, adjustedBaseTarget * winRateBoost);
+
+          console.log(`Training with a target of ${target} triggered for closed trade: ${tempCounter} / ${closedTrades.length} - Outcome: ${trade.outcome} | WinRate: ${winRate}...`)
           const startTime = process.hrtime();
 
           this.#transformer.train(
             trade.features.flat(), 
-            target, 
-            winRate, 
+            target,
             (tempCounter === closedTrades.length) && (status === 'production')
           );
 
@@ -300,14 +324,16 @@ class NeuralSignalEngine {
       return { error : 'Invalid status. Valid options: production / training / dump' }
     }
 
-    const { error, candles: recentCandles } = this.#getRecentCandles(candles);
+    const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
     if (error) {
       return { error };
     }
 
+    console.log(`Processed candles - Total: ${fullCandles.length} | Newly added: ${recentCandles.length}`)
+
     this.#updateOpenTrades(recentCandles, status);
 
-    const indicators = this.#indicators.compute(recentCandles);
+    const indicators = this.#indicators.compute(fullCandles);
     if (indicators.error) {
       return { error: 'Indicators error' };
     }
@@ -319,14 +345,14 @@ class NeuralSignalEngine {
     const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
     const pattern = patternStmt.get(key, JSON.stringify(features.at(-1)));
 
-    console.log(`Prediction triggered with .forward for key: ${key}...`)
+    console.log(`Forward triggered for patters with score: ${patternScore}...`)
     const startTime = process.hrtime();
 
     const confidence = this.#transformer.forward(features.flat())[0] * 100 * (1 + patternScore);
 
     const diff = process.hrtime(startTime);
     const executionTime = (diff[0] * 1e9 + diff[1]) / 1e9;
-    console.log(`Prediction complete! (${confidence} %) Execution time: ${executionTime} seconds`);
+    console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
 
     const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
     const multiplier = Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier);
