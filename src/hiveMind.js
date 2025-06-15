@@ -3401,11 +3401,6 @@ class HiveMind {
         if (shouldSave) {
             this.#saveState();
         }
-
-        if (this.#trainingStepCount % 1000 === 0) {
-            this.#saveState()
-            process.exit()
-        }
     }
 
     dumpState() {
