@@ -26,9 +26,10 @@ class NeuralSignalEngine {
         minMultiplier: 1,
         maxMultiplier: 2.5,
         baseConfidenceThreshold: 60,
-        atrFactor: 10,
-        stopFactor: 2.5,
-        fee: 0.0021
+        atrFactor: 2.5,
+        stopFactor: 1,
+        minPriceMovement : 0.0021,
+        maxPriceMovement : 0.1
     };
 
     constructor() {
@@ -221,9 +222,9 @@ class NeuralSignalEngine {
             for (const candle of candles) {
                 if (!candle || !isValidNumber(candle.high) || !isValidNumber(candle.low)) continue;
 
-                if (candle.high >= trade.sellPrice || candle.low <= trade.stopLoss) {
-                    const exitPrice = candle.high >= trade.sellPrice ? trade.sellPrice : trade.stopLoss;
-                    const outcome = candle.high >= trade.sellPrice ? 1 : 0;
+                if (candle.low <= trade.stopLoss || candle.high >= trade.sellPrice) {
+                    const exitPrice = candle.low <= trade.stopLoss ? trade.stopLoss : trade.sellPrice;
+                    const outcome = candle.low <= trade.stopLoss ? 0 : 1;
                     closedTrades.push({
                         timestamp: Date.now(),
                         entryPrice: trade.entryPrice,
@@ -273,7 +274,7 @@ class NeuralSignalEngine {
                     );
 
                     const diff = process.hrtime(startTime);
-                    const executionTime = (diff[0] * 1e9 + diff[1]) / 1e9;
+                    const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
                     console.log(`Training complete! - Execution time: ${executionTime} seconds`);
                 }
 
@@ -315,21 +316,33 @@ class NeuralSignalEngine {
         console.log(`Forward triggered for pattern with win rate: ${patternScore * 100}%`);
         const startTime = process.hrtime();
 
-        const confidence = this.#transformer.forward(features.flat())[0] * 100;
+        const confidence = truncateToDecimals(this.#transformer.forward(features.flat())[0] * 100, 4);
 
         const diff = process.hrtime(startTime);
-        const executionTime = (diff[0] * 1e9 + diff[1]) / 1e9;
+        const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
         console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
 
         const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
-        const multiplier = Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier);
+        const multiplier = truncateToDecimals(Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier), 4);
         
         const entryPrice = indicators.lastClose;
-        const sellPrice = truncateToDecimals(indicators.lastClose + this.#config.atrFactor * indicators.lastAtr, 2);
-        const stopLoss = truncateToDecimals(indicators.lastClose - this.#config.stopFactor * indicators.lastAtr, 2);
+        const atrBasedSellPrice = indicators.lastClose + this.#config.atrFactor * indicators.lastAtr;
+        const atrBasedStopLoss = indicators.lastClose - this.#config.stopFactor * indicators.lastAtr;
 
-        const adjustedSellPrice = sellPrice * (1 - this.#config.fee);
-        const expectedReward = truncateToDecimals((adjustedSellPrice - indicators.lastClose) / indicators.lastClose, 8);
+        const minPriceDelta = entryPrice * this.#config.minPriceMovement;
+        const maxPriceDelta = entryPrice * this.#config.maxPriceMovement;
+
+        const sellPriceDelta = Math.min(
+            Math.max(atrBasedSellPrice - entryPrice, minPriceDelta),
+            maxPriceDelta
+        );
+        const sellPrice = truncateToDecimals(entryPrice + sellPriceDelta, 2);
+
+        const stopLossDelta = Math.min(
+            Math.max(entryPrice - atrBasedStopLoss, minPriceDelta),
+            maxPriceDelta
+        );
+        const stopLoss = truncateToDecimals(entryPrice - stopLossDelta, 2);
 
         if (!pattern) {
             const insertPatternStmt = this.#db.prepare(`
@@ -364,7 +377,6 @@ class NeuralSignalEngine {
             sellPrice,
             stopLoss,
             multiplier,
-            expectedReward,
             confidence,
             threshold: this.#config.baseConfidenceThreshold
         };

@@ -54,11 +54,10 @@ const formatSignal = (options = {}) => {
     }
 
     const signalLine = `Signal:\n` +
-                      `Multiplier: ${ANSI_CYAN}${signal.multiplier}${ANSI_RESET}, ` +
-                      `Expected Reward: ${ANSI_CYAN}${signal.expectedReward}${ANSI_RESET}\n` +
                       `Entry Price: ${ANSI_CYAN}${signal.entryPrice}${ANSI_RESET}, ` +
                       `Sell Price: ${ANSI_CYAN}${signal.sellPrice}${ANSI_RESET}, ` +
                       `Stop Price: ${ANSI_CYAN}${signal.stopLoss}${ANSI_RESET}\n` +
+                      `Multiplier: ${ANSI_CYAN}${signal.multiplier}${ANSI_RESET}, ` +
                       `Confidence: ${ANSI_CYAN}${signal.confidence}${ANSI_RESET}, ` +
                       `Threshold: ${ANSI_CYAN}${signal.threshold}${ANSI_RESET}`
 
