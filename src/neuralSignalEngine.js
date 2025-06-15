@@ -28,7 +28,7 @@ class NeuralSignalEngine {
         baseConfidenceThreshold: 60,
         atrFactor: 10,
         stopFactor: 2.5,
-        fee : 0.0021
+        fee: 0.0021
     };
 
     constructor() {
@@ -202,20 +202,22 @@ class NeuralSignalEngine {
         const stmt = this.#db.prepare(`SELECT score, features, usage_count, win_count FROM patterns WHERE bucket_key = ?`);
         const patterns = stmt.all(key);
         if (!patterns || patterns.length === 0) return 0;
-        let totalScore = 0, matchCount = 0;
+
+        let totalWinRate = 0;
+        let matchCount = 0;
+
         for (const pattern of patterns) {
             const patternFeatures = JSON.parse(pattern.features);
             if (features.every((f, i) => isValidNumber(f) && isValidNumber(patternFeatures[i]) && Math.abs(f - patternFeatures[i]) < 0.1)) {
-                const pseudoWins = 1;
-                const pseudoUses = 2;
-                const winRate = isValidNumber(pattern.usage_count) && pattern.usage_count > 0
-                    ? (pattern.win_count + pseudoWins) / (pattern.usage_count + pseudoUses)
-                    : 0.5;
-                totalScore += pattern.score * (0.5 + 0.5 * winRate);
+                const winRate = pattern.usage_count > 0
+                    ? pattern.win_count / pattern.usage_count
+                    : 0;
+                totalWinRate += winRate;
                 matchCount++;
             }
         }
-        return matchCount > 0 ? totalScore / matchCount : 0;
+
+        return matchCount > 0 ? truncateToDecimals(totalWinRate / matchCount, 4) : 0;
     }
 
     #updateOpenTrades(candles, status) {
@@ -240,13 +242,13 @@ class NeuralSignalEngine {
 
                 if (candle.high >= trade.sellPrice || candle.low <= trade.stopLoss) {
                     const exitPrice = candle.high >= trade.sellPrice ? trade.sellPrice : trade.stopLoss;
-                    const outcome = (exitPrice - trade.entryPrice) / trade.entryPrice;
+                    const outcome = candle.high >= trade.sellPrice ? 1 : 0;
                     closedTrades.push({
                         timestamp: Date.now(),
                         entryPrice: trade.entryPrice,
                         exitPrice,
                         confidence: trade.confidence,
-                        outcome: Math.min(Math.max(outcome, -1), 1),
+                        outcome,
                         reward: outcome * (trade.confidence / 100),
                         patternScore: trade.patternScore,
                         features,
@@ -272,21 +274,16 @@ class NeuralSignalEngine {
                 for (const trade of closedTrades) {
                     tempCounter++;
                     const pattern = patternStmt.get(trade.key, JSON.stringify(trade.features.at(-1)));
-                    const isWin = trade.outcome > 0 ? 1 : 0;
+                    const isWin = trade.outcome;
                     const usageCount = pattern ? pattern.usage_count + 1 : 1;
                     const winCount = pattern ? pattern.win_count + isWin : isWin;
-                    insertPatternStmt.run(trade.key, JSON.stringify(trade.features.at(-1)), trade.reward, usageCount, winCount);
+                    const winRate = usageCount > 0 ? winCount / usageCount : 0;
 
-                    const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
+                    insertPatternStmt.run(trade.key, JSON.stringify(trade.features.at(-1)), truncateToDecimals(winRate, 4), usageCount, winCount);
 
-                    const baseTarget = (trade.outcome + 1) / 2;
-                    const confidenceThreshold = this.#config.baseConfidenceThreshold / 100;
-                    const effectiveWinRate = usageCount < 5 ? Math.min(winRate, 0.5 + 0.3 * usageCount / 5) : winRate;
-                    const winRateBoost = 0.7 + 0.3 * effectiveWinRate;
-                    const adjustedBaseTarget = trade.outcome < -0.3 ? baseTarget * 0.5 : Math.max(baseTarget, confidenceThreshold);
-                    const target = Math.min(1, adjustedBaseTarget * winRateBoost);
+                    const target = this.#config.baseConfidenceThreshold / 100;
 
-                    console.log(`Training with a target of ${target} triggered for closed trade: ${tempCounter} / ${closedTrades.length} - Outcome: ${trade.outcome} | WinRate: ${winRate}...`);
+                    console.log(`Training with a target of ${target} triggered for closed trade (${isWin ? 'win' : 'loss'}): ${tempCounter} / ${closedTrades.length} - WinRate: ${winRate * 100}%`);
                     const startTime = process.hrtime();
 
                     this.#transformer.train(
@@ -336,7 +333,7 @@ class NeuralSignalEngine {
         const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
         const pattern = patternStmt.get(key, JSON.stringify(features.at(-1)));
 
-        console.log(`Forward triggered for patters with score: ${patternScore}...`);
+        console.log(`Forward triggered for pattern with win rate: ${patternScore}%`);
         const startTime = process.hrtime();
 
         const confidence = this.#transformer.forward(features.flat())[0] * 100;
