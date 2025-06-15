@@ -3072,9 +3072,8 @@ class HiveMind {
             sum + (isValidNumber(out) && isValidNumber(this.#ensembleWeights[idx]) ? out * this.#ensembleWeights[idx] : 0), 0
         );
         const finalProbability = this.#sigmoid(finalLinearOutput);
-        const error = target - finalProbability;
 
-        const dL_d_output = error;
+        const dL_d_output = finalProbability - target;
         const dL_d_w = linearOutputs.map(out => dL_d_output * out);
 
         const dL_d_scores = Array(this.#ensembleSize).fill(0);
@@ -3120,7 +3119,7 @@ class HiveMind {
 
         this.#transformers.forEach((transformer, idx) => {
             const adjustedLearningRate = this.#adaptiveLearningRate[idx];
-            const delta = error * finalLinearOutput * (1 - finalLinearOutput) * adjustedLearningRate
+            const delta = dL_d_output * adjustedLearningRate;
             let grad = Array(this.#hiddenSize).fill(0);
 
             for (let i = 0; i < this.#hiddenSize; i++) {
@@ -3137,9 +3136,8 @@ class HiveMind {
             this.#gradientAccumulation[idx].outputBias[0] += isValidNumber(delta) ? delta : 0;
 
             for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
-                const x = layerOutputs[idx][layer];
                 const { normX, attentionOutput, normAttention } = activations[idx][layer];
-                const { Q, K, V, attentionScores, attentionProbs } = attentionIntermediates[idx][layer];
+                const { Q, K, V, attentionProbs } = attentionIntermediates[idx][layer];
                 const headSize = this.#hiddenSize / this.#numHeads;
 
                 const ffnInput = normAttention[0];
@@ -3256,7 +3254,7 @@ class HiveMind {
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         const wqUpdate = qGrad.reduce((sum, row) => sum + (isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
-                        const wkUpdate = kGrad.reduce((sum, row) => sum + ( isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
+                        const wkUpdate = kGrad.reduce((sum, row) => sum + (isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
                         const wvUpdate = vGrad.reduce((sum, head) => sum + head[i % this.#inputSize].reduce((s, v) => s + (isValidNumber(v[j % headSize]) ? v[j % headSize] : 0), 0), 0);
                         const woUpdate = isValidNumber(woGrad[i][j]) ? woGrad[i][j] : 0;
                         const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
