@@ -41,12 +41,11 @@ class NeuralSignalEngine {
         this.#db.exec(`
             CREATE TABLE IF NOT EXISTS patterns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                bucket_key TEXT NOT NULL,
                 features TEXT NOT NULL,
                 score REAL NOT NULL,
                 usage_count INTEGER NOT NULL DEFAULT 0,
                 win_count INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(bucket_key, features)
+                UNIQUE(features)
             );
             CREATE TABLE IF NOT EXISTS open_trades (
                 timestamp TEXT PRIMARY KEY,
@@ -56,7 +55,6 @@ class NeuralSignalEngine {
                 confidence REAL NOT NULL,
                 patternScore REAL NOT NULL,
                 features TEXT NOT NULL,
-                stateKey TEXT NOT NULL,
                 Threshold REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS candles (
@@ -67,7 +65,7 @@ class NeuralSignalEngine {
                 close REAL NOT NULL,
                 volume REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_bucket_key ON patterns(bucket_key);
+            CREATE INDEX IF NOT EXISTS idx_patterns_features ON patterns(features);
             CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
             CREATE INDEX IF NOT EXISTS idx_open_trades_stopLoss ON open_trades(stopLoss);
             CREATE INDEX IF NOT EXISTS idx_candles_timestamp ON candles(timestamp);
@@ -162,9 +160,7 @@ class NeuralSignalEngine {
         return valuesToNormalize.map(value => truncateToDecimals(Math.min(1, Math.max(0, (value - min) / (max - min))), 4));
     }
 
-    #extractFeatures(data) {
-        const candleCount = 10;
-
+    #extractFeatures(data, candleCount) {
         const normalizedRsi = this.#robustNormalize(data.rsi, candleCount);
         const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, candleCount);
         const normalizedAtr = this.#robustNormalize(data.atr, candleCount);
@@ -192,39 +188,26 @@ class NeuralSignalEngine {
         return result;
     }
 
-    #generateFeatureKey(features) {
-        if (!Array.isArray(features) || features.length !== 10) return 'default';
-        const quantized = features.map(f => isValidNumber(f) ? Math.round(f * 1000) / 1000 : 0);
-        return quantized.join('|');
-    }
-
-    #scorePattern(features, key) {
-        const stmt = this.#db.prepare(`SELECT score, features, usage_count, win_count FROM patterns WHERE bucket_key = ?`);
-        const patterns = stmt.all(key);
-        if (!patterns || patterns.length === 0) return 0;
-
-        let totalWinRate = 0;
-        let matchCount = 0;
-
-        for (const pattern of patterns) {
-            const patternFeatures = JSON.parse(pattern.features);
-            if (features.every((f, i) => isValidNumber(f) && isValidNumber(patternFeatures[i]) && Math.abs(f - patternFeatures[i]) < 0.1)) {
-                const winRate = pattern.usage_count > 0
-                    ? pattern.win_count / pattern.usage_count
-                    : 0;
-                totalWinRate += winRate;
-                matchCount++;
-            }
+    #scorePattern(features) {
+        if (!Array.isArray(features) || features.length !== 10 || !features.every(isValidNumber)) {
+            return 0;
         }
 
-        return matchCount > 0 ? truncateToDecimals(totalWinRate / matchCount, 4) : 0;
+        const stmt = this.#db.prepare(`SELECT score, usage_count, win_count FROM patterns WHERE features = ?`);
+        const pattern = stmt.get(JSON.stringify(features));
+        if (!pattern) {
+            return 0;
+        }
+
+        const winRate = pattern.usage_count > 0 ? pattern.win_count / pattern.usage_count : 0;
+        return truncateToDecimals(winRate, 4);
     }
 
     #updateOpenTrades(candles, status) {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
         const tradesStmt = this.#db.prepare(`
-            SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, Threshold
+            SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, Threshold
             FROM open_trades
         `);
         const trades = tradesStmt.all();
@@ -252,7 +235,6 @@ class NeuralSignalEngine {
                         reward: outcome * (trade.confidence / 100),
                         patternScore: trade.patternScore,
                         features,
-                        key: trade.stateKey,
                         threshold: trade.threshold
                     });
                     keysToDelete.add(trade.timestamp);
@@ -263,23 +245,28 @@ class NeuralSignalEngine {
 
         if (closedTrades.length > 0) {
             const transaction = this.#db.transaction(() => {
-                const patternStmt = this.#db.prepare(`SELECT score, usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
+                const patternStmt = this.#db.prepare(`SELECT score, usage_count, win_count FROM patterns WHERE features = ?`);
                 const insertPatternStmt = this.#db.prepare(`
-                    INSERT OR REPLACE INTO patterns (bucket_key, features, score, usage_count, win_count)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO patterns (features, score, usage_count, win_count)
+                    VALUES (?, ?, ?, ?)
                 `);
                 const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
 
                 let tempCounter = 0;
                 for (const trade of closedTrades) {
                     tempCounter++;
-                    const pattern = patternStmt.get(trade.key, JSON.stringify(trade.features.at(-1)));
+                    const pattern = patternStmt.get(JSON.stringify(trade.features.at(-1)));
                     const isWin = trade.outcome;
                     const usageCount = pattern ? pattern.usage_count + 1 : 1;
                     const winCount = pattern ? pattern.win_count + isWin : isWin;
                     const winRate = usageCount > 0 ? winCount / usageCount : 0;
 
-                    insertPatternStmt.run(trade.key, JSON.stringify(trade.features.at(-1)), truncateToDecimals(winRate, 4), usageCount, winCount);
+                    insertPatternStmt.run(
+                        JSON.stringify(trade.features.at(-1)),
+                        truncateToDecimals(winRate, 4),
+                        usageCount,
+                        winCount
+                    );
 
                     const target = this.#config.baseConfidenceThreshold / 100;
 
@@ -326,14 +313,13 @@ class NeuralSignalEngine {
             return { error: 'Indicators error' };
         }
 
-        const features = this.#extractFeatures(indicators);
-        const key = this.#generateFeatureKey(features.at(-1));
-        const patternScore = this.#scorePattern(features.at(-1), key);
+        const features = this.#extractFeatures(indicators, 10);
+        const patternScore = this.#scorePattern(features.at(-1));
 
-        const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE bucket_key = ? AND features = ?`);
-        const pattern = patternStmt.get(key, JSON.stringify(features.at(-1)));
+        const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE features = ?`);
+        const pattern = patternStmt.get(JSON.stringify(features.at(-1)));
 
-        console.log(`Forward triggered for pattern with win rate: ${patternScore}%`);
+        console.log(`Forward triggered for pattern with win rate: ${patternScore * 100}%`);
         const startTime = process.hrtime();
 
         const confidence = this.#transformer.forward(features.flat())[0] * 100;
@@ -350,19 +336,22 @@ class NeuralSignalEngine {
         const stopLoss = truncateToDecimals(indicators.lastClose - this.#config.stopFactor * indicators.lastAtr, 2);
 
         const adjustedSellPrice = sellPrice * (1 - this.#config.fee);
-        const expectedReward = truncateToDecimals((adjustedSellPrice - indicators.lastClose) / indicators.lastClose, 8)
+        const expectedReward = truncateToDecimals((adjustedSellPrice - indicators.lastClose) / indicators.lastClose, 8);
 
         if (!pattern) {
             const insertPatternStmt = this.#db.prepare(`
-                INSERT OR IGNORE INTO patterns (bucket_key, features, score, usage_count, win_count)
-                VALUES (?, ?, ?, 0, 0)
+                INSERT OR IGNORE INTO patterns (features, score, usage_count, win_count)
+                VALUES (?, ?, 0, 0)
             `);
-            insertPatternStmt.run(key, JSON.stringify(features.at(-1)), patternScore);
+            const result = insertPatternStmt.run(JSON.stringify(features.at(-1)), patternScore);
+            if (result.changes > 0) {
+                console.log(`New pattern created for features: ${JSON.stringify(features.at(-1))}`);
+            }
         }
 
         const insertTradeStmt = this.#db.prepare(`
-            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, stateKey, threshold)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, threshold)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
         insertTradeStmt.run(
             Date.now().toString(),
@@ -372,7 +361,6 @@ class NeuralSignalEngine {
             confidence,
             patternScore,
             JSON.stringify(features),
-            key,
             this.#config.baseConfidenceThreshold
         );
 
