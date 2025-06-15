@@ -52,10 +52,8 @@ class NeuralSignalEngine {
                 sellPrice REAL NOT NULL,
                 stopLoss REAL NOT NULL,
                 entryPrice REAL NOT NULL,
-                confidence REAL NOT NULL,
                 patternScore REAL NOT NULL,
-                features TEXT NOT NULL,
-                Threshold REAL NOT NULL
+                features TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS candles (
                 timestamp TEXT PRIMARY KEY,
@@ -157,7 +155,7 @@ class NeuralSignalEngine {
         
         if (!isValidNumber(min) || !isValidNumber(max) || max === min) return Array(actualCount).fill(0);
         
-        return valuesToNormalize.map(value => truncateToDecimals(Math.min(1, Math.max(0, (value - min) / (max - min))), 4));
+        return valuesToNormalize.map(value => truncateToDecimals(Math.min(1, Math.max(0, (value - min) / (max - min))), 2));
     }
 
     #extractFeatures(data, candleCount) {
@@ -207,7 +205,7 @@ class NeuralSignalEngine {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
         const tradesStmt = this.#db.prepare(`
-            SELECT timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, Threshold
+            SELECT timestamp, sellPrice, stopLoss, entryPrice, patternScore, features
             FROM open_trades
         `);
         const trades = tradesStmt.all();
@@ -230,12 +228,9 @@ class NeuralSignalEngine {
                         timestamp: Date.now(),
                         entryPrice: trade.entryPrice,
                         exitPrice,
-                        confidence: trade.confidence,
                         outcome,
-                        reward: outcome * (trade.confidence / 100),
                         patternScore: trade.patternScore,
-                        features,
-                        threshold: trade.threshold
+                        features
                     });
                     keysToDelete.add(trade.timestamp);
                     break;
@@ -268,14 +263,12 @@ class NeuralSignalEngine {
                         winCount
                     );
 
-                    const target = this.#config.baseConfidenceThreshold / 100;
-
-                    console.log(`Training with a target of ${target} triggered for closed trade (${isWin ? 'win' : 'loss'}): ${tempCounter} / ${closedTrades.length} - WinRate: ${winRate * 100}%`);
+                    console.log(`Training triggered for closed trade (${isWin ? 'win' : 'loss'}): ${tempCounter} / ${closedTrades.length} - WinRate: ${winRate * 100}%`);
                     const startTime = process.hrtime();
 
                     this.#transformer.train(
                         trade.features.flat(), 
-                        target,
+                        isWin,
                         (tempCounter === closedTrades.length) && (status === 'production')
                     );
 
@@ -350,18 +343,16 @@ class NeuralSignalEngine {
         }
 
         const insertTradeStmt = this.#db.prepare(`
-            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, confidence, patternScore, features, threshold)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, patternScore, features)
+            VALUES (?, ?, ?, ?, ?, ?)
         `);
         insertTradeStmt.run(
             Date.now().toString(),
             sellPrice,
             stopLoss,
             entryPrice,
-            confidence,
             patternScore,
-            JSON.stringify(features),
-            this.#config.baseConfidenceThreshold
+            JSON.stringify(features)
         );
 
         if (status === 'dump') {
