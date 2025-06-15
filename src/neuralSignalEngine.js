@@ -28,7 +28,7 @@ class NeuralSignalEngine {
         baseConfidenceThreshold: 60,
         atrFactor: 10,
         stopFactor: 2.5,
-        learningRate: 0.25
+        fee : 0.0021
     };
 
     constructor() {
@@ -39,11 +39,6 @@ class NeuralSignalEngine {
 
     #initDatabase() {
         this.#db.exec(`
-            CREATE TABLE IF NOT EXISTS qtable (
-                state_key TEXT PRIMARY KEY,
-                buy REAL NOT NULL,
-                hold REAL NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS patterns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bucket_key TEXT NOT NULL,
@@ -172,6 +167,7 @@ class NeuralSignalEngine {
 
         const normalizedRsi = this.#robustNormalize(data.rsi, candleCount);
         const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, candleCount);
+        const normalizedAtr = this.#robustNormalize(data.atr, candleCount);
         const normalizedEma100 = this.#robustNormalize(data.ema100, candleCount);
         const normalizedStochasticDiff = this.#robustNormalize(data.stochasticDiff, candleCount);
         const normalizedBollingerPercentB = this.#robustNormalize(data.bollingerPercentB, candleCount);
@@ -179,19 +175,18 @@ class NeuralSignalEngine {
         const normalizedAdx = this.#robustNormalize(data.adx, candleCount);
         const normalizedCci = this.#robustNormalize(data.cci, candleCount);
         const normalizedWilliamsR = this.#robustNormalize(data.williamsR, candleCount);
-        const normalizedCmf = this.#robustNormalize(data.cmf, candleCount);
 
         const result = Array.from({ length: candleCount }, (_, i) => [
             normalizedRsi[i],
             normalizedMacdDiff[i],
+            normalizedAtr[i],
             normalizedEma100[i],
             normalizedStochasticDiff[i],
             normalizedBollingerPercentB[i],
             normalizedObv[i],
             normalizedAdx[i],
             normalizedCci[i],
-            normalizedWilliamsR[i],
-            normalizedCmf[i]
+            normalizedWilliamsR[i]
         ]);
 
         return result;
@@ -233,6 +228,7 @@ class NeuralSignalEngine {
         const trades = tradesStmt.all();
 
         console.log(`Current open trade simulations: ${trades.length}`);
+        if (trades.length === 0) return;
 
         const closedTrades = [];
         const keysToDelete = new Set();
@@ -270,10 +266,6 @@ class NeuralSignalEngine {
                     INSERT OR REPLACE INTO patterns (bucket_key, features, score, usage_count, win_count)
                     VALUES (?, ?, ?, ?, ?)
                 `);
-                const updateQTableStmt = this.#db.prepare(`
-                    INSERT OR REPLACE INTO qtable (state_key, buy, hold)
-                    VALUES (?, ?, COALESCE((SELECT hold FROM qtable WHERE state_key = ?), 0))
-                `);
                 const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
 
                 let tempCounter = 0;
@@ -284,9 +276,6 @@ class NeuralSignalEngine {
                     const usageCount = pattern ? pattern.usage_count + 1 : 1;
                     const winCount = pattern ? pattern.win_count + isWin : isWin;
                     insertPatternStmt.run(trade.key, JSON.stringify(trade.features.at(-1)), trade.reward, usageCount, winCount);
-
-                    const existingQ = this.#db.prepare(`SELECT buy, hold FROM qtable WHERE state_key = ?`).get(trade.key) || { buy: 0, hold: 0 };
-                    updateQTableStmt.run(trade.key, existingQ.buy + this.#config.learningRate * (trade.reward - existingQ.buy), trade.key);
 
                     const winRate = pattern && pattern.usage_count > 0 ? (pattern.win_count + isWin) / usageCount : isWin;
 
@@ -325,6 +314,7 @@ class NeuralSignalEngine {
         }
 
         const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
+
         if (error) {
             return { error };
         }
@@ -334,6 +324,7 @@ class NeuralSignalEngine {
         this.#updateOpenTrades(recentCandles, status);
 
         const indicators = this.#indicators.compute(fullCandles);
+
         if (indicators.error) {
             return { error: 'Indicators error' };
         }
@@ -348,7 +339,7 @@ class NeuralSignalEngine {
         console.log(`Forward triggered for patters with score: ${patternScore}...`);
         const startTime = process.hrtime();
 
-        const confidence = this.#transformer.forward(features.flat())[0] * 100 * (1 + patternScore);
+        const confidence = this.#transformer.forward(features.flat())[0] * 100;
 
         const diff = process.hrtime(startTime);
         const executionTime = (diff[0] * 1e9 + diff[1]) / 1e9;
@@ -357,26 +348,12 @@ class NeuralSignalEngine {
         const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
         const multiplier = Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier);
         
-        let sellPrice = indicators.lastClose + this.#config.atrFactor * indicators.lastAtr;
-        let stopLoss = indicators.lastClose - this.#config.stopFactor * indicators.lastAtr;
-        sellPrice = isValidNumber(sellPrice) && sellPrice > indicators.lastClose && sellPrice <= indicators.lastClose * 1.3 ? sellPrice : indicators.lastClose * 1.001;
-        stopLoss = isValidNumber(stopLoss) && stopLoss < indicators.lastClose && stopLoss > 0 && stopLoss >= indicators.lastClose * 0.7 ? stopLoss : indicators.lastClose * 0.999;
-
-        const fee = 0.0021;
-        const adjustedSellPrice = sellPrice * (1 - fee);
-        const expectedReward = isValidNumber(adjustedSellPrice) && isValidNumber(indicators.lastClose) && indicators.lastClose !== 0
-            ? (adjustedSellPrice - indicators.lastClose) / indicators.lastClose
-            : 0;
-
-        const qTableStmt = this.#db.prepare(`SELECT buy, hold FROM qtable WHERE state_key = ?`);
-        let qValues = qTableStmt.get(key);
-        if (!qValues) {
-            this.#db.prepare(`INSERT OR IGNORE INTO qtable (state_key, buy, hold) VALUES (?, 0, 0)`).run(key);
-            qValues = { buy: 0, hold: 0 };
-        }
-
         const entryPrice = indicators.lastClose;
-        const timestamp = Date.now().toString();
+        const sellPrice = truncateToDecimals(indicators.lastClose + this.#config.atrFactor * indicators.lastAtr, 2);
+        const stopLoss = truncateToDecimals(indicators.lastClose - this.#config.stopFactor * indicators.lastAtr, 2);
+
+        const adjustedSellPrice = sellPrice * (1 - this.#config.fee);
+        const expectedReward = truncateToDecimals((adjustedSellPrice - indicators.lastClose) / indicators.lastClose, 8)
 
         if (!pattern) {
             const insertPatternStmt = this.#db.prepare(`
@@ -391,9 +368,9 @@ class NeuralSignalEngine {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         insertTradeStmt.run(
-            timestamp,
-            truncateToDecimals(sellPrice, 2),
-            truncateToDecimals(stopLoss, 2),
+            Date.now().toString(),
+            sellPrice,
+            stopLoss,
             entryPrice,
             confidence,
             patternScore,
@@ -408,11 +385,11 @@ class NeuralSignalEngine {
 
         return {
             entryPrice,
-            sellPrice: isValidNumber(sellPrice) ? truncateToDecimals(sellPrice, 2) : 0,
-            stopLoss: isValidNumber(stopLoss) ? truncateToDecimals(stopLoss, 2) : 0,
-            multiplier: isValidNumber(multiplier) ? truncateToDecimals(multiplier, 3) : this.#config.minMultiplier,
-            expectedReward: truncateToDecimals(expectedReward, 8),
-            confidence: confidence,
+            sellPrice,
+            stopLoss,
+            multiplier,
+            expectedReward,
+            confidence,
             threshold: this.#config.baseConfidenceThreshold
         };
     }

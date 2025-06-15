@@ -33,7 +33,6 @@ class IndicatorProcessor {
     const adx = this.#computeADX(high, low, close, 14);
     const cci = this.#computeCCI(high, low, close, 20);
     const williamsR = this.#computeWilliamsR(high, low, close, 14);
-    const cmf = this.#computeCMF(high, low, close, volume, 20);
 
     const macdDiff = macd.map(m => m.MACD - m.signal);
     const stochasticDiff = stochastic.map(s => s.K - s.D);
@@ -50,14 +49,14 @@ class IndicatorProcessor {
       lastAtr: atr.at(-1),
       rsi,
       macdDiff,
+      atr,
       ema100,
       stochasticDiff,
       bollingerPercentB,
       obv,
       adx,
       cci,
-      williamsR,
-      cmf
+      williamsR
     };
   }
 
@@ -320,43 +319,6 @@ class IndicatorProcessor {
       williamsR[j] = isValidNumber(r) ? Math.min(Math.max(r, -100), 0) : -50;
     }
     return williamsR;
-  }
-
-  #computeCMF(high, low, close, volume, period) {
-    if (
-      !Array.isArray(high) || high.length < period ||
-      high.length !== low.length || low.length !== close.length || volume.length !== close.length ||
-      !high.every(isValidNumber) || !low.every(isValidNumber) || 
-      !close.every(isValidNumber) || !volume.every(isValidNumber)
-    ) {
-      return new Array(Math.max(0, high.length - period + 1)).fill(0);
-    }
-    const cmf = new Array(high.length - period + 1);
-    for (let i = period - 1, j = 0; i < high.length; i++, j++) {
-      let moneyFlowSum = 0;
-      let volumeSum = 0;
-      let validCandles = 0;
-      for (let k = i - period + 1; k <= i; k++) {
-        const highLow = high[k] - low[k];
-        if (!isValidNumber(highLow) || !isValidNumber(close[k]) || !isValidNumber(volume[k])) {
-          continue;
-        }
-        const moneyFlowMultiplier = highLow > 0 
-          ? ((close[k] - low[k]) - (high[k] - close[k])) / highLow 
-          : 0;
-        const moneyFlowVolume = moneyFlowMultiplier * volume[k];
-        if (isValidNumber(moneyFlowVolume)) {
-          moneyFlowSum += moneyFlowVolume;
-          volumeSum += volume[k];
-          validCandles++;
-        }
-      }
-      cmf[j] = validCandles > 0 && volumeSum > 0 
-        ? moneyFlowSum / volumeSum 
-        : 0;
-      cmf[j] = isValidNumber(cmf[j]) ? Math.min(Math.max(cmf[j], -1), 1) : 0;
-    }
-    return cmf;
   }
 }
 
