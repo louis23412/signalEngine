@@ -2966,10 +2966,10 @@ class HiveMind {
 
                 const normAttention = attentionResidual.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2));
 
-                const ffnOutput = this.#feedForward(normAttention[0], transformer.ffnWeights[layer]);
+                const ffnOutputs = normAttention.map(row => this.#feedForward(row, transformer.ffnWeights[layer], idx));
 
                 x = attentionResidual.map((row, i) => row.map((val, j) =>
-                    isValidNumber(val) && isValidNumber(ffnOutput[j]) ? val + ffnOutput[j] : val
+                    isValidNumber(val) && isValidNumber(ffnOutputs[i][j]) ? val + ffnOutputs[i][j] : val
                 ));
             }
 
@@ -3033,9 +3033,9 @@ class HiveMind {
                     isValidNumber(val) && isValidNumber(attentionOutput[i][j]) ? val + attentionOutput[i][j] : val
                 ));
                 const normAttention = attentionResidual.map(row => this.#layerNorm(row, transformer.layerNormWeights[layer].gamma2, transformer.layerNormWeights[layer].beta2));
-                const ffnOutput = this.#feedForward(normAttention[0], transformer.ffnWeights[layer]);
+                const ffnOutputs = normAttention.map(row => this.#feedForward(row, transformer.ffnWeights[layer], idx));
                 x = attentionResidual.map((row, i) => row.map((val, j) =>
-                    isValidNumber(val) && isValidNumber(ffnOutput[j]) ? val + ffnOutput[j] : val
+                    isValidNumber(val) && isValidNumber(ffnOutputs[i][j]) ? val + ffnOutputs[i][j] : val
                 ));
                 layerOutputs[idx].push(x);
                 transformerActivations.push({ normX, attentionOutput, normAttention });
