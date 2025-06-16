@@ -19,7 +19,7 @@ const isValidNumber = (value) => {
 };
 
 class NeuralSignalEngine {
-    #transformer = new HiveMind();
+    #hivemind = new HiveMind();
     #indicators = new IndicatorProcessor();
     #db;
     #config = {
@@ -151,12 +151,31 @@ class NeuralSignalEngine {
         const sortedData = [...data].sort((a, b) => a - b);
         const lowerIdx = Math.floor(lowerPercentile * sortedData.length);
         const upperIdx = Math.ceil(upperPercentile * sortedData.length) - 1;
-        const min = sortedData[lowerIdx];
-        const max = sortedData[upperIdx];
+        let min = sortedData[lowerIdx];
+        let max = sortedData[upperIdx];
         
-        if (!isValidNumber(min) || !isValidNumber(max) || max === min) return Array(actualCount).fill(0);
+        if (max === min) {
+            const median = sortedData[Math.floor(sortedData.length / 2)];
+            const mad = sortedData.reduce((sum, val) => {
+                return sum + Math.abs(val - median);
+            }, 0) / sortedData.length;
+            
+            const scale = mad > 0 ? mad : Number.EPSILON * 1e6;
+            min = median - scale;
+            max = median + scale;
+        }
         
-        return valuesToNormalize.map(value => truncateToDecimals(Math.min(1, Math.max(0, (value - min) / (max - min))), 2));
+        const range = max - min;
+        const epsilon = Number.EPSILON * Math.max(Math.abs(min), Math.abs(max));
+        if (range < epsilon) {
+            min -= epsilon;
+            max += epsilon;
+        }
+        
+        return valuesToNormalize.map(value => {
+            const normalized = (value - min) / (max - min);
+            return truncateToDecimals(Math.min(1, Math.max(0, normalized)), 2);
+        });
     }
 
     #extractFeatures(data, candleCount) {
@@ -267,7 +286,7 @@ class NeuralSignalEngine {
                     console.log(`Training triggered for closed trade (${isWin ? 'win' : 'loss'}): ${tempCounter} / ${closedTrades.length} - WinRate: ${winRate * 100}%`);
                     const startTime = process.hrtime();
 
-                    this.#transformer.train(
+                    this.#hivemind.train(
                         trade.features.flat(), 
                         isWin,
                         (tempCounter === closedTrades.length) && (status === 'production')
@@ -316,7 +335,7 @@ class NeuralSignalEngine {
         console.log(`Forward triggered for pattern with win rate: ${patternScore * 100}%`);
         const startTime = process.hrtime();
 
-        const confidence = truncateToDecimals(this.#transformer.forward(features.flat())[0] * 100, 4);
+        const confidence = truncateToDecimals(this.#hivemind.forward(features.flat())[0] * 100, 4);
 
         const diff = process.hrtime(startTime);
         const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
@@ -369,7 +388,7 @@ class NeuralSignalEngine {
         );
 
         if (status === 'dump') {
-            this.#transformer.dumpState();
+            this.#hivemind.dumpState();
         }
 
         return {
