@@ -5,36 +5,31 @@ import Database from 'better-sqlite3';
 import HiveMind from './hiveMind.js';
 import IndicatorProcessor from './indicatorProcessor.js';
 
+import { truncateToDecimals, isValidNumber } from './utils.js';
+
 const directoryPath = path.join(import.meta.dirname, '..', 'state');
 
-const truncateToDecimals = (value, decimals) => {
-    const factor = Math.pow(10, decimals);
-    return Math.floor(value * factor) / factor;
-};
-
-const isValidNumber = (value) => {
-    if (value == null) return false;
-    const num = typeof value === 'string' ? Number(value) : value;
-    return typeof num === 'number' && !isNaN(num) && isFinite(num);
-};
-
 class NeuralSignalEngine {
-    #hivemind = new HiveMind();
-    #indicators = new IndicatorProcessor();
+    #hivemind;
+    #indicators;
     #db;
     #config = {
         minMultiplier: 1,
         maxMultiplier: 2.5,
-        baseConfidenceThreshold: 60,
+        baseConfidenceThreshold: 50,
         atrFactor: 2.5,
         stopFactor: 1,
         minPriceMovement : 0.0021,
-        maxPriceMovement : 0.1
+        maxPriceMovement : 0.05
     };
 
     constructor() {
         fs.mkdirSync(directoryPath, { recursive: true });
+
+        this.#hivemind = new HiveMind(directoryPath);
+        this.#indicators = new IndicatorProcessor();
         this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
+
         this.#initDatabase();
     }
 

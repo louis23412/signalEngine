@@ -61,11 +61,7 @@ const formatSignal = (options = {}) => {
                       `Confidence: ${ANSI_CYAN}${signal.confidence}${ANSI_RESET}, ` +
                       `Threshold: ${ANSI_CYAN}${signal.threshold}${ANSI_RESET}`
 
-    // process.stdout.write('\x1B[?25l');
-    // process.stdout.cursorTo(0, 0);
-    // process.stdout.write('\x1B[0J');
     process.stdout.write(`-----------------------\n${progressLine}${signalLine}\n-----------------------\n`);
-    // process.stdout.write('\x1B[?25h');
 };
 
 const processCandles = () => {
