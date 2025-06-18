@@ -17,8 +17,6 @@ class HiveMind {
     #learningRateDecay = 1e-4;
 
     #weightDecayRate = 0.001;
-    #weightSharingRate = 0.05;
-
     #dropoutRate = 0.1;
     #diversityWeight = 0.25;
     #swarmIntelligenceFactor = 0.5;
@@ -31,14 +29,12 @@ class HiveMind {
 
     #trainingStepCount = 0;
     #momentum = 0;
-    #emaVariance;
 
     #adaptiveLearningRate = [];
     #integral = [];
     #previousError = [];
     #transformers = [];
     #ensembleWeights = [];
-    #momentumWeights = [];
     #gradientAccumulation = [];
     #attentionWeightMatrix = [];
     #attentionBias = [];
@@ -63,7 +59,6 @@ class HiveMind {
         this.#trustScoresHistory = Array(this.#ensembleSize).fill().map(() => [0]);
         this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
 
-        this.#momentumWeights = this.#createWeightStructure();
         this.#gradientAccumulation = this.#createWeightStructure();
         this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
             Array(this.#contextWindow).fill().map(() => Array(this.#hiddenSize).fill(0))
@@ -222,47 +217,12 @@ class HiveMind {
                     value REAL,
                     PRIMARY KEY (idx, layer, norm_type, row)
                 );
-                CREATE TABLE IF NOT EXISTS momentum_weights (
-                    idx INTEGER,
-                    layer INTEGER,
-                    weight_type TEXT,
-                    row INTEGER,
-                    col INTEGER,
-                    value REAL,
-                    PRIMARY KEY (idx, layer, weight_type, row, col)
-                );
-                CREATE TABLE IF NOT EXISTS momentum_biases (
-                    idx INTEGER,
-                    layer INTEGER,
-                    bias_type TEXT,
-                    row INTEGER,
-                    value REAL,
-                    PRIMARY KEY (idx, layer, bias_type, row)
-                );
-                CREATE TABLE IF NOT EXISTS gradient_accumulation (
-                    idx INTEGER,
-                    layer INTEGER,
-                    weight_type TEXT,
-                    row INTEGER,
-                    col INTEGER,
-                    value REAL,
-                    PRIMARY KEY (idx, layer, weight_type, row, col)
-                );
-                CREATE TABLE IF NOT EXISTS gradient_biases (
-                    idx INTEGER,
-                    layer INTEGER,
-                    bias_type TEXT,
-                    row INTEGER,
-                    value REAL,
-                    PRIMARY KEY (idx, layer, bias_type, row)
-                );
             `);
 
             const insertMetadata = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
             insertMetadata.run('trainingStepCount', this.#trainingStepCount.toString());
             insertMetadata.run('swarmIntelligenceFactor', this.#swarmIntelligenceFactor.toString());
             insertMetadata.run('momentum', this.#momentum.toString());
-            insertMetadata.run('emaVariance', this.#emaVariance.toString());
 
             const insertEnsembleWeights = db.prepare('INSERT OR REPLACE INTO ensemble_weights (idx, weight) VALUES (?, ?)');
             this.#ensembleWeights.forEach((weight, idx) => {
@@ -469,196 +429,6 @@ class HiveMind {
                 });
             });
 
-            const insertMomentumWeights = db.prepare('INSERT OR REPLACE INTO momentum_weights (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
-            const insertMomentumBiases = db.prepare('INSERT OR REPLACE INTO momentum_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
-            this.#momentumWeights.forEach((momentum, idx) => {
-                momentum.attentionWeights.forEach((layer, l) => {
-                    layer.Wq.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertMomentumWeights.run(idx, l, 'Wq', r, c, value);
-                            }
-                        });
-                    });
-                    layer.Wk.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertMomentumWeights.run(idx, l, 'Wk', r, c, value);
-                            }
-                        });
-                    });
-                    layer.Wv.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertMomentumWeights.run(idx, l, 'Wv', r, c, value);
-                            }
-                        });
-                    });
-                    layer.Wo.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertMomentumWeights.run(idx, l, 'Wo', r, c, value);
-                            }
-                        });
-                    });
-                });
-                momentum.ffnWeights.forEach((layer, l) => {
-                    layer.W1.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertMomentumWeights.run(idx, l, 'W1', r, c, value);
-                            }
-                        });
-                    });
-                    layer.W2.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertMomentumWeights.run(idx, l, 'W2', r, c, value);
-                            }
-                        });
-                    });
-                    layer.b1.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumBiases.run(idx, l, 'b1', r, value);
-                        }
-                    });
-                    layer.b2.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumBiases.run(idx, l, 'b2', r, value);
-                        }
-                    });
-                });
-                momentum.layerNormWeights.forEach((layer, l) => {
-                    layer.gamma1.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumBiases.run(idx, l, 'gamma1', r, value);
-                        }
-                    });
-                    layer.beta1.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumBiases.run(idx, l, 'beta1', r, value);
-                        }
-                    });
-                    layer.gamma2.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumBiases.run(idx, l, 'gamma2', r, value);
-                        }
-                    });
-                    layer.beta2.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumBiases.run(idx, l, 'beta2', r, value);
-                        }
-                    });
-                });
-                momentum.outputWeights.forEach((row, r) => {
-                    row.forEach((value, c) => {
-                        if (isValidNumber(value)) {
-                            insertMomentumWeights.run(idx, -1, 'outputWeights', r, c, value);
-                        }
-                    });
-                });
-                momentum.outputBias.forEach((value, r) => {
-                    if (isValidNumber(value)) {
-                        insertMomentumBiases.run(idx, -1, 'outputBias', r, value);
-                    }
-                });
-            });
-
-            const insertGradientAccumulation = db.prepare('INSERT OR REPLACE INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
-            const insertGradientBiases = db.prepare('INSERT OR REPLACE INTO gradient_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
-            this.#gradientAccumulation.forEach((gradient, idx) => {
-                gradient.attentionWeights.forEach((layer, l) => {
-                    layer.Wq.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertGradientAccumulation.run(idx, l, 'Wq', r, c, value);
-                            }
-                        });
-                    });
-                    layer.Wk.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertGradientAccumulation.run(idx, l, 'Wk', r, c, value);
-                            }
-                        });
-                    });
-                    layer.Wv.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertGradientAccumulation.run(idx, l, 'Wv', r, c, value);
-                            }
-                        });
-                    });
-                    layer.Wo.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertGradientAccumulation.run(idx, l, 'Wo', r, c, value);
-                            }
-                        });
-                    });
-                });
-                gradient.ffnWeights.forEach((layer, l) => {
-                    layer.W1.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertGradientAccumulation.run(idx, l, 'W1', r, c, value);
-                            }
-                        });
-                    });
-                    layer.W2.forEach((row, r) => {
-                        row.forEach((value, c) => {
-                            if (isValidNumber(value)) {
-                                insertGradientAccumulation.run(idx, l, 'W2', r, c, value);
-                            }
-                        });
-                    });
-                    layer.b1.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertGradientBiases.run(idx, l, 'b1', r, value);
-                        }
-                    });
-                    layer.b2.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertGradientBiases.run(idx, l, 'b2', r, value);
-                        }
-                    });
-                });
-                gradient.layerNormWeights.forEach((layer, l) => {
-                    layer.gamma1.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertGradientBiases.run(idx, l, 'gamma1', r, value);
-                        }
-                    });
-                    layer.beta1.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertGradientBiases.run(idx, l, 'beta1', r, value);
-                        }
-                    });
-                    layer.gamma2.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertGradientBiases.run(idx, l, 'gamma2', r, value);
-                        }
-                    });
-                    layer.beta2.forEach((value, r) => {
-                        if (isValidNumber(value)) {
-                            insertGradientBiases.run(idx, l, 'beta2', r, value);
-                        }
-                    });
-                });
-                gradient.outputWeights.forEach((row, r) => {
-                    row.forEach((value, c) => {
-                        if (isValidNumber(value)) {
-                            insertGradientAccumulation.run(idx, -1, 'outputWeights', r, c, value);
-                        }
-                    });
-                });
-                gradient.outputBias.forEach((value, r) => {
-                    if (isValidNumber(value)) {
-                        insertGradientBiases.run(idx, -1, 'outputBias', r, value);
-                    }
-                });
-            });
-
             db.exec('COMMIT');
         } catch (error) {
             db.exec('ROLLBACK');
@@ -692,10 +462,6 @@ class HiveMind {
             const momentum = metadataStmt.get('momentum');
             if (momentum && isValidNumber(Number(momentum.value))) {
                 this.#momentum = Number(momentum.value);
-            }
-            const emaVariance = metadataStmt.get('emaVariance');
-            if (emaVariance && isValidNumber(Number(emaVariance.value))) {
-                this.#emaVariance = Number(emaVariance.value);
             }
 
             const ensembleWeightsStmt = db.prepare('SELECT idx, weight FROM ensemble_weights');
@@ -887,121 +653,6 @@ class HiveMind {
                     }
                 }
             });
-
-            const momentumWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM momentum_weights');
-            const momentumBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM momentum_biases');
-            const momentumWeights = momentumWeightsStmt.all();
-            const momentumBiases = momentumBiasesStmt.all();
-            momentumWeights.forEach(({ idx, layer, weight_type, row, col, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    row >= 0 && col >= 0
-                ) {
-                    if (weight_type === 'outputWeights' && layer === -1) {
-                        if (row < this.#hiddenSize && col < this.#outputSize) {
-                            this.#momentumWeights[idx].outputWeights[row][col] = value;
-                        }
-                    } else if (layer >= 0 && layer < this.#numLayers) {
-                        if (weight_type === 'Wq' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#momentumWeights[idx].attentionWeights[layer].Wq[row][col] = value;
-                        } else if (weight_type === 'Wk' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#momentumWeights[idx].attentionWeights[layer].Wk[row][col] = value;
-                        } else if (weight_type === 'Wv' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#momentumWeights[idx].attentionWeights[layer].Wv[row][col] = value;
-                        } else if (weight_type === 'Wo' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#momentumWeights[idx].attentionWeights[layer].Wo[row][col] = value;
-                        } else if (weight_type === 'W1' && row < this.#hiddenSize && col < this.#feedForwardSize) {
-                            this.#momentumWeights[idx].ffnWeights[layer].W1[row][col] = value;
-                        } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
-                            this.#momentumWeights[idx].ffnWeights[layer].W2[row][col] = value;
-                        }
-                    }
-                }
-            });
-            momentumBiases.forEach(({ idx, layer, bias_type, row, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    row >= 0
-                ) {
-                    if (bias_type === 'outputBias' && layer === -1 && row < this.#outputSize) {
-                        this.#momentumWeights[idx].outputBias[row] = value;
-                    } else if (layer >= 0 && layer < this.#numLayers) {
-                        if (bias_type === 'b1' && row < this.#feedForwardSize) {
-                            this.#momentumWeights[idx].ffnWeights[layer].b1[row] = value;
-                        } else if (bias_type === 'b2' && row < this.#hiddenSize) {
-                            this.#momentumWeights[idx].ffnWeights[layer].b2[row] = value;
-                        } else if (bias_type === 'gamma1' && row < this.#hiddenSize) {
-                            this.#momentumWeights[idx].layerNormWeights[layer].gamma1[row] = value;
-                        } else if (bias_type === 'beta1' && row < this.#hiddenSize) {
-                            this.#momentumWeights[idx].layerNormWeights[layer].beta1[row] = value;
-                        } else if (bias_type === 'gamma2' && row < this.#hiddenSize) {
-                            this.#momentumWeights[idx].layerNormWeights[layer].gamma2[row] = value;
-                        } else if (bias_type === 'beta2' && row < this.#hiddenSize) {
-                            this.#momentumWeights[idx].layerNormWeights[layer].beta2[row] = value;
-                        }
-                    }
-                }
-            });
-
-            const gradientAccumulationStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
-            const gradientBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM gradient_biases');
-            const gradientAccumulation = gradientAccumulationStmt.all();
-            const gradientBiases = gradientBiasesStmt.all();
-            gradientAccumulation.forEach(({ idx, layer, weight_type, row, col, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    row >= 0 && col >= 0
-                ) {
-                    if (weight_type === 'outputWeights' && layer === -1) {
-                        if (row < this.#hiddenSize && col < this.#outputSize) {
-                            this.#gradientAccumulation[idx].outputWeights[row][col] = value;
-                        }
-                    } else if (layer >= 0 && layer < this.#numLayers) {
-                        if (weight_type === 'Wq' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[row][col] = value;
-                        } else if (weight_type === 'Wk' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[row][col] = value;
-                        } else if (weight_type === 'Wv' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[row][col] = value;
-                        } else if (weight_type === 'Wo' && row < this.#hiddenSize && col < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[row][col] = value;
-                        } else if (weight_type === 'W1' && row < this.#hiddenSize && col < this.#feedForwardSize) {
-                            this.#gradientAccumulation[idx].ffnWeights[layer].W1[row][col] = value;
-                        } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].ffnWeights[layer].W2[row][col] = value;
-                        }
-                    }
-                }
-            });
-            gradientBiases.forEach(({ idx, layer, bias_type, row, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    row >= 0
-                ) {
-                    if (bias_type === 'outputBias' && layer === -1 && row < this.#outputSize) {
-                        this.#gradientAccumulation[idx].outputBias[row] = value;
-                    } else if (layer >= 0 && layer < this.#numLayers) {
-                        if (bias_type === 'b1' && row < this.#feedForwardSize) {
-                            this.#gradientAccumulation[idx].ffnWeights[layer].b1[row] = value;
-                        } else if (bias_type === 'b2' && row < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].ffnWeights[layer].b2[row] = value;
-                        } else if (bias_type === 'gamma1' && row < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[row] = value;
-                        } else if (bias_type === 'beta1' && row < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[row] = value;
-                        } else if (bias_type === 'gamma2' && row < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[row] = value;
-                        } else if (bias_type === 'beta2' && row < this.#hiddenSize) {
-                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[row] = value;
-                        }
-                    }
-                }
-            });
-
         } catch (error) {
         } finally {
             if (db) {
@@ -1015,13 +666,6 @@ class HiveMind {
             Array(cols).fill().map(() => (Math.random() - 0.5) * Math.sqrt(2 / (rows + cols)))
         );
     }
-
-    // #kaimingInit(rows, cols) {
-    //     const std = Math.sqrt(2 / rows);
-    //     return Array(rows).fill().map(() =>
-    //         Array(cols).fill().map(() => (Math.random() - 0.5) * 2 * std)
-    //     );
-    // }
 
     #createPositionalEncoding() {
         return Array(this.#inputSize).fill().map((_, pos) =>
@@ -1057,54 +701,6 @@ class HiveMind {
             })),
             attentionBias: Array(this.#hiddenSize).fill(0)
         }));
-    }
-
-    #shouldCommunicate() {
-        if (
-            !Array.isArray(this.#performanceScores) ||
-            this.#performanceScores.length !== this.#ensembleSize ||
-            this.#ensembleSize === 0 ||
-            !this.#performanceScores.every(score => isValidNumber(score) && score >= 0 && score <= 1) ||
-            !Array.isArray(this.#specializationScores) ||
-            this.#specializationScores.length !== this.#ensembleSize ||
-            !this.#specializationScores.every(score => isValidNumber(score) && score >= 0 && score <= 1)
-        ) {
-            return false;
-        }
-
-        const meanPerformance = this.#performanceScores.reduce((sum, score) => sum + score, 0) / this.#ensembleSize;
-
-        if (this.#performanceScores.every(score => Math.abs(score - meanPerformance) < 1e-6)) {
-            return false;
-        }
-
-        const variance = this.#performanceScores.reduce((sum, score) => sum + (score - meanPerformance) ** 2, 0) / this.#ensembleSize;
-
-        if (!isValidNumber(variance) || variance < 0) {
-            return false;
-        }
-
-        const performanceStd = Math.sqrt(variance);
-
-        const specializationMean = this.#specializationScores.reduce((sum, score) => sum + score, 0) / this.#ensembleSize;
-        const specializationVariance = this.#specializationScores.reduce((sum, score) => sum + (score - specializationMean) ** 2, 0) / this.#ensembleSize;
-        const specializationStd = isValidNumber(specializationVariance) && specializationVariance >= 0 ? Math.sqrt(specializationVariance) : 0;
-
-        const adjustedStd = performanceStd * (1 + this.#swarmIntelligenceFactor * specializationStd);
-
-        const smoothingFactor = 0.1;
-        const currentVariance = variance;
-
-        this.#emaVariance = this.#emaVariance === undefined ? currentVariance : 
-            smoothingFactor * currentVariance + (1 - smoothingFactor) * this.#emaVariance;
-
-        const varianceChange = this.#emaVariance > 0 ? Math.abs(currentVariance - this.#emaVariance) / this.#emaVariance : 0;
-
-        const baseThreshold = 0.1;
-        const maxThreshold = 0.2;
-        const threshold = baseThreshold + (maxThreshold - baseThreshold) * Math.exp(-varianceChange * 10);
-
-        return adjustedStd > threshold;
     }
 
     #computeAttentionWeights(inputs, outputs) {
@@ -1376,229 +972,6 @@ class HiveMind {
             const adjustment = 1 + PID;
             const newLr = baseLr * adjustment;
             return Math.min(Math.max(newLr, baseLr * 0.1), baseLr * 5);
-        });
-    }
-
-    #shareWeights() {
-        const performanceSum = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) || 1;
-        const trustScores = this.#performanceScores.map(score => (isValidNumber(score) ? score : 0) / performanceSum);
-        const momentumFactor = 0.1;
-
-        const avgWeights = (weights, trustWeights) => {
-            const result = weights[0].map(row => row.map(() => 0));
-            for (let i = 0; i < result.length; i++) {
-                for (let j = 0; j < result[i].length; j++) {
-                    let weightedSum = 0, totalWeight = 0;
-                    for (let t = 0; t < weights.length; t++) {
-                        if (isValidNumber(weights[t][i][j]) && isValidNumber(trustWeights[t])) {
-                            weightedSum += weights[t][i][j] * trustWeights[t] * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[t]);
-                            totalWeight += trustWeights[t];
-                        }
-                    }
-                    result[i][j] = totalWeight > 1e-6 ? weightedSum / totalWeight : 0;
-                }
-            }
-            return result;
-        };
-
-        const avgBias = (biases, trustWeights) => {
-            const result = biases[0].map(() => 0);
-            for (let i = 0; i < result.length; i++) {
-                let weightedSum = 0, totalWeight = 0;
-                for (let t = 0; t < biases.length; t++) {
-                    if (isValidNumber(biases[t][i]) && isValidNumber(trustWeights[t])) {
-                        weightedSum += biases[t][i] * trustWeights[t] * (1 + this.#swarmIntelligenceFactor * this.#specializationScores[t]);
-                        totalWeight += trustWeights[t];
-                    }
-                }
-                result[i] = totalWeight > 1e-6 ? weightedSum / totalWeight : 0;
-            }
-            return result;
-        };
-
-        const topPerformers = this.#performanceScores
-            .map((score, idx) => ({ score: isValidNumber(score) ? score : 0, idx }))
-            .sort((a, b) => b.score - a.score)
-            .slice(0, Math.floor(this.#ensembleSize * 0.25))
-            .map(({ idx }) => idx);
-
-        for (let layer = 0; layer < this.#numLayers; layer++) {
-            const allWq = this.#transformers.map(t => t.attentionWeights[layer].Wq);
-            const allWk = this.#transformers.map(t => t.attentionWeights[layer].Wk);
-            const allWv = this.#transformers.map(t => t.attentionWeights[layer].Wv);
-            const allWo = this.#transformers.map(t => t.attentionWeights[layer].Wo);
-            const allW1 = this.#transformers.map(t => t.ffnWeights[layer].W1);
-            const allW2 = this.#transformers.map(t => t.ffnWeights[layer].W2);
-            const allB1 = this.#transformers.map(t => t.ffnWeights[layer].b1);
-            const allB2 = this.#transformers.map(t => t.ffnWeights[layer].b2);
-            const allGamma1 = this.#transformers.map(t => t.layerNormWeights[layer].gamma1);
-            const allBeta1 = this.#transformers.map(t => t.layerNormWeights[layer].beta1);
-            const allGamma2 = this.#transformers.map(t => t.layerNormWeights[layer].gamma2);
-            const allBeta2 = this.#transformers.map(t => t.layerNormWeights[layer].beta2);
-
-            const avgWq = avgWeights(allWq, trustScores);
-            const avgWk = avgWeights(allWk, trustScores);
-            const avgWv = avgWeights(allWv, trustScores);
-            const avgWo = avgWeights(allWo, trustScores);
-            const avgW1 = avgWeights(allW1, trustScores);
-            const avgW2 = avgWeights(allW2, trustScores);
-            const avgB1 = avgBias(allB1, trustScores);
-            const avgB2 = avgBias(allB2, trustScores);
-            const avgGamma1 = avgBias(allGamma1, trustScores);
-            const avgBeta1 = avgBias(allBeta1, trustScores);
-            const avgGamma2 = avgBias(allGamma2, trustScores);
-            const avgBeta2 = avgBias(allBeta2, trustScores);
-
-            this.#transformers.forEach((t, idx) => {
-                if (topPerformers.includes(idx)) return;
-
-                const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
-                const swarmInfluence = 1 + this.#swarmIntelligenceFactor * (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0);
-
-                for (let i = 0; i < t.attentionWeights[layer].Wq.length; i++) {
-                    for (let j = 0; j < t.attentionWeights[layer].Wq[i].length; j++) {
-                        const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
-                            ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
-                            : 1;
-                        const update = isValidNumber(t.attentionWeights[layer].Wq[i][j]) && isValidNumber(avgWq[i][j])
-                            ? (1 - sharingRate) * t.attentionWeights[layer].Wq[i][j] + sharingRate * avgWq[i][j] * swarmInfluence * specializationFactor
-                            : t.attentionWeights[layer].Wq[i][j] || 0;
-                        this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j] +
-                            (1 - momentumFactor) * update;
-                        t.attentionWeights[layer].Wq[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wq[i][j];
-
-                        const wkUpdate = isValidNumber(t.attentionWeights[layer].Wk[i][j]) && isValidNumber(avgWk[i][j])
-                            ? (1 - sharingRate) * t.attentionWeights[layer].Wk[i][j] + sharingRate * avgWk[i][j] * swarmInfluence * specializationFactor
-                            : t.attentionWeights[layer].Wk[i][j] || 0;
-                        this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j] +
-                            (1 - momentumFactor) * wkUpdate;
-                        t.attentionWeights[layer].Wk[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wk[i][j];
-
-                        const wvUpdate = isValidNumber(t.attentionWeights[layer].Wv[i][j]) && isValidNumber(avgWv[i][j])
-                            ? (1 - sharingRate) * t.attentionWeights[layer].Wv[i][j] + sharingRate * avgWv[i][j] * swarmInfluence * specializationFactor
-                            : t.attentionWeights[layer].Wv[i][j] || 0;
-                        this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j] +
-                            (1 - momentumFactor) * wvUpdate;
-                        t.attentionWeights[layer].Wv[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wv[i][j];
-
-                        const woUpdate = isValidNumber(t.attentionWeights[layer].Wo[i][j]) && isValidNumber(avgWo[i][j])
-                            ? (1 - sharingRate) * t.attentionWeights[layer].Wo[i][j] + sharingRate * avgWo[i][j] * swarmInfluence * specializationFactor
-                            : t.attentionWeights[layer].Wo[i][j] ||0;
-                        this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] = momentumFactor * this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j] +
-                            (1 - momentumFactor) * woUpdate;
-                        t.attentionWeights[layer].Wo[i][j] = this.#momentumWeights[idx].attentionWeights[layer].Wo[i][j];
-                    }
-                }
-
-                for (let i = 0; i < t.ffnWeights[layer].W1.length; i++) {
-                    for (let j = 0; j < t.ffnWeights[layer].W1[i].length; j++) {
-                        const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize])
-                            ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize]
-                            : 1;
-                        const update = isValidNumber(t.ffnWeights[layer].W1[i][j]) && isValidNumber(avgW1[i][j])
-                            ? (1 - sharingRate) * t.ffnWeights[layer].W1[i][j] + sharingRate * avgW1[i][j] * swarmInfluence * specializationFactor
-                            : t.ffnWeights[layer].W1[i][j] || 0;
-                        this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W1[i][j] +
-                            (1 - momentumFactor) * update;
-                        t.ffnWeights[layer].W1[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W1[i][j];
-                    }
-                }
-                for (let i = 0; i < t.ffnWeights[layer].W2.length; i++) {
-                    for (let j = 0; j < t.ffnWeights[layer].W2[i].length; j++) {
-                        const specializationFactor = isValidNumber(this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize])
-                            ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][j % this.#hiddenSize][i % this.#hiddenSize]
-                            : 1;
-                        const update = isValidNumber(t.ffnWeights[layer].W2[i][j]) && isValidNumber(avgW2[i][j])
-                            ? (1 - sharingRate) * t.ffnWeights[layer].W2[i][j] + sharingRate * avgW2[i][j] * swarmInfluence * specializationFactor
-                            : t.ffnWeights[layer].W2[i][j] || 0;
-                        this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].W2[i][j] +
-                            (1 - momentumFactor) * update;
-                        t.ffnWeights[layer].W2[i][j] = this.#momentumWeights[idx].ffnWeights[layer].W2[i][j];
-                    }
-                }
-
-                for (let i = 0; i < t.ffnWeights[layer].b1.length; i++) {
-                    const update = isValidNumber(t.ffnWeights[layer].b1[i]) && isValidNumber(avgB1[i])
-                        ? (1 - sharingRate) * t.ffnWeights[layer].b1[i] + sharingRate * avgB1[i] * swarmInfluence
-                        : t.ffnWeights[layer].b1[i] || 0;
-                    this.#momentumWeights[idx].ffnWeights[layer].b1[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b1[i] +
-                        (1 - momentumFactor) * update;
-                    t.ffnWeights[layer].b1[i] = this.#momentumWeights[idx].ffnWeights[layer].b1[i];
-                }
-                for (let i = 0; i < t.ffnWeights[layer].b2.length; i++) {
-                    const update = isValidNumber(t.ffnWeights[layer].b2[i]) && isValidNumber(avgB2[i])
-                        ? (1 - sharingRate) * t.ffnWeights[layer].b2[i] + sharingRate * avgB2[i] * swarmInfluence
-                        : t.ffnWeights[layer].b2[i] || 0;
-                    this.#momentumWeights[idx].ffnWeights[layer].b2[i] = momentumFactor * this.#momentumWeights[idx].ffnWeights[layer].b2[i] +
-                        (1 - momentumFactor) * update;
-                    t.ffnWeights[layer].b2[i] = this.#momentumWeights[idx].ffnWeights[layer].b2[i];
-                }
-
-                for (let i = 0; i < t.layerNormWeights[layer].gamma1.length; i++) {
-                    const gamma1Update = isValidNumber(t.layerNormWeights[layer].gamma1[i]) && isValidNumber(avgGamma1[i])
-                        ? (1 - sharingRate) * t.layerNormWeights[layer].gamma1[i] + sharingRate * avgGamma1[i] * swarmInfluence
-                        : t.layerNormWeights[layer].gamma1[i] || 1;
-                    this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i] +
-                        (1 - momentumFactor) * gamma1Update;
-                    t.layerNormWeights[layer].gamma1[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma1[i];
-
-                    const beta1Update = isValidNumber(t.layerNormWeights[layer].beta1[i]) && isValidNumber(avgBeta1[i])
-                        ? (1 - sharingRate) * t.layerNormWeights[layer].beta1[i] + sharingRate * avgBeta1[i] * swarmInfluence
-                        : t.layerNormWeights[layer].beta1[i] || 0;
-                    this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta1[i] +
-                        (1 - momentumFactor) * beta1Update;
-                    t.layerNormWeights[layer].beta1[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta1[i];
-
-                    const gamma2Update = isValidNumber(t.layerNormWeights[layer].gamma2[i]) && isValidNumber(avgGamma2[i])
-                        ? (1 - sharingRate) * t.layerNormWeights[layer].gamma2[i] + sharingRate * avgGamma2[i] * swarmInfluence
-                        : t.layerNormWeights[layer].gamma2[i] || 1;
-                    this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i] +
-                        (1 - momentumFactor) * gamma2Update;
-                    t.layerNormWeights[layer].gamma2[i] = this.#momentumWeights[idx].layerNormWeights[layer].gamma2[i];
-
-                    const beta2Update = isValidNumber(t.layerNormWeights[layer].beta2[i]) && isValidNumber(avgBeta2[i])
-                        ? (1 - sharingRate) * t.layerNormWeights[layer].beta2[i] + sharingRate * avgBeta2[i] * swarmInfluence
-                        : t.layerNormWeights[layer].beta2[i] || 0;
-                    this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] = momentumFactor * this.#momentumWeights[idx].layerNormWeights[layer].beta2[i] +
-                        (1 - momentumFactor) * beta2Update;
-                    t.layerNormWeights[layer].beta2[i] = this.#momentumWeights[idx].layerNormWeights[layer].beta2[i];
-                }
-            });
-        }
-
-        const allOutputWeights = this.#transformers.map(t => t.outputWeights);
-        const allOutputBias = this.#transformers.map(t => t.outputBias);
-        const avgOutputWeights = avgWeights(allOutputWeights, trustScores);
-        const avgOutputBias = avgBias(allOutputBias, trustScores);
-
-        this.#transformers.forEach((t, idx) => {
-            if (topPerformers.includes(idx)) return;
-
-            const sharingRate = trustScores[idx] < 0.5 ? this.#weightSharingRate + 0.1 * (0.5 - trustScores[idx]) : this.#weightSharingRate;
-            const swarmInfluence = 1 + this.#swarmIntelligenceFactor * (isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0);
-
-            for (let i = 0; i < t.outputWeights.length; i++) {
-                for (let j = 0; j < t.outputWeights[i].length; j++) {
-                    const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
-                        ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
-                        : 1;
-                    const update = isValidNumber(t.outputWeights[i][j]) && isValidNumber(avgOutputWeights[i][j])
-                        ? (1 - sharingRate) * t.outputWeights[i][j] + sharingRate * avgOutputWeights[i][j] * swarmInfluence * specializationFactor
-                        : t.outputWeights[i][j] || 0;
-                    this.#momentumWeights[idx].outputWeights[i][j] = momentumFactor * this.#momentumWeights[idx].outputWeights[i][j] +
-                        (1 - momentumFactor) * update;
-                    t.outputWeights[i][j] = this.#momentumWeights[idx].outputWeights[i][j];
-                }
-            }
-
-            for (let i = 0; i < t.outputBias.length; i++) {
-                const update = isValidNumber(t.outputBias[i]) && isValidNumber(avgOutputBias[i])
-                    ? (1 - sharingRate) * t.outputBias[i] + sharingRate * avgOutputBias[i] * swarmInfluence
-                    : t.outputBias[i] || 0;
-                this.#momentumWeights[idx].outputBias[i] = momentumFactor * this.#momentumWeights[idx].outputBias[i] +
-                    (1 - momentumFactor) * update;
-                t.outputBias[i] = this.#momentumWeights[idx].outputBias[i];
-            }
         });
     }
 
@@ -2056,58 +1429,6 @@ class HiveMind {
                         }
                     }
                 }
-            }
-
-            const momentum = this.#momentumWeights[idx];
-            applySpectralNorm(momentum.outputWeights, dynamicThreshold);
-            applyWeightDecay(momentum.outputWeights, true, 'outputWeights');
-            l2Norm = Math.sqrt(momentum.outputBias.reduce((sum, val) => 
-                sum + (isValidNumber(val) ? val * val : 0), 0));
-            if (l2Norm > dynamicThreshold) {
-                const scale = dynamicThreshold / l2Norm;
-                for (let i = 0; i < momentum.outputBias.length; i++) {
-                    momentum.outputBias[i] = isValidNumber(momentum.outputBias[i]) 
-                        ? momentum.outputBias[i] * scale 
-                        : 0;
-                }
-            }
-            applyWeightDecay(momentum.outputBias, false, 'outputBias');
-
-            for (let layer = 0; layer < this.#numLayers; layer++) {
-                ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
-                    const weightMatrix = momentum.attentionWeights[layer][key];
-                    applySpectralNorm(weightMatrix, dynamicThreshold);
-                    applyWeightDecay(weightMatrix, true, key, layer);
-                });
-                ['W1', 'W2'].forEach(key => {
-                    const weightMatrix = momentum.ffnWeights[layer][key];
-                    applySpectralNorm(weightMatrix, dynamicThreshold);
-                    applyWeightDecay(weightMatrix, true, key, layer);
-                });
-                ['b1', 'b2'].forEach(key => {
-                    const biasVector = momentum.ffnWeights[layer][key];
-                    l2Norm = Math.sqrt(biasVector.reduce((sum, val) => 
-                        sum + (isValidNumber(val) ? val * val : 0), 0));
-                    if (l2Norm > dynamicThreshold) {
-                        const scale = dynamicThreshold / l2Norm;
-                        for (let i = 0; i < biasVector.length; i++) {
-                            biasVector[i] = isValidNumber(biasVector[i]) ? biasVector[i] * scale : 0;
-                        }
-                    }
-                    applyWeightDecay(biasVector, false, key, layer);
-                });
-                ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
-                    const normVector = momentum.layerNormWeights[layer][key];
-                    l2Norm = Math.sqrt(normVector.reduce((sum, val) => 
-                        sum + (isValidNumber(val) ? val * val : 0), 0));
-                    if (l2Norm > dynamicThreshold) {
-                        const scale = dynamicThreshold / l2Norm;
-                        for (let i = 0; i < normVector.length; i++) {
-                            normVector[i] = isValidNumber(normVector[i]) ? normVector[i] * scale : 0;
-                        }
-                    }
-                    applyWeightDecay(normVector, false, key, layer);
-                });
             }
         }
 
@@ -3400,11 +2721,6 @@ class HiveMind {
         });
 
         this.#distillKnowledge(linearOutputs, target);
-
-        if (this.#shouldCommunicate()) {
-            this.#shareWeights();
-        }
-
         this.#regulateWeights();
         this.#stabilizeAttentionContext();
 
