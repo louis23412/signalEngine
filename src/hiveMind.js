@@ -13,38 +13,38 @@ class HiveMind {
     #hiddenSize = this.#numHeads * 8;
     #feedForwardSize = this.#hiddenSize * 4;
 
-    #learningRate = 0.001;
+    #learningRate = 1e-3;
     #learningRateDecay = 1e-4;
+    #weightDecayRate = 1e-3;
 
-    #weightDecayRate = 0.001;
     #dropoutRate = 0.1;
     #diversityWeight = 0.25;
     #swarmIntelligenceFactor = 0.5;
 
     #attentionScalingFactor = 1 / Math.sqrt(this.#hiddenSize / this.#numHeads);
 
-    #contextWindow = 128;
-    #maxPerformanceHistory = 500;
-    #maxTrustHistory = 250;
+    #contextWindow = this.#hiddenSize * 2;
+    #maxTrustHistory = this.#contextWindow * 2;
+    #maxPerformanceHistory = this.#contextWindow * 4;
 
-    #trainingStepCount = 0;
     #momentum = 0;
 
     #adaptiveLearningRate = [];
-    #integral = [];
-    #previousError = [];
+    #goodCounters = [];
+    #poorCounters = [];
     #transformers = [];
     #ensembleWeights = [];
     #gradientAccumulation = [];
     #attentionWeightMatrix = [];
     #attentionBias = [];
-    #specializationWeights = [];
     #attentionMemory = [];
     #performanceScores = [];
     #agreementScores = [];
     #historicalPerformance = [];
     #trustScoresHistory = [];
+    #specializationWeights = [];
     #specializationScores = [];
+    #specializationHistory = [];
 
     #directoryPath;
 
@@ -54,41 +54,55 @@ class HiveMind {
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
         this.#agreementScores = Array(this.#ensembleSize).fill(0);
         this.#specializationScores = Array(this.#ensembleSize).fill(0);
-        this.#ensembleWeights = Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
         this.#historicalPerformance = Array(this.#ensembleSize).fill().map(() => [0]);
         this.#trustScoresHistory = Array(this.#ensembleSize).fill().map(() => [0]);
-        this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
+        this.#goodCounters = Array(this.#ensembleSize).fill(0);
+        this.#poorCounters = Array(this.#ensembleSize).fill(0);
+        this.#specializationHistory = Array(this.#ensembleSize).fill(0.5);
 
         this.#gradientAccumulation = this.#createWeightStructure();
+
+        this.#adaptiveLearningRate = Array(this.#ensembleSize).fill().map(() => 
+            this.#learningRate * Math.max(0.8, Math.min(1.2, 1 + (Math.random() - 0.5) * 0.2))
+        );
+
+        this.#ensembleWeights = Array(this.#ensembleSize).fill().map(() => 
+            Math.max(0, 1 / this.#ensembleSize + (Math.random() - 0.5) * 0.1 / this.#ensembleSize)
+        );
+
         this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
             Array(this.#contextWindow).fill().map(() => Array(this.#hiddenSize).fill(0))
         );
+
         this.#attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() =>
-            this.#xavierInit(this.#hiddenSize, 1).map(row => row[0])
+            this.#dynamicGeluInit(this.#hiddenSize, 1, 0, 1).map(row => row[0])
         );
+
         this.#attentionBias = Array(this.#ensembleSize).fill().map(() =>
-            Array(this.#hiddenSize).fill().map(() => (Math.random() - 0.5) * Math.sqrt(6 / this.#hiddenSize))
+            Array(this.#hiddenSize).fill().map(() => (Math.random() - 0.5) * Math.sqrt(4 / this.#hiddenSize))
         );
+
         this.#specializationWeights = Array(this.#ensembleSize).fill().map(() =>
             Array(this.#hiddenSize).fill().map((_, j) =>
                 Array(this.#hiddenSize).fill().map((_, k) => {
-                    const scale = Math.sqrt(2 / (this.#hiddenSize + this.#hiddenSize)) * (1 + 0.05 * (j + k / this.#hiddenSize));
-                    return (Math.random() - 0.5) * scale;
+                    const baseWeights = this.#dynamicGeluInit(this.#hiddenSize, this.#hiddenSize, 0, 1);
+                    const scale = 1 + 0.1 * (j + k / this.#hiddenSize);
+                    return baseWeights[j][k] * scale;
                 })
             )
         );
 
         this.#transformers = Array(this.#ensembleSize).fill().map(() => ({
             positionalEncoding: this.#createPositionalEncoding(),
-            attentionWeights: Array(this.#numLayers).fill().map(() => ({
-                Wq: this.#xavierInit(this.#hiddenSize, this.#hiddenSize),
-                Wk: this.#xavierInit(this.#hiddenSize, this.#hiddenSize),
-                Wv: this.#xavierInit(this.#hiddenSize, this.#hiddenSize),
-                Wo: this.#xavierInit(this.#hiddenSize, this.#hiddenSize)
+            attentionWeights: Array(this.#numLayers).fill().map((_, layerIndex) => ({
+                Wq: this.#dynamicGeluInit(this.#hiddenSize, this.#hiddenSize, layerIndex, this.#numLayers),
+                Wk: this.#dynamicGeluInit(this.#hiddenSize, this.#hiddenSize, layerIndex, this.#numLayers),
+                Wv: this.#dynamicGeluInit(this.#hiddenSize, this.#hiddenSize, layerIndex, this.#numLayers),
+                Wo: this.#dynamicGeluInit(this.#hiddenSize, this.#hiddenSize, layerIndex, this.#numLayers)
             })),
-            ffnWeights: Array(this.#numLayers).fill().map(() => ({
-                W1: this.#xavierInit(this.#hiddenSize, this.#feedForwardSize),
-                W2: this.#xavierInit(this.#feedForwardSize, this.#hiddenSize),
+            ffnWeights: Array(this.#numLayers).fill().map((_, layerIndex) => ({
+                W1: this.#dynamicGeluInit(this.#hiddenSize, this.#feedForwardSize, layerIndex, this.#numLayers),
+                W2: this.#dynamicGeluInit(this.#feedForwardSize, this.#hiddenSize, layerIndex, this.#numLayers),
                 b1: Array(this.#feedForwardSize).fill(0),
                 b2: Array(this.#hiddenSize).fill(0)
             })),
@@ -98,12 +112,9 @@ class HiveMind {
                 gamma2: Array(this.#hiddenSize).fill(1),
                 beta2: Array(this.#hiddenSize).fill(0)
             })),
-            outputWeights: this.#xavierInit(this.#hiddenSize, this.#outputSize),
-            outputBias: Array(this.#outputSize).fill(0)
+            outputWeights: this.#dynamicGeluInit(this.#hiddenSize, this.#outputSize, this.#numLayers, this.#numLayers + 1, 2.1),
+            outputBias: Array(this.#outputSize).fill().map(() => (Math.random() - 0.5) * 0.4)
         }));
-
-        this.#integral = Array(this.#ensembleSize).fill(0);
-        this.#previousError = Array(this.#ensembleSize).fill(0);
 
         this.#normalizeEnsembleWeights();
         this.#loadState();
@@ -157,11 +168,15 @@ class HiveMind {
                     idx INTEGER PRIMARY KEY,
                     rate REAL
                 );
-                CREATE TABLE IF NOT EXISTS integral (
+                CREATE TABLE IF NOT EXISTS good_counters (
                     idx INTEGER PRIMARY KEY,
                     value REAL
                 );
-                CREATE TABLE IF NOT EXISTS previous_error (
+                CREATE TABLE IF NOT EXISTS poor_counters (
+                    idx INTEGER PRIMARY KEY,
+                    value REAL
+                );
+                CREATE TABLE IF NOT EXISTS specialization_history (
                     idx INTEGER PRIMARY KEY,
                     value REAL
                 );
@@ -220,7 +235,6 @@ class HiveMind {
             `);
 
             const insertMetadata = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
-            insertMetadata.run('trainingStepCount', this.#trainingStepCount.toString());
             insertMetadata.run('swarmIntelligenceFactor', this.#swarmIntelligenceFactor.toString());
             insertMetadata.run('momentum', this.#momentum.toString());
 
@@ -277,17 +291,24 @@ class HiveMind {
                 }
             });
 
-            const insertIntegral = db.prepare('INSERT OR REPLACE INTO integral (idx, value) VALUES (?, ?)');
-            this.#integral.forEach((value, idx) => {
+            const insertGoodCounter = db.prepare('INSERT OR REPLACE INTO good_counters (idx, value) VALUES (?, ?)');
+            this.#goodCounters.forEach((value, idx) => {
                 if (isValidNumber(value)) {
-                    insertIntegral.run(idx, value);
+                    insertGoodCounter.run(idx, value);
                 }
             });
 
-            const insertPreviousError = db.prepare('INSERT OR REPLACE INTO previous_error (idx, value) VALUES (?, ?)');
-            this.#previousError.forEach((value, idx) => {
+            const insertPoorCounter = db.prepare('INSERT OR REPLACE INTO poor_counters (idx, value) VALUES (?, ?)');
+            this.#poorCounters.forEach((value, idx) => {
                 if (isValidNumber(value)) {
-                    insertPreviousError.run(idx, value);
+                    insertPoorCounter.run(idx, value);
+                }
+            });
+
+            const specializationHistory = db.prepare('INSERT OR REPLACE INTO specialization_history (idx, value) VALUES (?, ?)');
+            this.#specializationHistory.forEach((value, idx) => {
+                if (isValidNumber(value)) {
+                    specializationHistory.run(idx, value);
                 }
             });
 
@@ -451,10 +472,7 @@ class HiveMind {
             db = new Database(dbPath, { readonly: true });
 
             const metadataStmt = db.prepare('SELECT key, value FROM metadata WHERE key = ?');
-            const trainingStepCount = metadataStmt.get('trainingStepCount');
-            if (trainingStepCount && isValidNumber(Number(trainingStepCount.value))) {
-                this.#trainingStepCount = Number(trainingStepCount.value);
-            }
+
             const swarmIntelligenceFactor = metadataStmt.get('swarmIntelligenceFactor');
             if (swarmIntelligenceFactor && isValidNumber(Number(swarmIntelligenceFactor.value))) {
                 this.#swarmIntelligenceFactor = Number(swarmIntelligenceFactor.value);
@@ -523,19 +541,27 @@ class HiveMind {
                 }
             });
 
-            const integralStmt = db.prepare('SELECT idx, value FROM integral');
-            const integrals = integralStmt.all();
-            integrals.forEach(({ idx, value }) => {
+            const goodCounterStmt = db.prepare('SELECT idx, value FROM good_counters');
+            const goodCounters = goodCounterStmt.all();
+            goodCounters.forEach(({ idx, value }) => {
                 if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#integral[idx] = value;
+                    this.#goodCounters[idx] = value;
                 }
             });
 
-            const previousErrorStmt = db.prepare('SELECT idx, value FROM previous_error');
-            const previousErrors = previousErrorStmt.all();
-            previousErrors.forEach(({ idx, value }) => {
+            const poorCounterStmt = db.prepare('SELECT idx, value FROM poor_counters');
+            const poorCounters = poorCounterStmt.all();
+            poorCounters.forEach(({ idx, value }) => {
                 if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#previousError[idx] = value;
+                    this.#poorCounters[idx] = value;
+                }
+            });
+
+            const specializationHistoryStmt = db.prepare('SELECT idx, value FROM specialization_history');
+            const specializationHistory = specializationHistoryStmt.all();
+            specializationHistory.forEach(({ idx, value }) => {
+                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize) {
+                    this.#specializationHistory[idx] = value;
                 }
             });
 
@@ -661,17 +687,24 @@ class HiveMind {
         }
     }
 
-    #xavierInit(rows, cols) {
+    #dynamicGeluInit(rows, cols, layerIndex, totalLayers, customK = null) {
+        let baseK = customK !== null ? customK : 2.2;
+        let fanInScale = Math.min(1.0, 1000 / rows);
+        let depthScale = Math.pow(totalLayers, -layerIndex / totalLayers);
+        let k = baseK * fanInScale * depthScale;
+        k = Math.max(1.5, Math.min(k, 3.0));
+        
         return Array(rows).fill().map(() =>
-            Array(cols).fill().map(() => (Math.random() - 0.5) * Math.sqrt(2 / (rows + cols)))
+            Array(cols).fill().map(() => (Math.random() - 0.5) * Math.sqrt(k / rows))
         );
     }
 
     #createPositionalEncoding() {
+        const base = 10000 + (Math.random() - 0.5) * 2000;
         return Array(this.#inputSize).fill().map((_, pos) =>
             Array(this.#hiddenSize).fill().map((_, d) => {
                 const exponent = 2 * Math.floor(d / 2) / this.#hiddenSize;
-                const freq = 1 / (10000 ** exponent);
+                const freq = 1 / (base ** exponent);
                 return d % 2 === 0 ? Math.sin(pos * freq) : Math.cos(pos * freq);
             })
         );
@@ -871,58 +904,181 @@ class HiveMind {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
-            !inputs.every(isValidNumber) ||
             !Array.isArray(outputs) ||
             outputs.length !== this.#ensembleSize ||
+            !inputs.every(isValidNumber) ||
             !outputs.every(isValidNumber)
         ) {
             return;
         }
 
-        const featureCorrelations = Array(this.#ensembleSize).fill().map(() => Array(this.#inputSize).fill(0));
-        const inputMean = inputs.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / inputs.length || 0;
+        const numLayers = Math.max(1, Math.min(Math.floor(this.#numLayers), this.#hiddenSize));
+        const baseLayerSize = Math.floor(this.#hiddenSize / numLayers);
+        const remainder = this.#hiddenSize % numLayers;
+        const layerSizes = Array(numLayers).fill(baseLayerSize).map((size, idx) => 
+            idx < remainder ? size + 1 : size
+        );
+        const layerOffsets = [0];
+        for (let i = 0; i < numLayers; i++) {
+            layerOffsets.push(layerOffsets[i] + layerSizes[i]);
+        }
+
+        const computeMutualInformation = (x, y, bins) => {
+            const xMin = Math.min(...x.filter(isValidNumber));
+            const xMax = Math.max(...x.filter(isValidNumber));
+            const yMin = Math.min(...y.filter(isValidNumber));
+            const yMax = Math.max(...y.filter(isValidNumber));
+            const xRange = xMax - xMin || 1e-6;
+            const yRange = yMax - yMin || 1e-6;
+
+            const smoothing = 1e-3;
+            const hist2D = Array(bins).fill().map(() => Array(bins).fill(smoothing));
+            const histX = Array(bins).fill(smoothing);
+            const histY = Array(bins).fill(smoothing);
+            let total = bins * bins * smoothing;
+
+            for (let i = 0; i < x.length; i++) {
+                if (isValidNumber(x[i]) && isValidNumber(y[i])) {
+                    const xBin = Math.min(Math.floor(((x[i] - xMin) / xRange) * bins), bins - 1);
+                    const yBin = Math.min(Math.floor(((y[i] - yMin) / yRange) * bins), bins - 1);
+                    hist2D[xBin][yBin]++;
+                    histX[xBin]++;
+                    histY[yBin]++;
+                    total++;
+                }
+            }
+
+            const pXY = hist2D.map(row => row.map(val => val / (total || 1e-6)));
+            const pX = histX.map(val => val / (total || 1e-6));
+            const pY = histY.map(val => val / (total || 1e-6));
+
+            let mi = 0;
+            for (let i = 0; i < bins; i++) {
+                for (let j = 0; j < bins; j++) {
+                    if (pXY[i][j] > 0 && pX[i] > 0 && pY[j] > 0) {
+                        mi += pXY[i][j] * Math.log(pXY[i][j] / (pX[i] * pY[j]));
+                    }
+                }
+            }
+            return Math.max(mi, 0);
+        };
+
+        const miCache = new Map();
+
         const outputMean = outputs.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / outputs.length || 0;
-        const inputStd = Math.sqrt(
-            inputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - inputMean) ** 2, 0) / inputs.length
-        ) || 1e-6;
         const outputStd = Math.sqrt(
             outputs.reduce((sum, v) => sum + ((isValidNumber(v) ? v : 0) - outputMean) ** 2, 0) / outputs.length
         ) || 1e-6;
 
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            for (let j = 0; j < this.#inputSize; j++) {
-                if (isValidNumber(inputs[j]) && isValidNumber(outputs[i])) {
-                    const inputDiff = inputs[j] - inputMean;
-                    const outputDiff = outputs[i] - outputMean;
-                    const numerator = inputDiff * outputDiff;
-                    featureCorrelations[i][j] = isValidNumber(numerator) && inputStd > 1e-6 && outputStd > 1e-6
-                        ? Math.min(Math.max(numerator / (inputStd * outputStd), -1), 1)
-                        : 0;
+        const n = Math.max(this.#inputSize, this.#ensembleSize);
+        const bins = Math.ceil(Math.sqrt(n));
+
+        const allLayerCorrelations = [];
+        const layerSpecializationScores = Array(numLayers).fill().map(() =>
+            Array(this.#ensembleSize).fill(0)
+        );
+
+        for (let layer = 0; layer < numLayers; layer++) {
+            const featureCorrelations = Array(this.#ensembleSize).fill().map(() => Array(this.#inputSize).fill(0));
+            const inputMean = inputs.reduce((sum, v) => sum + (isValidNumber(v) ? v : 0), 0) / inputs.length || 0;
+
+            for (let i = 0; i < this.#ensembleSize; i++) {
+                for (let j = 0; j < this.#inputSize; j++) {
+                    if (isValidNumber(inputs[j]) && isValidNumber(outputs[i])) {
+                        const inputArray = inputs.map((val, idx) => idx === j ? inputs[j] : inputMean);
+                        const outputArray = Array(this.#ensembleSize).fill().map((_, k) => k === i ? outputs[i] : outputMean);
+                        const cacheKey = `${layer}|${i}|${j}`;
+                        
+                        let mi;
+                        if (miCache.has(cacheKey)) {
+                            mi = miCache.get(cacheKey);
+                        } else {
+                            mi = computeMutualInformation(inputArray, outputArray, bins);
+                            miCache.set(cacheKey, mi);
+                        }
+                        featureCorrelations[i][j] = mi / (Math.log(bins) || 1e-6);
+                    }
                 }
             }
+
+            allLayerCorrelations.push(featureCorrelations);
+
+            layerSpecializationScores[layer] = featureCorrelations.map((corr, idx) => {
+                const meanCorr = corr.reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / corr.length || 0.5;
+                const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
+                const outputVariance = Math.abs(outputs[idx] - outputMean) / (outputStd || 1e-6);
+                const diversityBoost = 0.3 * outputVariance;
+                const uncertaintyWeight = 1 / (1 + outputVariance);
+                return this.#sigmoid(
+                    meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * performanceFactor + diversityBoost) * uncertaintyWeight
+                );
+            });
         }
 
-        this.#specializationScores = featureCorrelations.map((corr, idx) => {
-            const meanCorr = corr.reduce((sum, val) => sum + (isValidNumber(val) ? Math.abs(val) : 0), 0) / corr.length || 0.5;
-            const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
-            const outputVariance = Math.abs(outputs[idx] - outputMean) / (outputStd || 1e-6);
-            const diversityBoost = 0.3 * outputVariance;
-            return this.#sigmoid(meanCorr * (1 + this.#swarmIntelligenceFactor) * (0.5 + 0.3 * performanceFactor + diversityBoost));
+        const uncertaintyScores = Array(this.#ensembleSize).fill(0);
+        for (let i = 0; i < this.#ensembleSize; i++) {
+            const layerScores = layerSpecializationScores.map(layer => layer[i]);
+            uncertaintyScores[i] = layerScores.reduce((sum, score) => sum + score, 0) / numLayers;
+        }
+
+        const clippedUncertaintyScores = uncertaintyScores.map(score => 
+            isValidNumber(score) ? Math.min(Math.max(score, 0.01), 0.99) : 0.01
+        );
+
+        const historyWeight = 0.9;
+        const currentScores = clippedUncertaintyScores.map((score, idx) => {
+            return historyWeight * this.#specializationHistory[idx] + (1 - historyWeight) * score;
         });
 
-        const maxScore = Math.max(...this.#specializationScores.map(score => isValidNumber(score) ? score : 0)) || 1;
-        this.#specializationScores = this.#specializationScores.map(score => isValidNumber(score) ? score / maxScore : 0);
+        this.#specializationHistory = currentScores;
+
+        const jsLambda = 0.3;
+        const epsilon = 1e-6;
+        const validScores = currentScores.filter(isValidNumber);
+        const maxScore = validScores.length > 0 ? Math.max(...validScores) : 0;
+        let normalizedScores = currentScores.map(score => 
+            isValidNumber(score) ? Math.exp(score - maxScore) : 0
+        );
+        const scoreSum = normalizedScores.reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) + epsilon;
+        normalizedScores = normalizedScores.map(score => score / scoreSum);
+
+        const uniformProb = 1 / this.#ensembleSize;
+        const jsDivergence = normalizedScores.reduce((sum, score) => {
+            if (!isValidNumber(score) || score <= 0) return sum;
+            const m = (score + uniformProb) / 2;
+            const kl1 = score * Math.log((score + epsilon) / (m + epsilon));
+            const kl2 = uniformProb * Math.log((uniformProb + epsilon) / (m + epsilon));
+            return sum + 0.5 * (kl1 + kl2);
+        }, 0);
+        const jsAdjustment = jsLambda * jsDivergence;
+        normalizedScores = normalizedScores.map(score => score * (1 - jsAdjustment));
+
+        const temp = 1.2;
+        const bias = 0;
+        const sortedScores = [...normalizedScores].filter(isValidNumber).sort((a, b) => a - b);
+        const q25 = sortedScores[Math.floor(sortedScores.length * 0.25)] || 0;
+        const q75 = sortedScores[Math.floor(sortedScores.length * 0.75)] || 1;
+        const iqr = q75 - q25 || 1e-6;
+        this.#specializationScores = normalizedScores.map(score => {
+            if (!isValidNumber(score)) return 1e-6;
+            const robustScore = (score - q25) / iqr;
+            return 1 / (1 + Math.exp(-(robustScore - bias) / temp));
+        });
 
         for (let i = 0; i < this.#ensembleSize; i++) {
             const specializationFactor = Math.min(Math.max(1 + this.#specializationScores[i] * this.#swarmIntelligenceFactor * 0.5, 0.5), 1.5);
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    const inputIdx = (j + k) % this.#inputSize;
-                    const corr = featureCorrelations[i][inputIdx];
-                    const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr)
-                        ? this.#adaptiveLearningRate[i] * corr * specializationFactor * 0.1
-                        : 0;
-                    this.#specializationWeights[i][j][k] += update;
+            for (let layer = 0; layer < numLayers; layer++) {
+                const startJ = layerOffsets[layer];
+                const endJ = layerOffsets[layer + 1];
+                for (let j = startJ; j < endJ && j < this.#hiddenSize; j++) {
+                    for (let k = 0; k < this.#hiddenSize; k++) {
+                        const inputIdx = (j + k) % this.#inputSize;
+                        const corr = allLayerCorrelations[layer][i][inputIdx];
+                        const update = isValidNumber(this.#adaptiveLearningRate[i]) && isValidNumber(corr)
+                            ? this.#adaptiveLearningRate[i] * corr * specializationFactor * 0.1
+                            : 0;
+                        this.#specializationWeights[i][j][k] += update;
+                    }
                 }
             }
         }
@@ -942,36 +1098,59 @@ class HiveMind {
     }
 
     #updateAdaptiveLearningRates() {
-        if (
-            !Array.isArray(this.#performanceScores) ||
-            this.#performanceScores.length !== this.#ensembleSize ||
-            !this.#performanceScores.every(score => isValidNumber(score) && score >= 0 && score <= 1)
-        ) {
-            this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
-            return;
-        }
+        const temp_performance = this.#historicalPerformance.map(history => {
+            const len = history.length;
+            if (len === 0) return 0;
+            const sum = history.reduce((s, v) => s + (isValidNumber(v) ? v : 0), 0);
+            return sum / len;
+        });
+        const nonEmptyAvg = temp_performance.filter(perf => perf !== 0).reduce((s, v) => s + v, 0) /
+                            temp_performance.filter(perf => perf !== 0).length || 0.5;
 
-        const performanceMean = this.#performanceScores.reduce((sum, score) => sum + score, 0) / this.#ensembleSize;
-        const performanceStd = Math.sqrt(
-            this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
-        ) || 0.1;
-        const baseLr = this.#learningRate / (1 + this.#learningRateDecay * this.#trainingStepCount);
+        const recent_performance = this.#historicalPerformance.map(history => {
+            const len = history.length;
+            if (len === 0) return nonEmptyAvg;
+            const sum = history.reduce((s, v) => s + (isValidNumber(v) ? v : 0), 0);
+            return sum / len;
+        });
 
-        const Kp = 0.1;
-        const Ki = 0.01;
-        const Kd = 0.05;
-        const integralClamp = 10;
+        const max_perf = Math.max(...recent_performance);
+        const min_perf = Math.min(...recent_performance);
+        const spread = max_perf - min_perf;
+        const spread_factor = spread / (max_perf || 1);
+        const M = Math.max(1, Math.ceil(this.#ensembleSize * (0.1 + 0.3 * spread_factor)));
+
+        const mean_perf = recent_performance.reduce((s, v) => s + v, 0) / recent_performance.length || 1;
+        const variance = recent_performance.reduce((s, v) => s + Math.pow(v - mean_perf, 2), 0) / recent_performance.length;
+        const std = Math.sqrt(variance);
+        const std_factor = Math.min(1, std / (mean_perf || 1));
+        const delta = 0.05 * (1 + std_factor);
+
+        const sortedPerformances = recent_performance.map((perf, idx) => ({ perf, idx }))
+            .sort((a, b) => b.perf - a.perf);
+        const topM = sortedPerformances.slice(0, M);
+        const P_top = topM.reduce((sum, { perf }) => sum + perf, 0) / M || 1;
+        const acceptable_threshold = P_top - delta;
+
+        const min_lr = this.#learningRate * 0.1;
+        const max_lr = this.#learningRate * 5;
 
         this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
-            const error = (performanceMean - this.#performanceScores[idx]) / (performanceStd + 1e-6);
-            this.#integral[idx] += error;
-            this.#integral[idx] = Math.max(-integralClamp, Math.min(this.#integral[idx], integralClamp));
-            const derivative = error - this.#previousError[idx];
-            this.#previousError[idx] = error;
-            const PID = Kp * error + Ki * this.#integral[idx] + Kd * derivative;
-            const adjustment = 1 + PID;
-            const newLr = baseLr * adjustment;
-            return Math.min(Math.max(newLr, baseLr * 0.1), baseLr * 5);
+            const prev_lr = lr;
+            let newLr;
+            if (recent_performance[idx] >= acceptable_threshold) {
+                this.#goodCounters[idx] = Math.min(this.#goodCounters[idx] + 1, 100);
+                this.#poorCounters[idx] *= 0.95;
+                const effective_counter = this.#goodCounters[idx];
+                newLr = this.#learningRate * Math.exp(-this.#learningRateDecay * effective_counter);
+            } else {
+                this.#poorCounters[idx] = Math.min(this.#poorCounters[idx] + 1, 100);
+                this.#goodCounters[idx] *= 0.95;
+                const effective_counter = this.#poorCounters[idx];
+                newLr = this.#learningRate * (1 + this.#learningRateDecay * effective_counter);
+            }
+            newLr = 0.9 * newLr + 0.1 * prev_lr;
+            return Math.max(min_lr, Math.min(newLr, max_lr));
         });
     }
 
@@ -1505,7 +1684,7 @@ class HiveMind {
     #geluDerivative(x) {
         if (!isValidNumber(x)) return 0;
 
-        const clampedX = Math.min(Math.max(x, -10), 10);
+        const clampedX = Math.min(Math.max(x, -20), 20);
 
         const x3 = Math.pow(clampedX, 3);
         const poly = clampedX + 0.044715 * x3;
@@ -1518,7 +1697,7 @@ class HiveMind {
 
         const derivative = cdf + clampedX * pdf;
 
-        return isValidNumber(derivative) ? Math.min(Math.max(derivative, -10), 10) : 0;
+        return isValidNumber(derivative) ? Math.min(Math.max(derivative, -20), 20) : 0;
     }
 
     #sigmoid (x) {
@@ -1720,7 +1899,7 @@ class HiveMind {
                         : 0;
                 }
                 attentionProbs[h][i] = this.#softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
-                attentionProbs[h][i] = this.#dropout(attentionProbs[h][i], this.#dropoutRate, true);
+                attentionProbs[h][i] = this.#dropout(attentionProbs[h][i], this.#dropoutRate);
             }
         }
 
@@ -1750,7 +1929,7 @@ class HiveMind {
                         : 0;
                 }
             }
-            finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, true);
+            finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate);
         }
 
         const decayFactor = 0.9;
@@ -1812,7 +1991,7 @@ class HiveMind {
         }
 
         let activated = hidden.map(val => this.#gelu(val));
-        activated = this.#dropout(activated, this.#dropoutRate, true);
+        activated = this.#dropout(activated, this.#dropoutRate);
 
         const output = Array(this.#hiddenSize).fill(0);
         for (let j = 0; j < this.#hiddenSize; j++) {
@@ -1829,10 +2008,10 @@ class HiveMind {
                 : output[j];
         }
 
-        return this.#dropout(output, this.#dropoutRate, true);
+        return this.#dropout(output, this.#dropoutRate);
     }
 
-    #dropout(x, rate, training = false) {
+    #dropout(x, rate) {
         if (
             !Array.isArray(x) || 
             !x.every(isValidNumber) || 
@@ -1842,8 +2021,6 @@ class HiveMind {
         ) {
             return x.slice();
         }
-
-        if (!training) return x.slice();
 
         return x.map(val => {
             if (!isValidNumber(val)) return 0;
@@ -2343,7 +2520,6 @@ class HiveMind {
         ) {
             return;
         }
-        this.#trainingStepCount++;
 
         const linearOutputs = [];
         const layerOutputs = this.#transformers.map(() => []);
@@ -2703,20 +2879,6 @@ class HiveMind {
                         ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i]
                         : 0;
                 }
-            }
-
-            for (let i = 0; i < this.#hiddenSize; i++) {
-                const l2PenaltyBias = 0.001 * this.#attentionBias[idx][i];
-                const biasUpdate = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i])
-                    ? this.#gradientAccumulation[idx].attentionBias[i] + l2PenaltyBias
-                    : l2PenaltyBias;
-                this.#attentionBias[idx][i] -= isValidNumber(biasUpdate) ? biasUpdate : 0;
-
-                const l2PenaltyWeight = 0.001 * this.#attentionWeightMatrix[idx][i];
-                const weightUpdate = isValidNumber(this.#gradientAccumulation[idx].attentionBias[i])
-                    ? this.#gradientAccumulation[idx].attentionBias[i] + l2PenaltyWeight
-                    : l2PenaltyWeight;
-                this.#attentionWeightMatrix[idx][i] -= isValidNumber(weightUpdate) ? weightUpdate : 0;
             }
         });
 
