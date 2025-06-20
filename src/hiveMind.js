@@ -113,7 +113,7 @@ class HiveMind {
                 beta2: Array(this.#hiddenSize).fill(0)
             })),
             outputWeights: this.#dynamicGeluInit(this.#hiddenSize, this.#outputSize, this.#numLayers, this.#numLayers + 1, 2.1),
-            outputBias: Array(this.#outputSize).fill().map(() => (Math.random() - 0.5) * 0.4)
+            outputBias: Array(this.#outputSize).fill().map(() => (Math.random() - 0.5) * 2)
         }));
 
         this.#normalizeEnsembleWeights();
@@ -2085,10 +2085,13 @@ class HiveMind {
         const topWeights = topPerformers.map(idx => this.#ensembleWeights[idx]);
         const weightSum = topWeights.reduce((sum, w) => sum + (isValidNumber(w) ? w : 0), 0) || 1;
         const normalizedTopWeights = topWeights.map(w => (isValidNumber(w) ? w : 0) / weightSum);
-        let targetOutput = topOutputs.reduce((sum, output, i) =>
+        const targetOutput = topOutputs.reduce((sum, output, i) =>
             sum + (isValidNumber(output) && isValidNumber(normalizedTopWeights[i]) ? output * normalizedTopWeights[i] : 0), 0
         );
-        targetOutput = isValidNumber(targetOutput) ? 0.7 * targetOutput + 0.3 * target : target;
+
+        const meanTop = targetOutput;
+        const varianceTop = topOutputs.reduce((sum, out) => sum + Math.pow(out - meanTop, 2), 0) / topOutputs.length;
+        const stdTopOutputs = Math.sqrt(varianceTop);
 
         const diversityLossBase = this.#computeDiversityLoss(outputs);
 
@@ -2099,12 +2102,14 @@ class HiveMind {
             const diversityWeight = 0.5 + 0.5 * (rank / this.#ensembleSize);
             const diversityLoss = diversityLossBase * diversityWeight;
 
-            const temperature = 2.0;
             const output = outputs[idx];
+            const diversityScore = Math.min(1, Math.abs(output - meanTop) / (stdTopOutputs + 1e-6));
+            const performanceGap = this.#performanceScores[topPerformers[0]] - this.#performanceScores[idx];
+            const klWeight = Math.min(1.0, Math.max(0.1, performanceGap / this.#performanceScores[topPerformers[0]])) * (1 - diversityScore);
+
+            const temperature = 2.0;
             const outputProb = this.#sigmoid(output / temperature);
             const targetProb = this.#sigmoid(targetOutput / temperature);
-            const performanceGap = this.#performanceScores[topPerformers[0]] - this.#performanceScores[idx];
-            const klWeight = Math.min(1.0, Math.max(0.1, performanceGap / this.#performanceScores[topPerformers[0]]));
             const klLoss = isValidNumber(outputProb) && isValidNumber(targetProb)
                 ? outputProb * Math.log((outputProb + 1e-6) / (targetProb + 1e-6)) + (1 - outputProb) * Math.log((1 - outputProb + 1e-6) / (1 - targetProb + 1e-6))
                 : 0;
@@ -2130,7 +2135,7 @@ class HiveMind {
             const totalLoss = 0.5 * klLoss * klWeight + diversityLoss + l2Loss + specializationLoss;
 
             const adjustedLearningRate = this.#adaptiveLearningRate[idx];
-            const grad = isValidNumber(totalLoss) ? totalLoss * adjustedLearningRate : 0;
+            const grad = isValidNumber(totalLoss) ? totalLoss : 0;
             const momentum = 0.9;
 
             for (let i = 0; i < this.#hiddenSize; i++) {
@@ -2139,16 +2144,17 @@ class HiveMind {
                         ? Math.min(Math.max(1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j], 0.5), 1.5)
                         : 1;
                     const gradUpdate = grad * transformer.outputWeights[i][j] * specializationFactor;
-                    const update = adjustedLearningRate * gradUpdate;
+                    const update = 0.2 * adjustedLearningRate * gradUpdate;
                     this.#gradientAccumulation[idx].outputWeights[i][j] = momentum * this.#gradientAccumulation[idx].outputWeights[i][j] + (1 - momentum) * update;
                     transformer.outputWeights[i][j] = isValidNumber(transformer.outputWeights[i][j])
                         ? transformer.outputWeights[i][j] - this.#gradientAccumulation[idx].outputWeights[i][j]
                         : 0;
                 }
             }
+
             for (let i = 0; i < this.#outputSize; i++) {
                 const gradUpdate = grad;
-                const update = adjustedLearningRate * gradUpdate;
+                const update = 0.2 * adjustedLearningRate * gradUpdate;
                 this.#gradientAccumulation[idx].outputBias[i] = momentum * this.#gradientAccumulation[idx].outputBias[i] + (1 - momentum) * update;
                 transformer.outputBias[i] = isValidNumber(transformer.outputBias[i])
                     ? transformer.outputBias[i] - this.#gradientAccumulation[idx].outputBias[i]
