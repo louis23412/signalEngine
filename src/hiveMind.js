@@ -1085,9 +1085,9 @@ class HiveMind {
 
         for (let i = 0; i < this.#ensembleSize; i++) {
             const specMatrix = this.#specializationWeights[i];
-                const spectralNorm = this.#computeSpectralNorm(specMatrix);
-                if (spectralNorm > 1.5) {
-                    const scale = 1.5 / spectralNorm;
+            const spectralNorm = this.#computeSpectralNorm(specMatrix);
+            if (spectralNorm > 1.5) {
+                const scale = 1.5 / spectralNorm;
                 for (let j = 0; j < specMatrix.length; j++) {
                     const row = specMatrix[j];
                     for (let k = 0; k < row.length; k++) {
