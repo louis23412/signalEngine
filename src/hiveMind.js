@@ -1933,17 +1933,6 @@ class HiveMind {
             finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate);
         }
 
-        const decayFactor = 0.9;
-        for (let t = 0; t < this.#attentionMemory[transformerIdx].length; t++) {
-            for (let i = 0; i < this.#inputSize; i++) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    if (isValidNumber(this.#attentionMemory[transformerIdx][t][i][j])) {
-                        this.#attentionMemory[transformerIdx][t][i][j] *= decayFactor;
-                    }
-                }
-            }
-        }
-
         this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice()));
 
         if (this.#attentionMemory[transformerIdx].length > this.#contextWindow) {
