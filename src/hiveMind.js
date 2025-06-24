@@ -997,7 +997,7 @@ class HiveMind {
                         const inputArray = inputs.map((val, idx) => idx === j ? inputs[j] : inputMean);
                         const outputArray = Array(this.#ensembleSize).fill().map((_, k) => k === i ? outputs[i] : outputMean);
                         const cacheKey = `${layer}|${i}|${j}`;
-                        
+
                         let mi;
                         if (miCache.has(cacheKey)) {
                             mi = miCache.get(cacheKey);
@@ -1184,7 +1184,6 @@ class HiveMind {
     }
 
     #computeSpectralNorm(matrix) {
-        // Input validation
         if (!Array.isArray(matrix)) {
             const error = new Error('Input is not an array');
             console.error('Error:', error.message, '\nStack:', error.stack);
@@ -1227,7 +1226,6 @@ class HiveMind {
         let u = Array(cols).fill().map(() => Math.random());
         let v = Array(rows).fill(0);
 
-        // Normalize initial u vector
         const uNormInit = Math.sqrt(u.reduce((sum, x) => sum + (isValidNumber(x) ? x * x : 0), 0)) || 1;
         if (!isValidNumber(uNormInit)) {
             const error = new Error('Invalid initial u norm');
@@ -1272,7 +1270,6 @@ class HiveMind {
             }
             u = u.map(x => isValidNumber(x) ? x / uNorm : 0);
 
-            // Compute current norm (v^T * A * u)
             let currentNorm = 0;
             const temp = Array(rows).fill(0);
             for (let i = 0; i < rows; i++) {
@@ -1294,14 +1291,12 @@ class HiveMind {
                 throw error;
             }
 
-            // Convergence check
             if (iter > 0 && Math.abs(currentNorm - prevNorm) < tolerance * Math.max(1, currentNorm)) {
                 return currentNorm;
             }
             prevNorm = currentNorm;
         }
 
-        // Compute final norm
         let norm = 0;
         const temp = Array(rows).fill(0);
         for (let i = 0; i < rows; i++) {
@@ -2374,12 +2369,12 @@ class HiveMind {
             }
         }
         gini = sum > 0 ? gini / (2 * n * sum) : 0;
-        return 1 - gini; // Higher gini (more diversity) -> lower loss
+        return 1 - gini;
     };
 
     #regulateWeightsAndMemory() {
-        const diversityPenalty = 0.005;
-        const similarityThreshold = 0.3;
+        let diversityPenalty = 0.005;
+        let similarityThreshold = 0.3;
         const alpha = 4;
         const beta = 0.5;
 
@@ -2412,7 +2407,12 @@ class HiveMind {
             'specializationWeights': 0.6
         };
 
-        // Stabilize attention context
+        const diversityLoss = this.#computeGiniCoefficient(this.#transformers.map(t => t.outputWeights.flat()));
+        const avgPerformance = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0.5), 0) / this.#ensembleSize;
+        
+        diversityPenalty = 0.005 * (1 + diversityLoss);
+        similarityThreshold = 0.3 * (1 - 0.5 * avgPerformance);
+
         for (let t = 0; t < this.#ensembleSize; t++) {
             if (
                 !Array.isArray(this.#attentionMemory[t]) ||
@@ -2436,7 +2436,7 @@ class HiveMind {
                 }
             }
             const memoryVariance = count > 0 ? varianceSum / count : 1;
-            const dynamicDecay = Math.min(0.95, Math.max(0.85, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance)));
+            const dynamicDecay = Math.min(0.95, Math.max(0.85, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance) * (1 + 0.5 * (1 - avgPerformance))));
             const dynamicCutoff = Math.max(1e-6, 1e-2 * memoryVariance);
             const performanceFactor = isValidNumber(this.#performanceScores[t]) ? this.#performanceScores[t] : 0.5;
             const specializationFactor = isValidNumber(this.#specializationScores[t]) ? 1 + this.#specializationScores[t] * (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) : 1;
@@ -2467,17 +2467,14 @@ class HiveMind {
             }
         }
 
-        // Regulate weights
-        const diversityLoss = this.#computeGiniCoefficient(this.#transformers.map(t => t.outputWeights.flat()));
-
         for (let idx = 0; idx < this.#ensembleSize; idx++) {
             const transformer = this.#transformers[idx];
             const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
             const specializationFactor = isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0.5;
-            const perfAdjustedDecayRate = this.#weightDecayRate * (1 - performanceFactor);
+            const adaptiveDecayRate = this.#weightDecayRate * Math.exp(-2 * performanceFactor);
 
             const applyWeightDecay = (matrixOrVector, isMatrix = true, weightType = 'generic', layer = null) => {
-                let lambda = perfAdjustedDecayRate;
+                let lambda = adaptiveDecayRate;
                 if (layer !== null && layer < layerDecaySchedule.length) {
                     lambda *= layerDecaySchedule[layer];
                 }
@@ -2531,7 +2528,10 @@ class HiveMind {
 
                     for (let i = 0; i < matrixOrVector.length; i++) {
                         const headIdx = Math.floor(i / headSize);
-                        const adjustedLambda = lambda * (1 + beta * headSimilarities[headIdx]);
+                        let adjustedLambda = lambda * (1 + beta * headSimilarities[headIdx]);
+                        if (headSimilarities[headIdx] > similarityThreshold) {
+                            adjustedLambda *= (1 + diversityPenalty * (headSimilarities[headIdx] - similarityThreshold));
+                        }
                         for (let j = 0; j < matrixOrVector[i].length; j++) {
                             if (isValidNumber(matrixOrVector[i][j]) && isValidNumber(grad[i][j])) {
                                 const abs_g = Math.abs(grad[i][j]);
@@ -2634,7 +2634,7 @@ class HiveMind {
             this.#applyVectorScaling(this.#attentionWeightMatrix[idx], baseThresholds['attentionWeightMatrix'], diversityLoss);
             applyWeightDecay(this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix');
 
-            const specDecayRate = this.#weightDecayRate * (1 - specializationFactor);
+            const specDecayRate = this.#weightDecayRate * Math.exp(-2 * specializationFactor);
             for (let i = 0; i < this.#hiddenSize; i++) {
                 for (let j = 0; j < this.#hiddenSize; j++) {
                     if (isValidNumber(this.#specializationWeights[idx][i][j])) {
