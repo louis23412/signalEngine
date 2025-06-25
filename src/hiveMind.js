@@ -5,12 +5,12 @@ import Database from 'better-sqlite3';
 import { isValidNumber } from './utils.js';
 
 class HiveMind {
-    #inputSize = 10;
+    #inputSize = 100;
     #outputSize = 1;
     #ensembleSize = 7;
     #numLayers = 3;
-    #numHeads = 4;
-    #hiddenSize = this.#numHeads * 4;
+    #numHeads = 8;
+    #hiddenSize = this.#numHeads * 8;
     #feedForwardSize = this.#hiddenSize * 4;
 
     #learningRate = 1e-3;
@@ -665,7 +665,8 @@ class HiveMind {
                 gamma2: Array(this.#hiddenSize).fill(0),
                 beta2: Array(this.#hiddenSize).fill(0)
             })),
-            attentionBias: Array(this.#hiddenSize).fill(0)
+            attentionBias: Array(this.#hiddenSize).fill(0),
+            attentionWeightMatrix: Array(this.#hiddenSize).fill(0)
         }));
     }
 
@@ -1133,6 +1134,9 @@ class HiveMind {
         const attentionBiasGrad = this.#gradientAccumulation[idx].attentionBias;
         vectorNorms.push(this.#computeGradientNorm(attentionBiasGrad, false));
 
+        const attentionWeightMatrixGrad = this.#gradientAccumulation[idx].attentionWeightMatrix;
+        vectorNorms.push(this.#computeGradientNorm(attentionWeightMatrixGrad, false));
+
         const matrixThreshold = Math.min(computePercentile(matrixNorms, matrixPercentile), 1.0);
         const vectorThreshold = Math.min(computePercentile(vectorNorms, vectorPercentile), 1.0);
 
@@ -1209,6 +1213,14 @@ class HiveMind {
             const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
             for (let i = 0; i < attentionBiasGrad.length; i++) {
                 attentionBiasGrad[i] *= scale;
+            }
+        }
+
+        l2Norm = this.#computeGradientNorm(attentionWeightMatrixGrad, false);
+        if (l2Norm > vectorThreshold) {
+            const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
+            for (let i = 0; i < attentionWeightMatrixGrad.length; i++) {
+                attentionWeightMatrixGrad[i] *= scale;
             }
         }
     }
@@ -2618,6 +2630,14 @@ class HiveMind {
             const grad = dL_d_scores[t] / this.#hiddenSize;
             for (let k = 0; k < this.#hiddenSize; k++) {
                 this.#gradientAccumulation[t].attentionBias[k] += grad;
+                const inputFeatures = inputs.map(x =>
+                    Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
+                );
+                for (let i = 0; i < this.#inputSize; i++) {
+                    if (isValidNumber(inputFeatures[i][k])) {
+                        this.#gradientAccumulation[t].attentionWeightMatrix[k] += grad * inputFeatures[i][k];
+                    }
+                }
             }
         }
 
@@ -2899,6 +2919,15 @@ class HiveMind {
                         : 0;
                 }
             }
+
+            for (let k = 0; k < this.#hiddenSize; k++) {
+                if (isValidNumber(this.#gradientAccumulation[idx].attentionBias[k])) {
+                    this.#attentionBias[idx][k] -= this.#gradientAccumulation[idx].attentionBias[k];
+                }
+                if (isValidNumber(this.#gradientAccumulation[idx].attentionWeightMatrix[k])) {
+                    this.#attentionWeightMatrix[idx][k] -= this.#gradientAccumulation[idx].attentionWeightMatrix[k];
+                }
+            }
         });
 
         this.#trainingStepCount++;
@@ -2915,11 +2944,6 @@ class HiveMind {
 
         if (shouldSave) {
             this.#saveState();
-        }
-
-        if (this.#trainingStepCount % 101 === 0) {
-            this.#saveState()
-            process.exit()
         }
     }
 
