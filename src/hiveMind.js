@@ -5,12 +5,12 @@ import Database from 'better-sqlite3';
 import { isValidNumber } from './utils.js';
 
 class HiveMind {
-    #inputSize = 100;
+    #inputSize = 10;
     #outputSize = 1;
     #ensembleSize = 7;
     #numLayers = 3;
-    #numHeads = 8;
-    #hiddenSize = this.#numHeads * 8;
+    #numHeads = 4;
+    #hiddenSize = this.#numHeads * 4;
     #feedForwardSize = this.#hiddenSize * 4;
 
     #learningRate = 1e-3;
@@ -52,14 +52,9 @@ class HiveMind {
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
         this.#agreementScores = Array(this.#ensembleSize).fill(0);
         this.#specializationScores = Array(this.#ensembleSize).fill(0);
-        this.#historicalPerformance = Array(this.#ensembleSize).fill().map(() => [0]);
         this.#trustScoresHistory = Array(this.#ensembleSize).fill().map(() => [0]);
-
-        this.#gradientAccumulation = this.#createWeightStructure();
-
-        this.#adaptiveLearningRate = Array(this.#ensembleSize).fill().map(() => 
-            this.#learningRate * Math.max(0.8, Math.min(1.2, 1 + (Math.random() - 0.5) * 0.2))
-        );
+        this.#historicalPerformance = Array(this.#ensembleSize).fill().map(() => [0]);
+        this.#adaptiveLearningRate = Array(this.#ensembleSize).fill(this.#learningRate);
 
         this.#ensembleWeights = Array(this.#ensembleSize).fill().map(() => 
             Math.max(0, 1 / this.#ensembleSize + (Math.random() - 0.5) * 0.1 / this.#ensembleSize)
@@ -110,6 +105,8 @@ class HiveMind {
             outputWeights: this.#dynamicGeluInit(this.#hiddenSize, this.#outputSize, this.#numLayers, this.#numLayers + 1, 2.1),
             outputBias: Array(this.#outputSize).fill().map(() => (Math.random() - 0.5) * 2)
         }));
+
+        this.#gradientAccumulation = this.#createWeightStructure();
 
         this.#normalizeEnsembleWeights();
         this.#loadState();
@@ -2230,8 +2227,6 @@ class HiveMind {
 
                             if (Math.abs(value) > dynamicCutoff) {
                                 this.#attentionMemory[t][i][j][k] = value + (Math.random() - 0.5) * noiseScale;
-                            } else {
-                                this.#attentionMemory[t][i][j][k] = 0;
                             }
                         } else {
                             this.#attentionMemory[t][i][j][k] = 0;
@@ -2679,7 +2674,9 @@ class HiveMind {
                         : 0;
                 }
             }
-            this.#gradientAccumulation[idx].outputBias[0] += isValidNumber(delta) ? delta : 0;
+            this.#gradientAccumulation[idx].outputBias[0] += (isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]))
+                ? delta * this.#ensembleWeights[idx]
+                : 0;
 
             for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
                 const { normX, attentionOutput, normAttention } = activations[idx][layer];
@@ -2944,6 +2941,11 @@ class HiveMind {
 
         if (shouldSave) {
             this.#saveState();
+        }
+
+        if (this.#trainingStepCount % 10001 === 0) {
+            this.#saveState()
+            process.exit()
         }
     }
 

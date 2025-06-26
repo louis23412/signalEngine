@@ -321,23 +321,23 @@ class NeuralSignalEngine {
             return { error: 'Indicators error' };
         }
 
-        const features = this.#extractFeatures(indicators, 10);
+        const features = this.#extractFeatures(indicators, 1);
         const patternScore = this.#scorePattern(features.at(-1));
 
         const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE features = ?`);
         const pattern = patternStmt.get(JSON.stringify(features.at(-1)));
 
-        console.log(`Forward triggered for pattern with win rate: ${patternScore * 100}%`);
-        const startTime = process.hrtime();
+        // console.log(`Forward triggered for pattern with win rate: ${patternScore * 100}%`);
+        // const startTime = process.hrtime();
 
-        const confidence = truncateToDecimals(this.#hivemind.forward(features.flat())[0] * 100, 4);
+        // const confidence = truncateToDecimals(this.#hivemind.forward(features.flat())[0] * 100, 4);
 
-        const diff = process.hrtime(startTime);
-        const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-        console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
+        // const diff = process.hrtime(startTime);
+        // const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
+        // console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
 
-        const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
-        const multiplier = truncateToDecimals(Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier), 4);
+        // const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
+        // const multiplier = truncateToDecimals(Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier), 4);
         
         const entryPrice = indicators.lastClose;
         const atrBasedSellPrice = indicators.lastClose + this.#config.atrFactor * indicators.lastAtr;
@@ -390,8 +390,8 @@ class NeuralSignalEngine {
             entryPrice,
             sellPrice,
             stopLoss,
-            multiplier,
-            confidence,
+            multiplier : 'disabled',
+            confidence : 'disabled',
             threshold: this.#config.baseConfidenceThreshold
         };
     }
