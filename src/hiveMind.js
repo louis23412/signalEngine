@@ -1,4 +1,4 @@
-import fs from 'fs';
+import fs, { stat } from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 
@@ -109,7 +109,17 @@ class HiveMind {
         this.#gradientAccumulation = this.#createWeightStructure();
 
         this.#normalizeEnsembleWeights();
-        this.#loadState();
+
+        const loadStatus = this.#loadState()
+
+        if (!loadStatus.status && loadStatus.error) {
+            console.log(`Load state failed! Error: ${loadStatus.error}. Trace : ${loadStatus.trace}`)
+            process.exit()
+        } else if (loadStatus.status) {
+            console.log('State loaded successfully!')
+        } else {
+            console.log('Started with new state!')
+        }
     }
 
     #saveState() {
@@ -409,8 +419,18 @@ class HiveMind {
             });
 
             db.exec('COMMIT');
+
+            return {
+                status : true
+            }
         } catch (error) {
             db.exec('ROLLBACK');
+
+            return {
+                status : false,
+                error : error.message,
+                trace : error.stack
+            }
         } finally {
             if (db) {
                 db.close();
@@ -424,7 +444,9 @@ class HiveMind {
 
         try {
             if (!fs.existsSync(dbPath)) {
-                return;
+                return {
+                    status : false
+                };
             }
 
             db = new Database(dbPath, { readonly: true });
@@ -609,7 +631,16 @@ class HiveMind {
                     }
                 }
             });
+
+            return {
+                status : true
+            };
         } catch (error) {
+            return {
+                status : false,
+                error : error.message,
+                trace : error.stack
+            };
         } finally {
             if (db) {
                 db.close();
@@ -2940,17 +2971,19 @@ class HiveMind {
         this.#gradientAccumulation = this.#createWeightStructure();
 
         if (shouldSave) {
-            this.#saveState();
+            const saveStatus = this.#saveState()
+            return {
+                trainingStep : this.#trainingStepCount,
+                status : saveStatus
+            }
         }
 
-        if (this.#trainingStepCount % 10001 === 0) {
-            this.#saveState()
-            process.exit()
-        }
+        return this.#trainingStepCount
     }
 
     dumpState() {
-        this.#saveState()
+        const saveStatus = this.#saveState()
+        return saveStatus
     }
 }
 
