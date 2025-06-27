@@ -1,4 +1,4 @@
-import fs, { stat } from 'fs';
+import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 
@@ -2978,7 +2978,9 @@ class HiveMind {
             }
         }
 
-        return this.#trainingStepCount
+        return {
+            trainingStep : this.#trainingStepCount
+        }
     }
 
     dumpState() {
