@@ -22,6 +22,7 @@ class NeuralSignalEngine {
         minPriceMovement : 0.0021,
         maxPriceMovement : 0.05
     };
+    #trainingStep = 0;
 
     constructor() {
         fs.mkdirSync(directoryPath, { recursive: true });
@@ -35,20 +36,11 @@ class NeuralSignalEngine {
 
     #initDatabase() {
         this.#db.exec(`
-            CREATE TABLE IF NOT EXISTS patterns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                features TEXT NOT NULL,
-                score REAL NOT NULL,
-                usage_count INTEGER NOT NULL DEFAULT 0,
-                win_count INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(features)
-            );
             CREATE TABLE IF NOT EXISTS open_trades (
                 timestamp TEXT PRIMARY KEY,
                 sellPrice REAL NOT NULL,
                 stopLoss REAL NOT NULL,
                 entryPrice REAL NOT NULL,
-                patternScore REAL NOT NULL,
                 features TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS candles (
@@ -59,7 +51,6 @@ class NeuralSignalEngine {
                 close REAL NOT NULL,
                 volume REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_patterns_features ON patterns(features);
             CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
             CREATE INDEX IF NOT EXISTS idx_open_trades_stopLoss ON open_trades(stopLoss);
             CREATE INDEX IF NOT EXISTS idx_candles_timestamp ON candles(timestamp);
@@ -201,32 +192,16 @@ class NeuralSignalEngine {
         return result;
     }
 
-    #scorePattern(features) {
-        if (!Array.isArray(features) || features.length !== 10 || !features.every(isValidNumber)) {
-            return 0;
-        }
-
-        const stmt = this.#db.prepare(`SELECT score, usage_count, win_count FROM patterns WHERE features = ?`);
-        const pattern = stmt.get(JSON.stringify(features));
-        if (!pattern) {
-            return 0;
-        }
-
-        const winRate = pattern.usage_count > 0 ? pattern.win_count / pattern.usage_count : 0;
-        return truncateToDecimals(winRate, 4);
-    }
-
-    #updateOpenTrades(candles, status) {
+    #updateOpenTrades(candles, shouldSave, cutoff) {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
         const tradesStmt = this.#db.prepare(`
-            SELECT timestamp, sellPrice, stopLoss, entryPrice, patternScore, features
+            SELECT timestamp, sellPrice, stopLoss, entryPrice, features
             FROM open_trades
         `);
         const trades = tradesStmt.all();
 
         console.log(`Current open trade simulations: ${trades.length}`);
-        if (trades.length === 0) return;
 
         const closedTrades = [];
         const keysToDelete = new Set();
@@ -240,14 +215,12 @@ class NeuralSignalEngine {
                     const exitPrice = candle.low <= trade.stopLoss ? trade.stopLoss : trade.sellPrice;
                     const outcome = candle.low <= trade.stopLoss ? 0 : 1;
                     closedTrades.push({
-                        timestamp: Date.now(),
+                        timestamp: trade.timestamp,
                         entryPrice: trade.entryPrice,
                         exitPrice,
                         outcome,
-                        patternScore: trade.patternScore,
                         features
                     });
-                    keysToDelete.add(trade.timestamp);
                     break;
                 }
             }
@@ -255,41 +228,34 @@ class NeuralSignalEngine {
 
         if (closedTrades.length > 0) {
             const transaction = this.#db.transaction(() => {
-                const patternStmt = this.#db.prepare(`SELECT score, usage_count, win_count FROM patterns WHERE features = ?`);
-                const insertPatternStmt = this.#db.prepare(`
-                    INSERT OR REPLACE INTO patterns (features, score, usage_count, win_count)
-                    VALUES (?, ?, ?, ?)
-                `);
                 const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
 
-                let tempCounter = 0;
+                let tradeCounter = 0;
                 for (const trade of closedTrades) {
-                    tempCounter++;
-                    const pattern = patternStmt.get(JSON.stringify(trade.features.at(-1)));
-                    const isWin = trade.outcome;
-                    const usageCount = pattern ? pattern.usage_count + 1 : 1;
-                    const winCount = pattern ? pattern.win_count + isWin : isWin;
-                    const winRate = usageCount > 0 ? winCount / usageCount : 0;
+                    tradeCounter++;
 
-                    insertPatternStmt.run(
-                        JSON.stringify(trade.features.at(-1)),
-                        truncateToDecimals(winRate, 4),
-                        usageCount,
-                        winCount
-                    );
-
-                    console.log(`Training triggered for closed trade (${isWin ? 'win' : 'loss'}): ${tempCounter} / ${closedTrades.length} - WinRate: ${winRate * 100}%`);
+                    console.log(`Training triggered for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length}`);
                     const startTime = process.hrtime();
-
-                    this.#hivemind.train(
-                        trade.features.flat(), 
-                        isWin,
-                        (tempCounter === closedTrades.length) && (status === 'production')
-                    );
-
+                    const trainingStep = this.#hivemind.train( trade.features.flat(), trade.outcome);
                     const diff = process.hrtime(startTime);
                     const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-                    console.log(`Training complete! - Execution time: ${executionTime} seconds`);
+                    console.log(`Training complete (${trainingStep})! - Execution time: ${executionTime} seconds`);
+
+                    this.#trainingStep = trainingStep;
+
+                    keysToDelete.add(trade.timestamp);
+
+                    if (cutoff !== null && this.#trainingStep === cutoff) { break }
+                }
+
+                if (shouldSave || (cutoff !== null && this.#trainingStep === cutoff)) {
+                    const saveStatus = this.#hivemind.dumpState()
+
+                    if (!saveStatus.status) {
+                        console.log(`Hivemind state save failed! Error: ${saveStatus.error} Trace: ${saveStatus.trace}`)
+                    } else {
+                        console.log('Hivemind state saved!')
+                    }
                 }
 
                 for (const key of keysToDelete) {
@@ -300,44 +266,30 @@ class NeuralSignalEngine {
         }
     }
 
-    getSignal(candles, status = 'production') {
-        if (status !== 'production' && status !== 'training' && status !== 'dump') {
-            return { error: 'Invalid status. Valid options: production / training / dump' };
-        }
-
+    getSignal(candles, shouldSave = true, cutoff = null) {
         const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
 
-        if (error) {
-            return { error };
-        }
+        if (error) return { error };
 
         console.log(`Processed candles - Total: ${fullCandles.length} | Newly added: ${recentCandles.length}`);
 
-        this.#updateOpenTrades(recentCandles, status);
+        this.#updateOpenTrades(recentCandles, shouldSave, cutoff);
 
         const indicators = this.#indicators.compute(fullCandles);
 
-        if (indicators.error) {
-            return { error: 'Indicators error' };
-        }
+        if (indicators.error) return { error: 'Indicators error' };
 
         const features = this.#extractFeatures(indicators, 1);
-        const patternScore = this.#scorePattern(features.at(-1));
 
-        const patternStmt = this.#db.prepare(`SELECT usage_count, win_count FROM patterns WHERE features = ?`);
-        const pattern = patternStmt.get(JSON.stringify(features.at(-1)));
+        console.log(`Forward triggered`);
+        const startTime = process.hrtime();
+        const confidence = truncateToDecimals(this.#hivemind.forward(features.flat())[0] * 100, 4);
+        const diff = process.hrtime(startTime);
+        const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
+        console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
 
-        // console.log(`Forward triggered for pattern with win rate: ${patternScore * 100}%`);
-        // const startTime = process.hrtime();
-
-        // const confidence = truncateToDecimals(this.#hivemind.forward(features.flat())[0] * 100, 4);
-
-        // const diff = process.hrtime(startTime);
-        // const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-        // console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
-
-        // const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
-        // const multiplier = truncateToDecimals(Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier), 4);
+        const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
+        const multiplier = truncateToDecimals(Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier), 4);
         
         const entryPrice = indicators.lastClose;
         const atrBasedSellPrice = indicators.lastClose + this.#config.atrFactor * indicators.lastAtr;
@@ -358,41 +310,26 @@ class NeuralSignalEngine {
         );
         const stopLoss = truncateToDecimals(entryPrice - stopLossDelta, 2);
 
-        if (!pattern) {
-            const insertPatternStmt = this.#db.prepare(`
-                INSERT OR IGNORE INTO patterns (features, score, usage_count, win_count)
-                VALUES (?, ?, 0, 0)
-            `);
-            const result = insertPatternStmt.run(JSON.stringify(features.at(-1)), patternScore);
-            if (result.changes > 0) {
-                console.log(`New pattern created for features: ${JSON.stringify(features.at(-1))}`);
-            }
-        }
-
         const insertTradeStmt = this.#db.prepare(`
-            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, patternScore, features)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, features)
+            VALUES (?, ?, ?, ?, ?)
         `);
         insertTradeStmt.run(
-            Date.now().toString(),
+            recentCandles.at(-1).timestamp,
             sellPrice,
             stopLoss,
             entryPrice,
-            patternScore,
             JSON.stringify(features)
         );
-
-        if (status === 'dump') {
-            this.#hivemind.dumpState();
-        }
 
         return {
             entryPrice,
             sellPrice,
             stopLoss,
-            multiplier : 'disabled',
-            confidence : 'disabled',
-            threshold: this.#config.baseConfidenceThreshold
+            multiplier,
+            confidence,
+            threshold: this.#config.baseConfidenceThreshold,
+            lastTrainingStep : this.#trainingStep
         };
     }
 }

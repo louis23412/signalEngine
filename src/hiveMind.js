@@ -21,8 +21,8 @@ class HiveMind {
     #contextSensitivity = 0.5;
     #swarmIntelligenceFactor = 0.6;
 
-    #regulationFrequency = 100;
     #distillationFrequency = 100;
+    #regulationFrequency = 1000;
 
     #contextWindow = this.#hiddenSize * 2;
     #maxTrustHistory = this.#contextWindow * 2;
@@ -2569,7 +2569,7 @@ class HiveMind {
         return [this.#sigmoid(isValidNumber(finalOutput[0]) ? finalOutput[0] : 0)];
     }
 
-    train(inputs, target, shouldSave = true) {
+    train(inputs, target) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
@@ -2970,22 +2970,11 @@ class HiveMind {
 
         this.#gradientAccumulation = this.#createWeightStructure();
 
-        if (shouldSave) {
-            const saveStatus = this.#saveState()
-            return {
-                trainingStep : this.#trainingStepCount,
-                status : saveStatus
-            }
-        }
-
-        return {
-            trainingStep : this.#trainingStepCount
-        }
+        return this.#trainingStepCount
     }
 
     dumpState() {
-        const saveStatus = this.#saveState()
-        return saveStatus
+        return this.#saveState()
     }
 }
 

@@ -13,6 +13,8 @@ let signal;
 let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
+let trainingSteps = 0;
+const trainingCutoff = 1001
 
 const formatTime = (seconds) => {
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
@@ -59,7 +61,8 @@ const formatSignal = (options = {}) => {
                       `Stop Price: ${ANSI_CYAN}${signal.stopLoss}${ANSI_RESET}\n` +
                       `Multiplier: ${ANSI_CYAN}${signal.multiplier}${ANSI_RESET}, ` +
                       `Confidence: ${ANSI_CYAN}${signal.confidence}${ANSI_RESET}, ` +
-                      `Threshold: ${ANSI_CYAN}${signal.threshold}${ANSI_RESET}`
+                      `Threshold: ${ANSI_CYAN}${signal.threshold}${ANSI_RESET}, ` +
+                      `Training Step: ${ANSI_CYAN}${signal.lastTrainingStep}${ANSI_RESET}`
 
     process.stdout.write(`-----------------------\n${progressLine}${signalLine}\n-----------------------\n`);
 };
@@ -79,11 +82,14 @@ const processCandles = () => {
 
         if (cache.length >= cacheSize) {
             try {
+                const status = totalCandles === totalLines
+
                 const startTime = process.hrtime.bigint();
-                const status = totalCandles === totalLines ? 'dump' : 'training';
-                signal = engine.getSignal(cache.slice(-cacheSize), status);
+                signal = engine.getSignal(cache.slice(-cacheSize), status, trainingCutoff);
                 const endTime = process.hrtime.bigint();
                 const durationSec = Number(endTime - startTime) / 1_000_000_000;
+
+                trainingSteps = signal.lastTrainingStep
 
                 signalTimes.push(durationSec);
                 if (signalTimes.length > 100) {
@@ -96,6 +102,11 @@ const processCandles = () => {
                 const estimatedTimeSec = remainingCandles * avgSignalTime;
 
                 formatSignal({ totalCandles, totalLines, durationSec, avgSignalTime, estimatedTimeSec });
+
+                if (trainingSteps === trainingCutoff) {
+                    console.log("Training complete. Exiting.");
+                    process.exit()
+                }
             } catch (e) {
                 console.log(e);
                 process.exit();
