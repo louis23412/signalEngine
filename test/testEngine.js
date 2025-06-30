@@ -5,7 +5,7 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
-const cacheSize = 100;
+const cacheSize = 1000;
 const cache = [];
 const signalTimes = [];
 
@@ -13,6 +13,8 @@ let signal;
 let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
+let trainingSteps = 0;
+const trainingCutoff = null
 
 const formatTime = (seconds) => {
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
@@ -54,22 +56,15 @@ const formatSignal = (options = {}) => {
     }
 
     const signalLine = `Signal:\n` +
-                      `Suggested Action: ${ANSI_CYAN}${signal.suggestedAction}${ANSI_RESET}, ` +
-                      `Multiplier: ${ANSI_CYAN}${signal.multiplier}${ANSI_RESET}, ` +
-                      `Expected Reward: ${ANSI_CYAN}${signal.expectedReward}${ANSI_RESET}\n` +
                       `Entry Price: ${ANSI_CYAN}${signal.entryPrice}${ANSI_RESET}, ` +
                       `Sell Price: ${ANSI_CYAN}${signal.sellPrice}${ANSI_RESET}, ` +
                       `Stop Price: ${ANSI_CYAN}${signal.stopLoss}${ANSI_RESET}\n` +
-                      `Raw Confidence: ${ANSI_CYAN}${signal.rawConfidence}${ANSI_RESET}, ` +
-                      `Raw Threshold: ${ANSI_CYAN}${signal.rawThreshold}${ANSI_RESET}\n` +
-                      `Filtered Confidence: ${ANSI_CYAN}${signal.filteredConfidence}${ANSI_RESET}, ` +
-                      `Filtered Threshold: ${ANSI_CYAN}${signal.filteredThreshold}${ANSI_RESET}`;
+                      `Multiplier: ${ANSI_CYAN}${signal.multiplier}${ANSI_RESET}, ` +
+                      `Confidence: ${ANSI_CYAN}${signal.confidence}${ANSI_RESET}, ` +
+                      `Threshold: ${ANSI_CYAN}${signal.threshold}${ANSI_RESET}, ` +
+                      `Training Step: ${ANSI_CYAN}${signal.lastTrainingStep}${ANSI_RESET}`
 
-    process.stdout.write('\x1B[?25l');
-    process.stdout.cursorTo(0, 0);
-    process.stdout.write('\x1B[0J');
-    process.stdout.write(`-----------------------\n${progressLine}${signalLine}\n-----------------------`);
-    process.stdout.write('\x1B[?25h');
+    process.stdout.write(`-----------------------\n${progressLine}${signalLine}\n-----------------------\n`);
 };
 
 const processCandles = () => {
@@ -87,11 +82,14 @@ const processCandles = () => {
 
         if (cache.length >= cacheSize) {
             try {
+                const status = totalCandles === totalLines
+
                 const startTime = process.hrtime.bigint();
-                const status = totalCandles === totalLines ? 'dump' : 'training';
-                signal = engine.getSignal(cache.slice(-cacheSize), status);
+                signal = engine.getSignal(cache.slice(-cacheSize), status, trainingCutoff);
                 const endTime = process.hrtime.bigint();
                 const durationSec = Number(endTime - startTime) / 1_000_000_000;
+
+                trainingSteps = signal.lastTrainingStep
 
                 signalTimes.push(durationSec);
                 if (signalTimes.length > 100) {
@@ -104,6 +102,11 @@ const processCandles = () => {
                 const estimatedTimeSec = remainingCandles * avgSignalTime;
 
                 formatSignal({ totalCandles, totalLines, durationSec, avgSignalTime, estimatedTimeSec });
+
+                if (trainingSteps === trainingCutoff) {
+                    console.log("Training complete. Exiting.");
+                    process.exit()
+                }
             } catch (e) {
                 console.log(e);
                 process.exit();
