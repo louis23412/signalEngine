@@ -283,7 +283,7 @@ class NeuralSignalEngine {
 
         console.log(`Forward triggered`);
         const startTime = process.hrtime();
-        const confidence = truncateToDecimals(this.#hivemind.forward(features.flat())[0] * 100, 4);
+        const confidence = truncateToDecimals(this.#hivemind.predict(features.flat()) * 100, 4);
         const diff = process.hrtime(startTime);
         const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
         console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
