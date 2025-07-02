@@ -1390,20 +1390,6 @@ class HiveMind {
                 }
             }
         }
-
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            const specMatrix = this.#specializationWeights[i];
-            const spectralNorm = this.#computeSpectralNorm(specMatrix);
-            if (spectralNorm > 1.5) {
-                const scale = 1.5 / spectralNorm;
-                for (let j = 0; j < specMatrix.length; j++) {
-                    const row = specMatrix[j];
-                    for (let k = 0; k < row.length; k++) {
-                        row[k] *= scale;
-                    }
-                }
-            }
-        }
     }
 
     #updateAdaptiveLearningRates() {
@@ -1707,10 +1693,19 @@ class HiveMind {
         const normSquared = flatOther.reduce((sum, a) => sum + a * a, 0);
         if (normSquared < 1e-10) return;
         const scale = (dotProduct / normSquared) * penalty;
-        for (let i = 0; i < matrix.length; i++) {
-            for (let j = 0; j < matrix[i].length; j++) {
-                if (isValidNumber(matrix[i][j]) && isValidNumber(otherMatrix[i][j])) {
-                    matrix[i][j] -= scale * otherMatrix[i][j];
+
+        if (Array.isArray(matrix[0])) {
+            for (let i = 0; i < matrix.length; i++) {
+                for (let j = 0; j < matrix[i].length; j++) {
+                    if (isValidNumber(matrix[i][j]) && isValidNumber(otherMatrix[i][j])) {
+                        matrix[i][j] -= scale * otherMatrix[i][j];
+                    }
+                }
+            }
+        } else {
+            for (let i = 0; i < matrix.length; i++) {
+                if (isValidNumber(matrix[i]) && isValidNumber(otherMatrix[i])) {
+                    matrix[i] -= scale * otherMatrix[i];
                 }
             }
         }
@@ -1880,45 +1875,60 @@ class HiveMind {
     }
 
     #regulateWeightsAndMemory() {
-        let diversityPenalty = 0.005;
-        let similarityThreshold = 0.3;
-        const alpha = 4;
-        const beta = 0.5;
+        let diversityPenalty = 0.002;
+        let similarityThreshold = 0.5;
+        const alpha = 2;
+        const beta = 0.2;
 
-        const minWeightThreshold = 1e-6;
+        const minWeightThreshold = 1e-5;
         const smallWeightThreshold = 1e-4;
-        const noiseScale = 0.01;
+        const noiseScale = 0.002;
 
-        const maxDecay = 1.2;
-        const minDecay = 0.5;
-        const decayRate = 0.3;
+        const maxDecay = 1.0;
+        const minDecay = 0.6;
+        const decayRate = 0.15;
         const layerDecaySchedule = Array.from({ length: this.#numLayers }, (_, i) =>
             minDecay + (maxDecay - minDecay) * Math.exp(-decayRate * i)
         );
 
         const baseThresholds = {
-            'outputWeights': 4.0,
-            'attentionWeights': 2.5,
-            'ffnWeights': 3.0,
-            'biases': 2.0,
-            'layerNormWeights': 1.5,
-            'attentionWeightMatrix': 2.5
+            'outputWeights': 5.0,
+            'attentionWeights': 3.5,
+            'ffnWeights': 4.0,
+            'outputBias': 3.0,
+            'ffnBias1': 2.5,
+            'ffnBias2': 2.5,
+            'attentionBias': 2.2,
+            'layerNormWeights': 2.0,
+            'attentionWeightMatrix': 3.5,
+            'specializationWeights': 2.5
         };
 
         const decayFactors = {
-            'Wq': 0.8, 'Wk': 0.8, 'Wv': 0.8, 'Wo': 0.8,
-            'W1': 1.2, 'W2': 1.2, 'b1': 0.5, 'b2': 0.5,
-            'outputWeights': 1.0, 'outputBias': 0.5,
-            'gamma1': 0.5, 'beta1': 0.5, 'gamma2': 0.5, 'beta2': 0.5,
-            'attentionBias': 0.5, 'attentionWeightMatrix': 0.8,
-            'specializationWeights': 0.6
+            'Wq': 0.6,
+            'Wk': 0.6,
+            'Wv': 0.6,
+            'Wo': 0.6,
+            'W1': 0.8,
+            'W2': 0.8,
+            'b1': 0.3,
+            'b2': 0.3,
+            'outputWeights': 0.7,
+            'outputBias': 0.3,
+            'gamma1': 0.3,
+            'beta1': 0.3,
+            'gamma2': 0.3,
+            'beta2': 0.3,
+            'attentionBias': 0.3,
+            'attentionWeightMatrix': 0.6,
+            'specializationWeights': 0.4
         };
 
         const diversityLoss = this.#computeGiniCoefficient(this.#transformers.map(t => t.outputWeights.flat()));
         const avgPerformance = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0.5), 0) / this.#ensembleSize;
         
-        diversityPenalty = 0.005 * (1 + diversityLoss);
-        similarityThreshold = 0.3 * (1 - 0.5 * avgPerformance);
+        diversityPenalty = 0.002 * (1 + Math.min(diversityLoss, 1.0));
+        similarityThreshold = 0.5 * (1 - 0.2 * avgPerformance);
 
         for (let t = 0; t < this.#ensembleSize; t++) {
             if (
@@ -1943,11 +1953,11 @@ class HiveMind {
                 }
             }
             const memoryVariance = count > 0 ? varianceSum / count : 1;
-            const dynamicDecay = Math.min(0.95, Math.max(0.85, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance) * (1 + 0.5 * (1 - avgPerformance))));
-            const dynamicCutoff = Math.max(1e-6, 1e-2 * memoryVariance);
+            const dynamicDecay = Math.min(0.9, Math.max(0.8, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance) * (1 + 0.2 * (1 - avgPerformance))));
+            const dynamicCutoff = Math.max(1e-5, 1e-3 * memoryVariance);
             const performanceFactor = isValidNumber(this.#performanceScores[t]) ? this.#performanceScores[t] : 0.5;
             const specializationFactor = isValidNumber(this.#specializationScores[t]) ? 1 + this.#specializationScores[t] * (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) : 1;
-            const adaptiveScale = Math.min(1.5, Math.max(0.5, performanceFactor * specializationFactor));
+            const adaptiveScale = Math.min(1.3, Math.max(0.7, performanceFactor * specializationFactor));
 
             for (let i = 0; i < this.#contextWindow; i++) {
                 const sequenceMatrix = this.#attentionMemory[t][i];
@@ -1976,7 +1986,11 @@ class HiveMind {
             const transformer = this.#transformers[idx];
             const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
             const specializationFactor = isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0.5;
-            const adaptiveDecayRate = this.#weightDecayRate * Math.exp(-2 * performanceFactor);
+            const trustHistory = this.#trustScoresHistory?.[idx];
+            const trust = Array.isArray(trustHistory) && trustHistory.length > 0
+                ? trustHistory[trustHistory.length - 1]
+                : 0.5;
+            const adaptiveDecayRate = this.#weightDecayRate * Math.exp(-1.5 * performanceFactor);
 
             const applyWeightDecay = (matrixOrVector, isMatrix = true, weightType = 'generic', layer = null) => {
                 let lambda = adaptiveDecayRate;
@@ -2093,18 +2107,10 @@ class HiveMind {
                 }
             };
 
-            let norm = Math.sqrt(this.#attentionWeightMatrix[idx].reduce((sum, val) => 
-                sum + (isValidNumber(val) ? val * val : 0), 0)) || 1;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                this.#attentionWeightMatrix[idx][j] = isValidNumber(this.#attentionWeightMatrix[idx][j]) 
-                    ? this.#attentionWeightMatrix[idx][j] / norm 
-                    : 0;
-            }
-
             this.#applyMatrixScaling(transformer.outputWeights, baseThresholds['outputWeights'], diversityLoss);
             applyWeightDecay(transformer.outputWeights, true, 'outputWeights');
 
-            this.#applyVectorScaling(transformer.outputBias, baseThresholds['biases'], diversityLoss);
+            this.#applyVectorScaling(transformer.outputBias, baseThresholds['outputBias'], diversityLoss);
             applyWeightDecay(transformer.outputBias, false, 'outputBias');
 
             for (let layer = 0; layer < this.#numLayers; layer++) {
@@ -2122,7 +2128,7 @@ class HiveMind {
 
                 ['b1', 'b2'].forEach(key => {
                     const biasVector = transformer.ffnWeights[layer][key];
-                    this.#applyVectorScaling(biasVector, baseThresholds['biases'], diversityLoss);
+                    this.#applyVectorScaling(biasVector, baseThresholds[key === 'b1' ? 'ffnBias1' : 'ffnBias2'], diversityLoss);
                     applyWeightDecay(biasVector, false, key, layer);
                 });
 
@@ -2133,13 +2139,13 @@ class HiveMind {
                 });
             }
 
-            this.#applyVectorScaling(this.#attentionBias[idx], baseThresholds['biases'], diversityLoss);
+            this.#applyVectorScaling(this.#attentionBias[idx], baseThresholds['attentionBias'], diversityLoss);
             applyWeightDecay(this.#attentionBias[idx], false, 'attentionBias');
 
             this.#applyVectorScaling(this.#attentionWeightMatrix[idx], baseThresholds['attentionWeightMatrix'], diversityLoss);
             applyWeightDecay(this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix');
 
-            const specDecayRate = this.#weightDecayRate * Math.exp(-2 * specializationFactor);
+            const specDecayRate = this.#weightDecayRate * Math.exp(-1.5 * specializationFactor);
             for (let i = 0; i < this.#hiddenSize; i++) {
                 for (let j = 0; j < this.#hiddenSize; j++) {
                     if (isValidNumber(this.#specializationWeights[idx][i][j])) {
@@ -2156,6 +2162,19 @@ class HiveMind {
                 }
             }
 
+            const specMatrix = this.#specializationWeights[idx];
+            const spectralNorm = this.#computeSpectralNorm(specMatrix);
+            const specThreshold = baseThresholds['specializationWeights'] * (1 + 0.05 * diversityLoss) * (1 + 0.1 * trust);
+            if (spectralNorm > specThreshold) {
+                const scale = specThreshold / spectralNorm;
+                for (let j = 0; j < specMatrix.length; j++) {
+                    const row = specMatrix[j];
+                    for (let k = 0; k < row.length; k++) {
+                        row[k] *= scale;
+                    }
+                }
+            }
+
             for (let otherIdx = 0; otherIdx < this.#ensembleSize; otherIdx++) {
                 if (otherIdx === idx) continue;
 
@@ -2168,6 +2187,32 @@ class HiveMind {
                     this.#applyOrthogonalization(
                         transformer.outputWeights,
                         this.#transformers[otherIdx].outputWeights,
+                        penalty
+                    );
+                }
+
+                const similarityAttentionBias = this.#computeWeightSimilarity(
+                    this.#attentionBias[idx],
+                    this.#attentionBias[otherIdx]
+                );
+                if (similarityAttentionBias > similarityThreshold) {
+                    const penalty = diversityPenalty * (similarityAttentionBias - similarityThreshold);
+                    this.#applyOrthogonalization(
+                        this.#attentionBias[idx],
+                        this.#attentionBias[otherIdx],
+                        penalty
+                    );
+                }
+
+                const similarityAttentionWeightMatrix = this.#computeWeightSimilarity(
+                    this.#attentionWeightMatrix[idx],
+                    this.#attentionWeightMatrix[otherIdx]
+                );
+                if (similarityAttentionWeightMatrix > similarityThreshold) {
+                    const penalty = diversityPenalty * (similarityAttentionWeightMatrix - similarityThreshold);
+                    this.#applyOrthogonalization(
+                        this.#attentionWeightMatrix[idx],
+                        this.#attentionWeightMatrix[otherIdx],
                         penalty
                     );
                 }
@@ -2189,13 +2234,7 @@ class HiveMind {
                         const similarity = this.#computeWeightSimilarity(weightMatrix, otherWeightMatrix);
                         if (similarity > similarityThreshold) {
                             const penalty = diversityPenalty * (similarity - similarityThreshold);
-                            for (let i = 0; i < weightMatrix.length; i++) {
-                                for (let j = 0; j < weightMatrix[i].length; j++) {
-                                    if (isValidNumber(weightMatrix[i][j])) {
-                                        weightMatrix[i][j] -= penalty * weightMatrix[i][j];
-                                    }
-                                }
-                            }
+                            this.#applyOrthogonalization(weightMatrix, otherWeightMatrix, penalty);
                         }
                     });
                 }
