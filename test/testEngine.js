@@ -14,7 +14,7 @@ let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
 let trainingSteps = 0;
-const trainingCutoff = null
+const trainingCutoff = 10001
 
 const formatTime = (seconds) => {
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;

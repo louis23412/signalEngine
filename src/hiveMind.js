@@ -22,11 +22,35 @@ class HiveMind {
 
     #distillationFrequency = 100;
     #regulationFrequency = 1000;
+    #gradientResetFrequency = 100;
 
     #contextWindow = this.#hiddenSize * 2;
     #maxTrustHistory = this.#contextWindow * 2;
     #maxPerformanceHistory = this.#contextWindow * 4;
     #attentionScalingFactor = 1 / Math.sqrt(this.#hiddenSize / this.#numHeads);
+    
+    #noiseScale = 0.002;
+
+    #regularizationParams = {
+        'outputWeights': { min: 1e-5, small: 1e-4, scale: 5.0, decay : 0.7, noise: 0.6 },
+        'outputBias': { min: 5e-7, small: 5e-6, scale: 3.0, decay : 0.3, noise: 1.0 },
+        'Wq': { min: 5e-6, small: 5e-5, scale: 3.5, decay: 0.6, noise: 0.5 },
+        'Wk': { min: 5e-6, small: 5e-5, scale: 3.5, decay: 0.6, noise: 0.5 },
+        'Wv': { min: 5e-6, small: 5e-5, scale: 3.5, decay: 0.6, noise: 0.5 },
+        'Wo': { min: 5e-6, small: 5e-5, scale: 3.5, decay: 0.6, noise: 0.5 },
+        'W1': { min: 8e-6, small: 8e-5, scale: 4.0, decay: 0.8, noise: 0.8 },
+        'W2': { min: 8e-6, small: 8e-5, scale: 4.0, decay: 0.8, noise: 0.8 },
+        'b1': { min: 5e-7, small: 5e-6, scale: 2.5, decay: 0.3, noise: 1.2 },
+        'b2': { min: 5e-7, small: 5e-6, scale: 2.5, decay: 0.3, noise: 1.2 },
+        'gamma1': { min: 2e-7, small: 2e-6, scale: 2.0, decay: 0.3, noise: 0.8 },
+        'beta1': { min: 2e-7, small: 2e-6, scale: 2.0, decay: 0.3, noise: 0.8 },
+        'gamma2': { min: 2e-7, small: 2e-6, scale: 2.0, decay: 0.3, noise: 0.8 },
+        'beta2': { min: 2e-7, small: 2e-6, scale: 2.0, decay: 0.3, noise: 0.8 },
+        'attentionBias': { min: 5e-7, small: 5e-6, scale: 2.2, decay: 0.3, noise: 1.0 },
+        'attentionWeightMatrix': { min: 5e-6, small: 5e-5, scale: 3.5, decay: 0.6, noise: 0.6 },
+        'specializationWeights': { min: 3e-6, small: 3e-5, scale: 2.5, decay: 0.4, noise: 0.7 },
+        'attentionMemory': { decayMin: 0.8, decayMax: 0.9, cutoff: 1e-5, scaleMin: 0.7, scaleMax: 1.3, noise: 0.6 }
+    };
 
     #adaptiveLearningRate = [];
     #transformers = [];
@@ -43,9 +67,10 @@ class HiveMind {
     #specializationScores = [];
 
     #trainingStepCount = 0;
+    #layerDecaySchedule;
     #directoryPath;
 
-    constructor(dp) {
+    constructor (dp) {
         this.#directoryPath = dp;
 
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
@@ -60,7 +85,7 @@ class HiveMind {
         );
 
         this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
-            Array(this.#contextWindow).fill().map(() => Array(this.#hiddenSize).fill(0))
+            Array(this.#contextWindow).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)))
         );
 
         this.#attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() =>
@@ -105,7 +130,11 @@ class HiveMind {
             outputBias: Array(1).fill(0)
         }));
 
-        this.#gradientAccumulation = this.#createWeightStructure();
+        this.#layerDecaySchedule = Array.from({ length: this.#numLayers }, (_, i) =>
+            0.6 + (1.0 - 0.6) * Math.exp(-0.15 * i)
+        );
+
+        this.#gradientAccumulation = this.#setGradientStructure();
 
         this.#normalizeEnsembleWeights();
 
@@ -123,7 +152,7 @@ class HiveMind {
 
     //--------------------------------
 
-    #dynamicGeluInit(rows, cols, layerIndex, totalLayers, customK = null) {
+    #dynamicGeluInit (rows, cols, layerIndex, totalLayers, customK = null) {
         let baseK = customK !== null ? customK : 2.2;
         let fanInScale = Math.min(1.0, 1000 / rows);
         let depthScale = Math.pow(totalLayers, -layerIndex / totalLayers);
@@ -135,7 +164,7 @@ class HiveMind {
         );
     }
 
-    #createPositionalEncoding() {
+    #createPositionalEncoding () {
         const base = 10000 + (Math.random() - 0.5) * 2000;
         return Array(this.#inputSize).fill().map((_, pos) =>
             Array(this.#hiddenSize).fill().map((_, d) => {
@@ -146,7 +175,7 @@ class HiveMind {
         );
     }
 
-    #createWeightStructure() {
+    #setGradientStructure () {
         return Array(this.#ensembleSize).fill().map(() => ({
             outputWeights: Array(this.#hiddenSize).fill().map(() => Array(1).fill(0)),
             outputBias: Array(1).fill(0),
@@ -175,7 +204,7 @@ class HiveMind {
 
     //--------------------------------
 
-    #loadState() {
+    #loadState () {
         const dbPath = path.join(this.#directoryPath, 'hivemind_state.db');
         let db;
 
@@ -230,7 +259,6 @@ class HiveMind {
 
             const historicalPerformanceStmt = db.prepare('SELECT idx, step, score FROM historical_performance ORDER BY idx, step');
             const historicalPerformance = historicalPerformanceStmt.all();
-            this.#historicalPerformance = Array(this.#ensembleSize).fill().map(() => []);
             historicalPerformance.forEach(({ idx, step, score }) => {
                 if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize && Number.isInteger(step)) {
                     this.#historicalPerformance[idx][step] = score;
@@ -239,7 +267,6 @@ class HiveMind {
 
             const trustScoresHistoryStmt = db.prepare('SELECT idx, step, score FROM trust_scores_history ORDER BY idx, step');
             const trustScoresHistory = trustScoresHistoryStmt.all();
-            this.#trustScoresHistory = Array(this.#ensembleSize).fill().map(() => []);
             trustScoresHistory.forEach(({ idx, step, score }) => {
                 if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize && Number.isInteger(step)) {
                     this.#trustScoresHistory[idx][step] = score;
@@ -285,9 +312,6 @@ class HiveMind {
 
             const attentionMemoryStmt = db.prepare('SELECT idx, window, seq, dim, value FROM attention_memory');
             const attentionMemory = attentionMemoryStmt.all();
-            this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
-                Array(this.#contextWindow).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)))
-            );
             attentionMemory.forEach(({ idx, window, seq, dim, value }) => {
                 if (
                     isValidNumber(value) &&
@@ -330,6 +354,10 @@ class HiveMind {
                         } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
                             this.#transformers[idx].ffnWeights[layer].W2[row][col] = value;
                         }
+                    } else if (layer === -2 && weight_type === 'positionalEncoding') {
+                        if (row < this.#inputSize && col < this.#hiddenSize) {
+                            this.#transformers[idx].positionalEncoding[row][col] = value;
+                        }
                     }
                 }
             });
@@ -369,6 +397,51 @@ class HiveMind {
                 }
             });
 
+            const gradientAccumulationStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
+            const gradientAccumulations = gradientAccumulationStmt.all();
+            gradientAccumulations.forEach(({ idx, layer, weight_type, row, col, value }) => {
+                if (
+                    isValidNumber(value) &&
+                    idx >= 0 && idx < this.#ensembleSize
+                ) {
+                    if (weight_type === 'outputWeights' && layer === -1 && row < this.#hiddenSize && col < 1) {
+                        this.#gradientAccumulation[idx].outputWeights[row][col] = value;
+                    } else if (weight_type === 'outputBias' && layer === -1 && row < 1) {
+                        this.#gradientAccumulation[idx].outputBias[row] = value;
+                    } else if (layer >= 0 && layer < this.#numLayers) {
+                        if (weight_type === 'Wq' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[row][col] = value;
+                        } else if (weight_type === 'Wk' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[row][col] = value;
+                        } else if (weight_type === 'Wv' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[row][col] = value;
+                        } else if (weight_type === 'Wo' && row < this.#hiddenSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[row][col] = value;
+                        } else if (weight_type === 'W1' && row < this.#hiddenSize && col < this.#feedForwardSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].W1[row][col] = value;
+                        } else if (weight_type === 'W2' && row < this.#feedForwardSize && col < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].W2[row][col] = value;
+                        } else if (weight_type === 'b1' && row < this.#feedForwardSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].b1[row] = value;
+                        } else if (weight_type === 'b2' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].ffnWeights[layer].b2[row] = value;
+                        } else if (weight_type === 'gamma1' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[row] = value;
+                        } else if (weight_type === 'beta1' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[row] = value;
+                        } else if (weight_type === 'gamma2' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[row] = value;
+                        } else if (weight_type === 'beta2' && row < this.#hiddenSize) {
+                            this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[row] = value;
+                        }
+                    } else if (weight_type === 'attentionBias' && layer === -1 && row < this.#hiddenSize) {
+                        this.#gradientAccumulation[idx].attentionBias[row] = value;
+                    } else if (weight_type === 'attentionWeightMatrix' && layer === -1 && row < this.#hiddenSize) {
+                        this.#gradientAccumulation[idx].attentionWeightMatrix[row] = value;
+                    }
+                }
+            });
+
             return {
                 status : true
             };
@@ -385,7 +458,7 @@ class HiveMind {
         }
     }
 
-    #saveState() {
+    #saveState () {
         const dbPath = path.join(this.#directoryPath, 'hivemind_state.db');
         let db;
 
@@ -484,6 +557,15 @@ class HiveMind {
                     row INTEGER,
                     value REAL,
                     PRIMARY KEY (idx, layer, norm_type, row)
+                );
+                CREATE TABLE IF NOT EXISTS gradient_accumulation (
+                    idx INTEGER,
+                    layer INTEGER,
+                    weight_type TEXT,
+                    row INTEGER,
+                    col INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, layer, weight_type, row, col)
                 );
             `);
 
@@ -679,6 +761,117 @@ class HiveMind {
                         insertTransformerBiases.run(idx, -1, 'outputBias', r, value);
                     }
                 });
+                transformer.positionalEncoding.forEach((row, r) => {
+                    row.forEach((value, c) => {
+                        if (isValidNumber(value)) {
+                            insertTransformerWeights.run(idx, -2, 'positionalEncoding', r, c, value);
+                        }
+                    });
+                });
+            });
+
+            const insertGradientAccumulation = db.prepare('INSERT OR REPLACE INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
+            this.#gradientAccumulation.forEach((grad, idx) => {
+                grad.outputWeights.forEach((row, r) => {
+                    row.forEach((value, c) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, -1, 'outputWeights', r, c, value);
+                        }
+                    });
+                });
+                grad.outputBias.forEach((value, r) => {
+                    if (isValidNumber(value)) {
+                        insertGradientAccumulation.run(idx, -1, 'outputBias', r, 0, value);
+                    }
+                });
+                grad.attentionWeights.forEach((layer, l) => {
+                    layer.Wq.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wq', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wk.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wk', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wv.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wv', r, c, value);
+                            }
+                        });
+                    });
+                    layer.Wo.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'Wo', r, c, value);
+                            }
+                        });
+                    });
+                });
+                grad.ffnWeights.forEach((layer, l) => {
+                    layer.W1.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'W1', r, c, value);
+                            }
+                        });
+                    });
+                    layer.W2.forEach((row, r) => {
+                        row.forEach((value, c) => {
+                            if (isValidNumber(value)) {
+                                insertGradientAccumulation.run(idx, l, 'W2', r, c, value);
+                            }
+                        });
+                    });
+                    layer.b1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, l, 'b1', r, 0, value);
+                        }
+                    });
+                    layer.b2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, l, 'b2', r, 0, value);
+                        }
+                    });
+                });
+                grad.layerNormWeights.forEach((layer, l) => {
+                    layer.gamma1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, l, 'gamma1', r, 0, value);
+                        }
+                    });
+                    layer.beta1.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, l, 'beta1', r, 0, value);
+                        }
+                    });
+                    layer.gamma2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, l, 'gamma2', r, 0, value);
+                        }
+                    });
+                    layer.beta2.forEach((value, r) => {
+                        if (isValidNumber(value)) {
+                            insertGradientAccumulation.run(idx, l, 'beta2', r, 0, value);
+                        }
+                    });
+                });
+                grad.attentionBias.forEach((value, r) => {
+                    if (isValidNumber(value)) {
+                        insertGradientAccumulation.run(idx, -1, 'attentionBias', r, 0, value);
+                    }
+                });
+                grad.attentionWeightMatrix.forEach((value, r) => {
+                    if (isValidNumber(value)) {
+                        insertGradientAccumulation.run(idx, -1, 'attentionWeightMatrix', r, 0, value);
+                    }
+                });
             });
 
             db.exec('COMMIT');
@@ -703,12 +896,12 @@ class HiveMind {
 
     //--------------------------------
 
-    #gelu(x) {
+    #gelu (x) {
         if (!isValidNumber(x)) return 0;
         return 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * Math.pow(x, 3))));
     }
 
-    #geluDerivative(x) {
+    #geluDerivative (x) {
         if (!isValidNumber(x)) return 0;
 
         const clampedX = Math.min(Math.max(x, -20), 20);
@@ -739,7 +932,7 @@ class HiveMind {
         return exp.map(x => x / sum);
     }
 
-    #layerNorm(x, gamma, beta, eps = 1e-6) {
+    #layerNorm (x, gamma, beta, eps = 1e-6) {
         if (
             !Array.isArray(x) || x.length !== this.#hiddenSize ||
             !Array.isArray(gamma) || gamma.length !== this.#hiddenSize ||
@@ -765,7 +958,7 @@ class HiveMind {
         return output;
     }
 
-    #dropout(x, rate) {
+    #dropout (x, rate) {
         if (
             !Array.isArray(x) || 
             !x.every(isValidNumber) || 
@@ -784,7 +977,7 @@ class HiveMind {
 
     //--------------------------------
 
-    #computeMemoryScore(memoryEntry, attentionScores, transformerIdx, entryIndex) {
+    #computeMemoryScore (memoryEntry, attentionScores, transformerIdx, entryIndex) {
         let valueSum = 0;
         let valueCount = 0;
         for (let i = 0; i < memoryEntry.length; i++) {
@@ -843,7 +1036,7 @@ class HiveMind {
         return (dropoutScore * dropoutWeight + attentionScore * attentionWeight + magnitudeScore * magnitudeWeight) * recencyFactor;
     }
 
-    #pruneMemory(transformerIdx, contextWindow, latestScores) {
+    #pruneMemory (transformerIdx, contextWindow, latestScores) {
         if (this.#attentionMemory[transformerIdx].length <= contextWindow) {
             return;
         }
@@ -858,7 +1051,7 @@ class HiveMind {
         this.#attentionMemory[transformerIdx].splice(minScoreEntry.index, 1);
     }
 
-    #multiHeadAttention(x, layer, transformerIdx) {
+    #multiHeadAttention (x, layer, transformerIdx) {
         if (
             !Array.isArray(x) ||
             x.length !== this.#inputSize ||
@@ -992,7 +1185,7 @@ class HiveMind {
         };
     }
 
-    #feedForward(x, layer, transformerIdx) {
+    #feedForward (x, layer, transformerIdx) {
         if (
             !Array.isArray(x) || x.length !== this.#hiddenSize ||
             !x.every(isValidNumber) ||
@@ -1044,7 +1237,7 @@ class HiveMind {
         return this.#dropout(output, this.#dropoutRate);
     }
 
-    #contextAwareAttention(inputs, transformerIdx) {
+    #contextAwareAttention (inputs, transformerIdx) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
@@ -1118,7 +1311,7 @@ class HiveMind {
         return output;
     }
 
-    #processTransformer(inputs, idx, computeIntermediates = false) {
+    #processTransformer (inputs, idx, computeIntermediates = false) {
         const transformer = this.#transformers[idx];
 
         if (
@@ -1183,7 +1376,7 @@ class HiveMind {
 
     //--------------------------------
 
-    #computeAttentionWeights(inputs, outputs) {
+    #computeAttentionWeights (inputs, outputs) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
@@ -1303,51 +1496,7 @@ class HiveMind {
         return finalWeights.map(w => (isValidNumber(w) && w >= 0 ? w / sum : 1 / this.#ensembleSize));
     }
 
-    #updateTrustScores() {
-        const performanceMean = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) / this.#ensembleSize || 1;
-        const performanceStd = Math.sqrt(
-        this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
-        ) || 1;
-
-        this.#trustScoresHistory = this.#trustScoresHistory.map((history, idx) => {
-        const normalizedScore = isValidNumber(this.#performanceScores[idx]) && performanceStd > 0
-            ? (this.#performanceScores[idx] - performanceMean) / performanceStd
-            : 0;
-        const agreementFactor = isValidNumber(this.#agreementScores[idx]) ? this.#agreementScores[idx] : 0.5;
-        const historicalTrend = this.#historicalPerformance[idx].length > 1
-            ? (this.#historicalPerformance[idx][this.#historicalPerformance[idx].length - 1] - this.#historicalPerformance[idx][0]) /
-            this.#historicalPerformance[idx].length
-            : 0;
-        const specializationBoost = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
-        const trustScore = this.#sigmoid(normalizedScore * (0.6 + 0.2 * agreementFactor + 0.1 * historicalTrend + 0.1 * specializationBoost));
-        history.push(isValidNumber(trustScore) ? trustScore : 0.5);
-        if (history.length > this.#maxTrustHistory) history.shift();
-        return history;
-        });
-
-        const trustMomentum = 0.6;
-        this.#performanceScores = this.#performanceScores.map((score, idx) => {
-        const recentTrust = this.#trustScoresHistory[idx].slice(-5);
-        const avgTrust = recentTrust.length > 0
-            ? recentTrust.reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / recentTrust.length
-            : 0.5;
-        const historicalWeight = this.#trustScoresHistory[idx].length / this.#maxTrustHistory;
-        const specializationFactor = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
-        return trustMomentum * (isValidNumber(score) ? score : 0) + (1 - trustMomentum) * avgTrust * (0.7 + 0.2 * historicalWeight + 0.1 * specializationFactor);
-        });
-
-        this.#ensembleWeights = this.#trustScoresHistory.map((history, idx) => {
-        const recentTrust = history.slice(-5);
-        const avgTrust = recentTrust.length > 0
-            ? recentTrust.reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / recentTrust.length
-            : 1 / this.#ensembleSize;
-        const specializationFactor = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
-        return avgTrust * (0.8 + 0.2 * specializationFactor);
-        });
-        this.#normalizeEnsembleWeights();
-    }
-
-    #computeSpecializationScores(inputs, outputs) {
+    #computeSpecializationScores (inputs, outputs) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
@@ -1392,7 +1541,7 @@ class HiveMind {
         }
     }
 
-    #updateAdaptiveLearningRates() {
+    #updateAdaptiveLearningRates () {
         const recent_performance = this.#historicalPerformance.map(history => {
             const len = history.length;
             if (len === 0) return 0.5;
@@ -1400,37 +1549,121 @@ class HiveMind {
             return sum / len;
         });
 
-        const sortedPerformances = recent_performance.slice().sort((a, b) => b - a);
-        const thresholdIdx = Math.max(1, Math.floor(recent_performance.length * 0.25));
-        const acceptable_threshold = sortedPerformances[thresholdIdx] || 0.5;
+        const recent_trust = this.#trustScoresHistory.map(history => {
+            const len = history.length;
+            if (len === 0) return 0.5;
+            const sum = history.reduce((s, v) => s + (isValidNumber(v) ? v : 0), 0);
+            return sum / len;
+        });
 
-        const min_lr = this.#learningRate * 0.3;
-        const max_lr = this.#learningRate * 3;
-        const decay_rate = this.#learningRateDecay;
-        const base_adjustment_factor = 0.01;
-        const decay_constant = 0.001;
+        const sorted_specialization = this.#specializationScores.slice().sort((a, b) => b - a);
+        const max_spec = sorted_specialization[Math.floor(this.#ensembleSize * 0.05)] || 1e-10;
+        const min_spec = sorted_specialization[this.#ensembleSize - 1] || 0;
+        const spec_range = Math.max(max_spec - min_spec, 1e-10);
+        const normalized_specialization = this.#specializationScores.map(score => 
+            Math.min(Math.max((score - min_spec) / spec_range, 0), 1)
+        );
 
-        const adjustment_factor = base_adjustment_factor * Math.exp(-decay_constant * this.#trainingStepCount);
+        const composite_scores = recent_performance.map((perf, idx) => {
+            const trust = recent_trust[idx];
+            const spec = normalized_specialization[idx];
+            const weighted_sum = 0.4 * perf + 0.3 * trust + 0.3 * spec;
+            return this.#sigmoid(5 * weighted_sum);
+        });
+
+        const sorted_composite = composite_scores.slice().sort((a, b) => b - a);
+        const thresholdIdx = Math.max(1, Math.floor(composite_scores.length * 0.25));
+        const acceptable_threshold = sorted_composite[thresholdIdx] || 0.5;
+
+        const min_lr = this.#learningRate * 0.5;
+        const max_lr = this.#learningRate * 1.5;
 
         this.#adaptiveLearningRate = this.#adaptiveLearningRate.map((lr, idx) => {
             let newLr = lr;
-            const perf = recent_performance[idx];
-            const perf_diff = perf - acceptable_threshold;
+            const score = composite_scores[idx];
+            const score_diff = score - acceptable_threshold;
 
-            const adjustment_magnitude = this.#sigmoid(perf_diff) * 2 - 1;
-            if (perf >= acceptable_threshold) {
-                newLr *= (1 - decay_rate * adjustment_factor * Math.abs(adjustment_magnitude));
+            const adjustment_magnitude = Math.max(-1, Math.min(1, score_diff * 2));
+            if (score >= acceptable_threshold) {
+                newLr *= (1 - this.#learningRateDecay * this.#learningRate * Math.abs(adjustment_magnitude) * 0.8);
             } else {
-                newLr *= (1 + decay_rate * adjustment_factor * Math.abs(adjustment_magnitude));
+                newLr *= (1 + this.#learningRateDecay * this.#learningRate * Math.abs(adjustment_magnitude) * 1.2);
             }
 
-            newLr = 0.9 * newLr + 0.1 * lr;
+            newLr = 0.95 * newLr + 0.05 * lr;
 
             return Math.max(min_lr, Math.min(newLr, max_lr));
         });
     }
 
-    #normalizeEnsembleWeights() {
+    #updatePerformanceScores(linearOutputs, target) {
+        this.#performanceScores = this.#performanceScores.map((score, idx) => {
+            const individualProbability = this.#sigmoid(linearOutputs[idx]);
+            const brierScore = Math.pow(individualProbability - target, 2);
+            const performance = 1 - brierScore;
+            const newScore = 0.9 * score + 0.1 * (isValidNumber(performance) ? performance : 0);
+            
+            this.#historicalPerformance[idx].push(isValidNumber(newScore) ? newScore : 0);
+            if (this.#historicalPerformance[idx].length > this.#maxPerformanceHistory) {
+                this.#historicalPerformance[idx].shift();
+            }
+            
+            return isValidNumber(newScore) ? newScore : 0;
+        });
+    }
+
+    #updateAgreementScores (linearOutputs, finalProbability) {
+        this.#agreementScores = this.#agreementScores.map((score, idx) => {
+            const individualProbability = this.#sigmoid(linearOutputs[idx]);
+            const absDiff = Math.abs(individualProbability - finalProbability);
+            let agreement = 1 - absDiff;
+            
+            const avgHistoricalPerformance = this.#historicalPerformance[idx].length > 0
+                ? this.#historicalPerformance[idx].reduce((sum, val) => sum + val, 0) / this.#historicalPerformance[idx].length
+                : 0;
+            const weightedAgreement = agreement * (0.5 + 0.5 * avgHistoricalPerformance);
+            
+            const newScore = 0.9 * score + 0.1 * (isValidNumber(weightedAgreement) ? weightedAgreement : 0);
+            
+            return isValidNumber(newScore) ? newScore : 0;
+        });
+    }
+
+    #updateTrustScores() {
+        const performanceMean = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) / this.#ensembleSize || 1;
+        const performanceStd = Math.sqrt(
+            this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
+        ) || 1;
+
+        this.#trustScoresHistory = this.#trustScoresHistory.map((history, idx) => {
+            const normalizedScore = isValidNumber(this.#performanceScores[idx]) && performanceStd > 0
+                ? (this.#performanceScores[idx] - performanceMean) / performanceStd
+                : 0;
+            const agreementFactor = isValidNumber(this.#agreementScores[idx]) ? this.#agreementScores[idx] : 0.5;
+            const historicalTrend = this.#historicalPerformance[idx].length > 1
+                ? (this.#historicalPerformance[idx][this.#historicalPerformance[idx].length - 1] - this.#historicalPerformance[idx][0]) /
+                this.#historicalPerformance[idx].length
+                : 0;
+            const specializationBoost = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
+            const trustScore = this.#sigmoid(normalizedScore * (0.6 + 0.2 * agreementFactor + 0.1 * historicalTrend + 0.1 * specializationBoost));
+            history.push(isValidNumber(trustScore) ? trustScore : 0.5);
+            if (history.length > this.#maxTrustHistory) history.shift();
+            return history;
+        });
+    }
+
+    #updateEnsembleWeights () {
+        this.#ensembleWeights = this.#trustScoresHistory.map((history, idx) => {
+            const recentTrust = history.slice(-5);
+            const avgTrust = recentTrust.length > 0
+                ? recentTrust.reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / recentTrust.length
+                : 1 / this.#ensembleSize;
+            const specializationFactor = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
+            return avgTrust * (0.8 + 0.2 * specializationFactor);
+        });
+    }
+
+    #normalizeEnsembleWeights () {
         const sum = this.#ensembleWeights.reduce((s, w) => s + (isValidNumber(w) && w >= 0 ? w : 0), 0);
 
         if (sum <= 1e-6) {
@@ -1449,9 +1682,23 @@ class HiveMind {
         }
     }
 
+    #adjustPerformanceScores () {
+        const trustMomentum = 0.6;
+        this.#performanceScores = this.#performanceScores.map((score, idx) => {
+            const recentTrust = this.#trustScoresHistory[idx].slice(-5);
+            const avgTrust = recentTrust.length > 0
+                ? recentTrust.reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0) / recentTrust.length
+                : 0.5;
+            const historicalWeight = this.#trustScoresHistory[idx].length / this.#maxTrustHistory;
+            const specializationFactor = 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor;
+            return trustMomentum * (isValidNumber(score) ? score : 0) +
+                (1 - trustMomentum) * avgTrust * (0.7 + 0.2 * historicalWeight + 0.1 * specializationFactor);
+        });
+    }
+
     //--------------------------------
 
-    #computeSpectralNorm(matrix) {
+    #computeSpectralNorm (matrix) {
         if (!Array.isArray(matrix)) {
             const error = new Error('Input is not an array');
             console.error('Error:', error.message, '\nStack:', error.stack);
@@ -1589,7 +1836,7 @@ class HiveMind {
         return finalNorm;
     }
 
-    #computeGradientNorm(grad, isMatrix) {
+    #computeGradientNorm (grad, isMatrix) {
         if (isMatrix) {
             return Math.sqrt(grad.reduce((sum, row) => 
                 sum + row.reduce((s, val) => s + (isValidNumber(val) ? val * val : 0), 0), 0)) || 1;
@@ -1599,7 +1846,7 @@ class HiveMind {
         }
     }
 
-    #computeWeightSimilarity(weights1, weights2) {
+    #computeWeightSimilarity (weights1, weights2) {
         let dotProduct = 0, norm1 = 0, norm2 = 0;
         for (let i = 0; i < weights1.length; i++) {
             for (let j = 0; j < weights1[i].length; j++) {
@@ -1611,34 +1858,6 @@ class HiveMind {
             }
         }
         return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2) + 1e-6);
-    }
-
-    #applyMatrixScaling (matrix, baseThreshold, diversityLoss) {
-        const threshold = baseThreshold * (1 + diversityLoss);
-        const spectralNorm = this.#computeSpectralNorm(matrix);
-        if (spectralNorm > threshold) {
-            const scale = threshold / spectralNorm;
-            for (let i = 0; i < matrix.length; i++) {
-                for (let j = 0; j < matrix[i].length; j++) {
-                    if (isValidNumber(matrix[i][j])) {
-                        matrix[i][j] *= scale;
-                    } else {
-                        matrix[i][j] = 0;
-                    }
-                }
-            }
-        }
-    }
-
-    #applyVectorScaling (vector, baseThreshold, diversityLoss) {
-        const threshold = baseThreshold * (1 + diversityLoss);
-        const l2Norm = Math.sqrt(vector.reduce((sum, val) => sum + (isValidNumber(val) ? val * val : 0), 0));
-        if (l2Norm > threshold) {
-            const scale = threshold / l2Norm;
-            for (let i = 0; i < vector.length; i++) {
-                vector[i] = isValidNumber(vector[i]) ? vector[i] * scale : 0;
-            }
-        }
     }
 
     #computeGradientStats (grad, isMatrix) {
@@ -1686,6 +1905,178 @@ class HiveMind {
         return totalSimilarities.map(sim => weightCount > 0 ? sim / weightCount : 0);
     }
 
+    #computeGiniCoefficient (weightsList) {
+        const norms = weightsList.map(weights => Math.sqrt(weights.reduce((sum, w) => sum + w * w, 0)));
+        const sortedNorms = norms.sort((a, b) => a - b);
+        const n = sortedNorms.length;
+        const sum = sortedNorms.reduce((a, b) => a + b, 0);
+        let gini = 0;
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                gini += Math.abs(sortedNorms[i] - sortedNorms[j]);
+            }
+        }
+        gini = sum > 0 ? gini / (2 * n * sum) : 0;
+        return 1 - gini;
+    }
+
+    #computeWeightedSum (outputs, weights) {
+        return outputs.reduce((sum, out, idx) => {
+            if (isValidNumber(out) && isValidNumber(weights[idx])) {
+                return sum + out * weights[idx];
+            }
+            return sum;
+        }, 0);
+    }
+
+    #computeVariance (arr) {
+        if (arr.length < 2) return 0;
+
+        const median = arr.slice().sort((a, b) => a - b)[Math.floor(arr.length / 2)];
+        const mad = arr.reduce((sum, val) => sum + Math.abs(val - median), 0) / Math.max(arr.length, 1);
+
+        return Math.min(mad, 10);
+    }
+
+    #computeEMA (arr, beta) {
+        if (arr.length === 0) return 0;
+
+        let ema = arr[0];
+        for (let i = 1; i < arr.length; i++) {
+            ema = beta * ema + (1 - beta) * arr[i];
+        }
+
+        return ema;
+    }
+
+    #computeDualEMA (arr, betaShort, betaLong) {
+        const shortEMA = this.#computeEMA(arr, betaShort);
+        const longEMA = this.#computeEMA(arr, betaLong);
+        const variance = this.#computeVariance(arr.slice(-10));
+        const svrWeight = Math.min(0.8, Math.max(0.2, 0.5 * (1 - variance / (variance + 1))));
+
+        return svrWeight * shortEMA + (1 - svrWeight) * longEMA;
+    }
+
+    #computeGradientConformity (norms) {
+        if (norms.length < 2) return 1;
+
+        const directions = norms.slice(1).map((val, i) => Math.sign(val - norms[i]));
+        const consistency = directions.reduce((sum, val, i, arr) => sum + (i > 0 && val === arr[i - 1] ? 1 : 0), 0) / (directions.length || 1);
+
+        return Math.min(1, Math.max(0.5, consistency));
+    }
+
+    #computeKernelRate (history) {
+        const median = history.slice(-10).sort((a, b) => a - b)[Math.floor(history.length / 2)] || 0;
+        const scaledHistory = history.slice(-10).map(val => (val - median) / (Math.abs(median) + 1e-10));
+        const kernel = scaledHistory.map((val, i) => Math.exp(-0.1 * (scaledHistory.length - i - 1) ** 2));
+        const kernelSum = kernel.reduce((sum, val) => sum + val, 0);
+
+        return kernelSum > 0 ? kernel.reduce((sum, val, i) => sum + val * scaledHistory[i], 0) / kernelSum + 0.9 : 0.9;
+    }
+
+    #computeFractalDimension (arr) {
+        if (arr.length < 2) return 1;
+
+        const diffs = arr.slice(1).map((val, i) => Math.abs(val - arr[i]));
+        const logDiffs = diffs.map(d => Math.log(Math.max(d, 1e-10)));
+        const logScale = Math.log(arr.length);
+        const fractalDim = logDiffs.length > 0 ? Math.abs(logDiffs.reduce((sum, val) => sum + val, 0) / logScale) : 1;
+
+        return Math.min(2, Math.max(1, fractalDim));
+    }
+
+    #computePercentile (norms, percentile) {
+        const sortedNorms = [...norms].sort((a, b) => a - b);
+        const index = Math.floor(percentile * (sortedNorms.length - 1));
+
+        return sortedNorms[index] || 1.0;
+    }
+
+    #computeNTKStability (norms, lossVariance) {
+        if (norms.length < 2) return 1;
+
+        const average = (arr) => arr.reduce((sum, val) => sum + val, 0) / Math.max(arr.length, 1);
+
+        const medianNorm = norms.slice(-10).sort((a, b) => a - b)[Math.floor(norms.length / 2)] || 1;
+        const bandwidth = Math.min(-0.01, Math.max(-0.1, -0.05 / (1 + lossVariance * medianNorm)));
+        const kernel = norms.slice(-10).map((val, i) => Math.exp(bandwidth * (val - average(norms)) ** 2));
+        const stability = kernel.reduce((sum, val) => sum + val, 0) / kernel.length;
+
+        return Math.min(1.5, Math.max(0.5, stability));
+    }
+
+    #computeDynamicPercentile (norms, basePercentile) {
+        const mad = this.#computeVariance(norms);
+        const smoothness = this.#computeGradientConformity(norms);
+        const adjustment = Math.min(0.05, (mad + 0.1 * smoothness) / (mad + smoothness + 1));
+
+        return Math.min(0.99, Math.max(0.75, basePercentile - adjustment));
+    }
+
+    #computeSparseThreshold (norms) {
+        const mad = this.#computeVariance(norms);
+
+        return Math.max(1e-6, Math.min(1e-4, mad / 10));
+    }
+
+    #scaleGradientMatrix (gradMatrix, threshold, minScaleFactor, alpha, decay, sparseThreshold) {
+        const spectralNorm = this.#computeSpectralNorm(gradMatrix);
+        if (spectralNorm <= threshold) return;
+
+        const scale = Math.max(minScaleFactor, Math.pow(threshold / spectralNorm, alpha) * decay);
+        const quantScale = Math.ceil(scale * 255) / 255;
+        for (let i = 0; i < gradMatrix.length; i++) {
+            for (let j = 0; j < gradMatrix[i].length; j++) {
+                if (Math.abs(gradMatrix[i][j]) > sparseThreshold) {
+                    gradMatrix[i][j] *= quantScale;
+                }
+            }
+        }
+    }
+
+    #scaleGradientVector (gradVector, threshold, minScaleFactor, alpha, decay, sparseThreshold) {
+        const l2Norm = this.#computeGradientNorm(gradVector, false);
+        if (l2Norm <= threshold) return;
+
+        const scale = Math.max(minScaleFactor, Math.pow(threshold / l2Norm, alpha) * decay);
+        const quantScale = Math.ceil(scale * 255) / 255;
+        for (let i = 0; i < gradVector.length; i++) {
+            if (Math.abs(gradVector[i]) > sparseThreshold) {
+                gradVector[i] *= quantScale;
+            }
+        }
+    }
+
+    #applyMatrixScaling (matrix, baseThreshold, diversityLoss) {
+        const threshold = baseThreshold * (1 + diversityLoss);
+        const spectralNorm = this.#computeSpectralNorm(matrix);
+        if (spectralNorm > threshold) {
+            const scale = threshold / spectralNorm;
+            for (let i = 0; i < matrix.length; i++) {
+                for (let j = 0; j < matrix[i].length; j++) {
+                    if (isValidNumber(matrix[i][j])) {
+                        matrix[i][j] *= scale;
+                    } else {
+                        matrix[i][j] = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    #applyVectorScaling (vector, baseThreshold, diversityLoss) {
+        const threshold = baseThreshold * (1 + diversityLoss);
+        const l2Norm = Math.sqrt(vector.reduce((sum, val) => sum + (isValidNumber(val) ? val * val : 0), 0));
+        if (l2Norm > threshold) {
+            const scale = threshold / l2Norm;
+            for (let i = 0; i < vector.length; i++) {
+                vector[i] = isValidNumber(vector[i]) ? vector[i] * scale : 0;
+            }
+        }
+    }
+
     #applyOrthogonalization (matrix, otherMatrix, penalty) {
         const flatMatrix = matrix.flat();
         const flatOther = otherMatrix.flat();
@@ -1711,62 +2102,212 @@ class HiveMind {
         }
     }
 
-    #computeGiniCoefficient (weightsList) {
-        const norms = weightsList.map(weights => Math.sqrt(weights.reduce((sum, w) => sum + w * w, 0)));
-        const sortedNorms = norms.sort((a, b) => a - b);
-        const n = sortedNorms.length;
-        const sum = sortedNorms.reduce((a, b) => a + b, 0);
-        let gini = 0;
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) {
-                gini += Math.abs(sortedNorms[i] - sortedNorms[j]);
+    #applyWeightDecay (idx, weight, isMatrix, weightType, weightGroup, diversityPenalty, similarityThreshold, layer = null, headSimilarities = null) {
+        const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
+        const trustHistory = this.#trustScoresHistory?.[idx];
+        const trust = Math.max(0.01, Math.min(1.0, Array.isArray(trustHistory) && trustHistory.length > 0 ? trustHistory[trustHistory.length - 1] : 0.5));
+        const adaptiveDecayRate = this.#weightDecayRate * Math.exp(-1.5 * performanceFactor);
+
+        const alpha = 2
+        const beta = 0.2
+
+        let lambda = adaptiveDecayRate;
+        if (layer !== null && layer < this.#layerDecaySchedule.length) {
+            lambda *= this.#layerDecaySchedule[layer];
+        }
+        lambda *= this.#regularizationParams[weightType].decay || 1.0;
+
+        const grad = weightGroup === null ? this.#gradientAccumulation[idx][weightType] : this.#gradientAccumulation[idx][weightGroup][layer][weightType]
+        const dynamicMin = this.#regularizationParams[weightType]?.min * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust)) || 1e-5;
+        const dynamicSmall = this.#regularizationParams[weightType]?.small * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust)) || 1e-4;
+
+        if (!grad) {
+            const decay = lambda;
+            if (isMatrix) {
+                for (let i = 0; i < weight.length; i++) {
+                    for (let j = 0; j < weight[i].length; j++) {
+                        if (isValidNumber(weight[i][j])) {
+                            if (Math.abs(weight[i][j]) > dynamicSmall) {
+                                weight[i][j] *= (1 - decay);
+                            }
+                            if (Math.abs(weight[i][j]) < dynamicMin) {
+                                weight[i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                            }
+                        } else {
+                            weight[i][j] = 0;
+                        }
+                    }
+                }
+            } else {
+                for (let i = 0; i < weight.length; i++) {
+                    if (isValidNumber(weight[i])) {
+                        if (Math.abs(weight[i]) > dynamicSmall) {
+                            weight[i] *= (1 - decay);
+                        }
+                        if (Math.abs(weight[i]) < dynamicMin) {
+                            weight[i] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                        }
+                    } else {
+                        weight[i] = 0;
+                    }
+                }
+            }
+            return;
+        }
+
+        const { mean, std } = this.#computeGradientStats(grad, isMatrix);
+
+        if (isMatrix && ['Wq', 'Wk', 'Wv'].includes(weightType) && layer !== null && headSimilarities) {
+            const headSize = this.#hiddenSize / this.#numHeads;
+            for (let i = 0; i < weight.length; i++) {
+                const headIdx = Math.floor(i / headSize);
+                let adjustedLambda = lambda * (1 + beta * headSimilarities[headIdx]);
+                if (headSimilarities[headIdx] > similarityThreshold) {
+                    adjustedLambda *= (1 + diversityPenalty * (headSimilarities[headIdx] - similarityThreshold));
+                }
+                for (let j = 0; j < weight[i].length; j++) {
+                    if (isValidNumber(weight[i][j]) && isValidNumber(grad[i][j])) {
+                        const abs_g = Math.abs(grad[i][j]);
+                        const normalized_g = std > 0 ? (abs_g - mean) / std : 0;
+                        const theta = 0.7 * (1 / (1 + Math.exp(-alpha * normalized_g))) +
+                                    0.3 * (Math.abs(weight[i][j]) / (this.#regularizationParams[weightType]?.scale || 1));
+                        const decay = Math.min(adjustedLambda * theta, 0.9);
+                        if (Math.abs(weight[i][j]) > dynamicSmall) {
+                            weight[i][j] *= (1 - decay);
+                        }
+                        if (Math.abs(weight[i][j]) < dynamicMin) {
+                            weight[i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                        }
+                    } else {
+                        weight[i][j] = 0;
+                    }
+                }
+            }
+        } else if (isMatrix) {
+            for (let i = 0; i < weight.length; i++) {
+                for (let j = 0; j < weight[i].length; j++) {
+                    if (isValidNumber(weight[i][j]) && isValidNumber(grad[i][j])) {
+                        const abs_g = Math.abs(grad[i][j]);
+                        const normalized_g = std > 0 ? (abs_g - mean) / std : 0;
+                        const theta = 0.7 * (1 / (1 + Math.exp(-alpha * normalized_g))) +
+                                    0.3 * (Math.abs(weight[i][j]) / (this.#regularizationParams[weightType]?.scale || 1));
+                        const decay = Math.min(lambda * theta, 0.9);
+                        if (Math.abs(weight[i][j]) > dynamicSmall) {
+                            weight[i][j] *= (1 - decay);
+                        }
+                        if (Math.abs(weight[i][j]) < dynamicMin) {
+                            weight[i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                        }
+                    } else {
+                        weight[i][j] = 0;
+                    }
+                }
+            }
+        } else {
+            for (let i = 0; i < weight.length; i++) {
+                if (isValidNumber(weight[i]) && isValidNumber(grad[i])) {
+                    const abs_g = Math.abs(grad[i]);
+                    const normalized_g = std > 0 ? (abs_g - mean) / std : 0;
+                    const theta = 0.7 * (1 / (1 + Math.exp(-alpha * normalized_g))) +
+                                0.3 * (Math.abs(weight[i]) / (this.#regularizationParams[weightType]?.scale || 1));
+                    const decay = Math.min(lambda * theta, 0.9);
+                    if (Math.abs(weight[i]) > dynamicSmall) {
+                        weight[i] *= (1 - decay);
+                    }
+                    if (Math.abs(weight[i]) < dynamicMin) {
+                        weight[i] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                    }
+                } else {
+                    weight[i] = 0;
+                }
             }
         }
-        gini = sum > 0 ? gini / (2 * n * sum) : 0;
-        return 1 - gini;
-    }
-
-    #computeWeightedSum(outputs, weights) {
-        return outputs.reduce((sum, out, idx) => {
-            if (isValidNumber(out) && isValidNumber(weights[idx])) {
-                return sum + out * weights[idx];
-            }
-            return sum;
-        }, 0);
     }
 
     //--------------------------------
 
-    #scaleGradients(idx) {
-        const matrixPercentile = 0.95;
-        const vectorPercentile = 0.95;
-        const maxScaleFactor = 10.0;
-        const minScaleFactor = 0.1;
+    #scaleGradients (idx) {
+        const baseAttentionPercentile = 0.95;
+        const baseFfnPercentile = 0.9;
+        const baseVectorPercentile = 0.8;
 
-        const computePercentile = (norms, percentile) => {
-            const sortedNorms = [...norms].sort((a, b) => a - b);
-            const index = Math.floor(percentile * (sortedNorms.length - 1));
-            return sortedNorms[index] || 1.0;
+        const trustVariance = this.#computeVariance(this.#trustScoresHistory[idx].slice(-10));
+        const lossVariance = this.#computeVariance(this.#historicalPerformance[idx].slice(-10));
+        const stabilityMetric = 0.5 * lossVariance + 0.5 * trustVariance;
+
+        const minScaleFactor = Math.max(0.01, 0.1 / (Math.sqrt(this.#ensembleSize) * (1 + stabilityMetric)));
+
+        const emaBetaShort = Math.min(0.95, Math.max(0.8, this.#computeKernelRate(this.#historicalPerformance[idx])));
+        const emaBetaLong = Math.min(0.999, Math.max(0.95, this.#computeKernelRate(this.#trustScoresHistory[idx])));
+
+        const fractalDim = this.#computeFractalDimension(this.#historicalPerformance[idx].slice(-10));
+        const componentWeights = {
+            ensemble: Math.min(0.4, Math.max(0.1, 0.2 * (1 + 0.1 * fractalDim))),
+            specialization: Math.min(0.4, Math.max(0.1, 0.2 * (1 + 0.15 * fractalDim * Math.min(this.#specializationScores[idx], 10)))),
+            trust: Math.min(0.4, Math.max(0.1, 0.2 * (1 - 0.1 * fractalDim))),
+            historicalPerformance: Math.min(0.4, Math.max(0.1, 0.2 * (1 + 0.05 * fractalDim))),
+            performance: Math.min(0.4, Math.max(0.1, 0.2 * (1 + 0.05 * fractalDim)))
         };
+        const totalWeight = Object.values(componentWeights).reduce((sum, w) => sum + w, 0);
+        Object.keys(componentWeights).forEach(key => {
+            componentWeights[key] /= Math.max(totalWeight, 1e-8);
+        });
 
-        const matrixNorms = [];
+        const trust_ema = this.#computeDualEMA(this.#trustScoresHistory[idx], emaBetaShort, emaBetaLong);
+        const perf_ema = this.#computeDualEMA(this.#historicalPerformance[idx], emaBetaShort, emaBetaLong);
+
+        const robustnessFactor = Math.min(0.9, Math.max(0.1, 0.5 + 0.5 * (trust_ema / (Math.abs(trust_ema) + Math.abs(perf_ema) + 1e-10))));
+        const compositeScore = (
+            this.#ensembleWeights[idx] * componentWeights.ensemble +
+            this.#specializationScores[idx] * componentWeights.specialization +
+            trust_ema * componentWeights.trust +
+            perf_ema * componentWeights.historicalPerformance +
+            this.#performanceScores[idx] * componentWeights.performance
+        ) * robustnessFactor;
+
+        const totalCompositeScore = this.#ensembleWeights.reduce((sum, _, i) => {
+            const memberTrustEma = this.#computeDualEMA(this.#trustScoresHistory[i], emaBetaShort, emaBetaLong);
+            const memberPerfEma = this.#computeDualEMA(this.#historicalPerformance[i], emaBetaShort, emaBetaLong);
+            const memberRobustness = Math.min(0.9, Math.max(0.1, 0.5 + 0.5 * (memberTrustEma / (Math.abs(memberTrustEma) + Math.abs(memberPerfEma) + 1e-10))));
+            return sum + (
+                this.#ensembleWeights[i] * componentWeights.ensemble +
+                this.#specializationScores[i] * componentWeights.specialization +
+                memberTrustEma * componentWeights.trust +
+                memberPerfEma * componentWeights.historicalPerformance +
+                this.#performanceScores[i] * componentWeights.performance
+            ) * memberRobustness;
+        }, 0);
+
+        const normalizedScore = Math.min(1, Math.max(0, 0.8 * (compositeScore / Math.max(totalCompositeScore, 1e-8)) + 0.2 / this.#ensembleSize));
+        const ntkStability = this.#computeNTKStability(this.#historicalPerformance[idx].slice(-10), lossVariance);
+        const weightFactorMin = 0.5 / (1 + lossVariance);
+        const weightFactorMax = 1 + this.#ensembleSize / (10 * (1 + lossVariance));
+        const weightFactor = Math.min(weightFactorMax, Math.max(weightFactorMin, normalizedScore * this.#ensembleSize * ntkStability));
+
+        const sigmoidSlope = 5 / (1 + trustVariance);
+        const alpha = Math.min(1, Math.max(0.1, 0.5 + 0.5 * (1 / (1 + Math.exp(sigmoidSlope * trust_ema)) - 0.5)));
+
+        const dynamicK = 4 / (1 + trustVariance);
+        const decay = Math.max(0.1, Math.min(1, 1 / (1 + dynamicK * trustVariance)));
+
+        const attentionMatrixNorms = [];
+        const ffnMatrixNorms = [];
         const vectorNorms = [];
 
         const outputWeightsGrad = this.#gradientAccumulation[idx].outputWeights;
-        matrixNorms.push(this.#computeSpectralNorm(outputWeightsGrad));
-
+        ffnMatrixNorms.push(this.#computeSpectralNorm(outputWeightsGrad));
         const outputBiasGrad = this.#gradientAccumulation[idx].outputBias;
         vectorNorms.push(this.#computeGradientNorm(outputBiasGrad, false));
 
         for (let layer = 0; layer < this.#numLayers; layer++) {
             ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                 const gradMatrix = this.#gradientAccumulation[idx].attentionWeights[layer][key];
-                matrixNorms.push(this.#computeSpectralNorm(gradMatrix));
+                attentionMatrixNorms.push(this.#computeSpectralNorm(gradMatrix));
             });
 
             ['W1', 'W2'].forEach(key => {
                 const gradMatrix = this.#gradientAccumulation[idx].ffnWeights[layer][key];
-                matrixNorms.push(this.#computeSpectralNorm(gradMatrix));
+                ffnMatrixNorms.push(this.#computeSpectralNorm(gradMatrix));
             });
 
             ['b1', 'b2'].forEach(key => {
@@ -1782,153 +2323,49 @@ class HiveMind {
 
         const attentionBiasGrad = this.#gradientAccumulation[idx].attentionBias;
         vectorNorms.push(this.#computeGradientNorm(attentionBiasGrad, false));
-
         const attentionWeightMatrixGrad = this.#gradientAccumulation[idx].attentionWeightMatrix;
         vectorNorms.push(this.#computeGradientNorm(attentionWeightMatrixGrad, false));
 
-        const matrixThreshold = Math.min(computePercentile(matrixNorms, matrixPercentile), 1.0);
-        const vectorThreshold = Math.min(computePercentile(vectorNorms, vectorPercentile), 1.0);
+        const sparseThreshold = this.#computeSparseThreshold([...attentionMatrixNorms, ...ffnMatrixNorms, ...vectorNorms]);
 
-        let spectralNorm = this.#computeSpectralNorm(outputWeightsGrad);
-        if (spectralNorm > matrixThreshold) {
-            const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, matrixThreshold / spectralNorm));
-            for (let i = 0; i < outputWeightsGrad.length; i++) {
-                for (let j = 0; j < outputWeightsGrad[i].length; j++) {
-                    outputWeightsGrad[i][j] *= scale;
-                }
-            }
-        }
+        const attentionPercentile = this.#computeDynamicPercentile(attentionMatrixNorms, baseAttentionPercentile);
+        const ffnPercentile = this.#computeDynamicPercentile(ffnMatrixNorms, baseFfnPercentile);
+        const vectorPercentile = this.#computeDynamicPercentile(vectorNorms, baseVectorPercentile);
+        const attentionMatrixThreshold = Math.min(this.#computePercentile(attentionMatrixNorms, attentionPercentile), 1.0) * weightFactor;
+        const ffnMatrixThreshold = Math.min(this.#computePercentile(ffnMatrixNorms, ffnPercentile), 1.0) * weightFactor;
+        const vectorThreshold = Math.min(this.#computePercentile(vectorNorms, vectorPercentile), 1.0) * weightFactor;
 
-        let l2Norm = this.#computeGradientNorm(outputBiasGrad, false);
-        if (l2Norm > vectorThreshold) {
-            const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
-            for (let i = 0; i < outputBiasGrad.length; i++) {
-                outputBiasGrad[i] *= scale;
-            }
-        }
+        this.#scaleGradientMatrix(outputWeightsGrad, ffnMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
+        this.#scaleGradientVector(outputBiasGrad, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
 
         for (let layer = 0; layer < this.#numLayers; layer++) {
             ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
-                const gradMatrix = this.#gradientAccumulation[idx].attentionWeights[layer][key];
-                spectralNorm = this.#computeSpectralNorm(gradMatrix);
-                if (spectralNorm > matrixThreshold) {
-                    const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, matrixThreshold / spectralNorm));
-                    for (let i = 0; i < gradMatrix.length; i++) {
-                        for (let j = 0; j < gradMatrix[i].length; j++) {
-                            gradMatrix[i][j] *= scale;
-                        }
-                    }
-                }
+                this.#scaleGradientMatrix(this.#gradientAccumulation[idx].attentionWeights[layer][key], attentionMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             });
 
             ['W1', 'W2'].forEach(key => {
-                const gradMatrix = this.#gradientAccumulation[idx].ffnWeights[layer][key];
-                spectralNorm = this.#computeSpectralNorm(gradMatrix);
-                if (spectralNorm > matrixThreshold) {
-                    const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, matrixThreshold / spectralNorm));
-                    for (let i = 0; i < gradMatrix.length; i++) {
-                        for (let j = 0; j < gradMatrix[i].length; j++) {
-                            gradMatrix[i][j] *= scale;
-                        }
-                    }
-                }
+                this.#scaleGradientMatrix(this.#gradientAccumulation[idx].ffnWeights[layer][key], ffnMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             });
 
             ['b1', 'b2'].forEach(key => {
-                const gradVector = this.#gradientAccumulation[idx].ffnWeights[layer][key];
-                l2Norm = this.#computeGradientNorm(gradVector, false);
-                if (l2Norm > vectorThreshold) {
-                    const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
-                    for (let i = 0; i < gradVector.length; i++) {
-                        gradVector[i] *= scale;
-                    }
-                }
+                this.#scaleGradientVector(this.#gradientAccumulation[idx].ffnWeights[layer][key], vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             });
 
             ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
-                const gradVector = this.#gradientAccumulation[idx].layerNormWeights[layer][key];
-                l2Norm = this.#computeGradientNorm(gradVector, false);
-                if (l2Norm > vectorThreshold) {
-                    const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
-                    for (let i = 0; i < gradVector.length; i++) {
-                        gradVector[i] *= scale;
-                    }
-                }
+                this.#scaleGradientVector(this.#gradientAccumulation[idx].layerNormWeights[layer][key], vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             });
         }
 
-        l2Norm = this.#computeGradientNorm(attentionBiasGrad, false);
-        if (l2Norm > vectorThreshold) {
-            const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
-            for (let i = 0; i < attentionBiasGrad.length; i++) {
-                attentionBiasGrad[i] *= scale;
-            }
-        }
-
-        l2Norm = this.#computeGradientNorm(attentionWeightMatrixGrad, false);
-        if (l2Norm > vectorThreshold) {
-            const scale = Math.max(minScaleFactor, Math.min(maxScaleFactor, vectorThreshold / l2Norm));
-            for (let i = 0; i < attentionWeightMatrixGrad.length; i++) {
-                attentionWeightMatrixGrad[i] *= scale;
-            }
-        }
+        this.#scaleGradientVector(attentionBiasGrad, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
+        this.#scaleGradientVector(attentionWeightMatrixGrad, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
     }
 
-    #regulateWeightsAndMemory() {
-        let diversityPenalty = 0.002;
-        let similarityThreshold = 0.5;
-        const alpha = 2;
-        const beta = 0.2;
-
-        const minWeightThreshold = 1e-5;
-        const smallWeightThreshold = 1e-4;
-        const noiseScale = 0.002;
-
-        const maxDecay = 1.0;
-        const minDecay = 0.6;
-        const decayRate = 0.15;
-        const layerDecaySchedule = Array.from({ length: this.#numLayers }, (_, i) =>
-            minDecay + (maxDecay - minDecay) * Math.exp(-decayRate * i)
-        );
-
-        const baseThresholds = {
-            'outputWeights': 5.0,
-            'attentionWeights': 3.5,
-            'ffnWeights': 4.0,
-            'outputBias': 3.0,
-            'ffnBias1': 2.5,
-            'ffnBias2': 2.5,
-            'attentionBias': 2.2,
-            'layerNormWeights': 2.0,
-            'attentionWeightMatrix': 3.5,
-            'specializationWeights': 2.5
-        };
-
-        const decayFactors = {
-            'Wq': 0.6,
-            'Wk': 0.6,
-            'Wv': 0.6,
-            'Wo': 0.6,
-            'W1': 0.8,
-            'W2': 0.8,
-            'b1': 0.3,
-            'b2': 0.3,
-            'outputWeights': 0.7,
-            'outputBias': 0.3,
-            'gamma1': 0.3,
-            'beta1': 0.3,
-            'gamma2': 0.3,
-            'beta2': 0.3,
-            'attentionBias': 0.3,
-            'attentionWeightMatrix': 0.6,
-            'specializationWeights': 0.4
-        };
-
+    #regulateWeightsAndMemory () {
         const diversityLoss = this.#computeGiniCoefficient(this.#transformers.map(t => t.outputWeights.flat()));
         const avgPerformance = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0.5), 0) / this.#ensembleSize;
         
-        diversityPenalty = 0.002 * (1 + Math.min(diversityLoss, 1.0));
-        similarityThreshold = 0.5 * (1 - 0.2 * avgPerformance);
+        let diversityPenalty = 0.002 * (1 + Math.min(diversityLoss, 1.0));
+        let similarityThreshold = 0.5 * (1 - 0.2 * avgPerformance);
 
         for (let t = 0; t < this.#ensembleSize; t++) {
             if (
@@ -1953,11 +2390,11 @@ class HiveMind {
                 }
             }
             const memoryVariance = count > 0 ? varianceSum / count : 1;
-            const dynamicDecay = Math.min(0.9, Math.max(0.8, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance) * (1 + 0.2 * (1 - avgPerformance))));
-            const dynamicCutoff = Math.max(1e-5, 1e-3 * memoryVariance);
+            const dynamicDecay = Math.min(this.#regularizationParams['attentionMemory'].decayMax, Math.max(this.#regularizationParams['attentionMemory'].decayMin, 1 - (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) * Math.sqrt(memoryVariance) * (1 + 0.2 * (1 - avgPerformance))));
+            const dynamicCutoff = Math.max(this.#regularizationParams['attentionMemory'].cutoff, 1e-3 * memoryVariance);
             const performanceFactor = isValidNumber(this.#performanceScores[t]) ? this.#performanceScores[t] : 0.5;
             const specializationFactor = isValidNumber(this.#specializationScores[t]) ? 1 + this.#specializationScores[t] * (isValidNumber(this.#swarmIntelligenceFactor) ? this.#swarmIntelligenceFactor : 0.1) : 1;
-            const adaptiveScale = Math.min(1.3, Math.max(0.7, performanceFactor * specializationFactor));
+            const adaptiveScale = Math.min(this.#regularizationParams['attentionMemory'].scaleMax, Math.max(this.#regularizationParams['attentionMemory'].scaleMin, performanceFactor * specializationFactor));
 
             for (let i = 0; i < this.#contextWindow; i++) {
                 const sequenceMatrix = this.#attentionMemory[t][i];
@@ -1972,7 +2409,7 @@ class HiveMind {
                             value = dynamicDecay * value + (1 - dynamicDecay) * prevValue;
 
                             if (Math.abs(value) > dynamicCutoff) {
-                                this.#attentionMemory[t][i][j][k] = value + (Math.random() - 0.5) * noiseScale;
+                                this.#attentionMemory[t][i][j][k] = value + (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * this.#regularizationParams['attentionMemory'].noise;
                             }
                         } else {
                             this.#attentionMemory[t][i][j][k] = 0;
@@ -1987,174 +2424,65 @@ class HiveMind {
             const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
             const specializationFactor = isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0.5;
             const trustHistory = this.#trustScoresHistory?.[idx];
-            const trust = Array.isArray(trustHistory) && trustHistory.length > 0
-                ? trustHistory[trustHistory.length - 1]
-                : 0.5;
-            const adaptiveDecayRate = this.#weightDecayRate * Math.exp(-1.5 * performanceFactor);
+            const trust = Math.max(0.01, Math.min(1.0, Array.isArray(trustHistory) && trustHistory.length > 0 ? trustHistory[trustHistory.length - 1] : 0.5));
 
-            const applyWeightDecay = (matrixOrVector, isMatrix = true, weightType = 'generic', layer = null) => {
-                let lambda = adaptiveDecayRate;
-                if (layer !== null && layer < layerDecaySchedule.length) {
-                    lambda *= layerDecaySchedule[layer];
-                }
-                lambda *= decayFactors[weightType] || 1.0;
+            this.#applyMatrixScaling(transformer.outputWeights, this.#regularizationParams['outputWeights'].scale, diversityLoss);
+            this.#applyWeightDecay(idx, transformer.outputWeights, true, 'outputWeights', null, diversityPenalty, similarityThreshold);
 
-                const grad = this.#gradientAccumulation[idx][weightType];
-                if (!grad) {
-                    const decay = lambda;
-                    if (isMatrix) {
-                        for (let i = 0; i < matrixOrVector.length; i++) {
-                            for (let j = 0; j < matrixOrVector[i].length; j++) {
-                                if (isValidNumber(matrixOrVector[i][j])) {
-                                    if (Math.abs(matrixOrVector[i][j]) > smallWeightThreshold) {
-                                        matrixOrVector[i][j] *= (1 - decay);
-                                    }
-                                    if (Math.abs(matrixOrVector[i][j]) < minWeightThreshold) {
-                                        matrixOrVector[i][j] = (Math.random() - 0.5) * noiseScale;
-                                    }
-                                } else {
-                                    matrixOrVector[i][j] = 0;
-                                }
-                            }
-                        }
-                    } else {
-                        for (let i = 0; i < matrixOrVector.length; i++) {
-                            if (isValidNumber(matrixOrVector[i])) {
-                                if (Math.abs(matrixOrVector[i]) > smallWeightThreshold) {
-                                    matrixOrVector[i] *= (1 - decay);
-                                }
-                                if (Math.abs(matrixOrVector[i]) < minWeightThreshold) {
-                                    matrixOrVector[i] = (Math.random() - 0.5) * noiseScale;
-                                }
-                            } else {
-                                matrixOrVector[i] = 0;
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                const { mean, std } = this.#computeGradientStats(grad, isMatrix);
-
-                if (isMatrix && ['Wq', 'Wk', 'Wv'].includes(weightType) && layer !== null) {
-                    const headSimilarities = this.#computeHeadSimilarities(
-                        transformer.attentionWeights[layer],
-                        this.#numHeads,
-                        this.#hiddenSize,
-                        ['Wq', 'Wk', 'Wv']
-                    );
-                    const headSize = this.#hiddenSize / this.#numHeads;
-
-                    for (let i = 0; i < matrixOrVector.length; i++) {
-                        const headIdx = Math.floor(i / headSize);
-                        let adjustedLambda = lambda * (1 + beta * headSimilarities[headIdx]);
-                        if (headSimilarities[headIdx] > similarityThreshold) {
-                            adjustedLambda *= (1 + diversityPenalty * (headSimilarities[headIdx] - similarityThreshold));
-                        }
-                        for (let j = 0; j < matrixOrVector[i].length; j++) {
-                            if (isValidNumber(matrixOrVector[i][j]) && isValidNumber(grad[i][j])) {
-                                const abs_g = Math.abs(grad[i][j]);
-                                const normalized_g = std > 0 ? (abs_g - mean) / std : 0;
-                                const theta = 1 / (1 + Math.exp(-alpha * normalized_g));
-                                const decay = adjustedLambda * theta;
-                                if (Math.abs(matrixOrVector[i][j]) > smallWeightThreshold) {
-                                    matrixOrVector[i][j] *= (1 - decay);
-                                }
-                                if (Math.abs(matrixOrVector[i][j]) < minWeightThreshold) {
-                                    matrixOrVector[i][j] = (Math.random() - 0.5) * noiseScale;
-                                }
-                            } else {
-                                matrixOrVector[i][j] = 0;
-                            }
-                        }
-                    }
-                } else if (isMatrix) {
-                    for (let i = 0; i < matrixOrVector.length; i++) {
-                        for (let j = 0; j < matrixOrVector[i].length; j++) {
-                            if (isValidNumber(matrixOrVector[i][j]) && isValidNumber(grad[i][j])) {
-                                const abs_g = Math.abs(grad[i][j]);
-                                const normalized_g = std > 0 ? (abs_g - mean) / std : 0;
-                                const theta = 1 / (1 + Math.exp(-alpha * normalized_g));
-                                const decay = lambda * theta;
-                                if (Math.abs(matrixOrVector[i][j]) > smallWeightThreshold) {
-                                    matrixOrVector[i][j] *= (1 - decay);
-                                }
-                                if (Math.abs(matrixOrVector[i][j]) < minWeightThreshold) {
-                                    matrixOrVector[i][j] = (Math.random() - 0.5) * noiseScale;
-                                }
-                            } else {
-                                matrixOrVector[i][j] = 0;
-                            }
-                        }
-                    }
-                } else {
-                    for (let i = 0; i < matrixOrVector.length; i++) {
-                        if (isValidNumber(matrixOrVector[i]) && isValidNumber(grad[i])) {
-                            const abs_g = Math.abs(grad[i]);
-                            const normalized_g = std > 0 ? (abs_g - mean) / std : 0;
-                            const theta = 1 / (1 + Math.exp(-alpha * normalized_g));
-                            const decay = lambda * theta;
-                            if (Math.abs(matrixOrVector[i]) > smallWeightThreshold) {
-                                matrixOrVector[i] *= (1 - decay);
-                            }
-                            if (Math.abs(matrixOrVector[i]) < minWeightThreshold) {
-                                matrixOrVector[i] = (Math.random() - 0.5) * noiseScale;
-                            }
-                        } else {
-                            matrixOrVector[i] = 0;
-                        }
-                    }
-                }
-            };
-
-            this.#applyMatrixScaling(transformer.outputWeights, baseThresholds['outputWeights'], diversityLoss);
-            applyWeightDecay(transformer.outputWeights, true, 'outputWeights');
-
-            this.#applyVectorScaling(transformer.outputBias, baseThresholds['outputBias'], diversityLoss);
-            applyWeightDecay(transformer.outputBias, false, 'outputBias');
+            this.#applyVectorScaling(transformer.outputBias, this.#regularizationParams['outputBias'].scale, diversityLoss);
+            this.#applyWeightDecay(idx, transformer.outputBias, false, 'outputBias', null, diversityPenalty, similarityThreshold);
 
             for (let layer = 0; layer < this.#numLayers; layer++) {
+                const headSimilarities = this.#computeHeadSimilarities(
+                    transformer.attentionWeights[layer],
+                    this.#numHeads,
+                    this.#hiddenSize,
+                    ['Wq', 'Wk', 'Wv']
+                );
+
                 ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                     const weightMatrix = transformer.attentionWeights[layer][key];
-                    this.#applyMatrixScaling(weightMatrix, baseThresholds['attentionWeights'], diversityLoss);
-                    applyWeightDecay(weightMatrix, true, key, layer);
+                    this.#applyMatrixScaling(weightMatrix, this.#regularizationParams[key].scale, diversityLoss);
+                    this.#applyWeightDecay(idx, weightMatrix, true, key, 'attentionWeights', diversityPenalty, similarityThreshold, layer, headSimilarities);
                 });
 
                 ['W1', 'W2'].forEach(key => {
                     const weightMatrix = transformer.ffnWeights[layer][key];
-                    this.#applyMatrixScaling(weightMatrix, baseThresholds['ffnWeights'], diversityLoss);
-                    applyWeightDecay(weightMatrix, true, key, layer);
+                    this.#applyMatrixScaling(weightMatrix, this.#regularizationParams[key].scale, diversityLoss);
+                    this.#applyWeightDecay(idx, weightMatrix, true, key, 'ffnWeights', diversityPenalty, similarityThreshold, layer);
                 });
 
                 ['b1', 'b2'].forEach(key => {
                     const biasVector = transformer.ffnWeights[layer][key];
-                    this.#applyVectorScaling(biasVector, baseThresholds[key === 'b1' ? 'ffnBias1' : 'ffnBias2'], diversityLoss);
-                    applyWeightDecay(biasVector, false, key, layer);
+                    this.#applyVectorScaling(biasVector, this.#regularizationParams[key].scale, diversityLoss);
+                    this.#applyWeightDecay(idx, biasVector, false, key, 'ffnWeights', diversityPenalty, similarityThreshold, layer);
                 });
 
                 ['gamma1', 'beta1', 'gamma2', 'beta2'].forEach(key => {
                     const normVector = transformer.layerNormWeights[layer][key];
-                    this.#applyVectorScaling(normVector, baseThresholds['layerNormWeights'], diversityLoss);
-                    applyWeightDecay(normVector, false, key, layer);
+                    this.#applyVectorScaling(normVector, this.#regularizationParams[key].scale, diversityLoss);
+                    this.#applyWeightDecay(idx, normVector, false, key, 'layerNormWeights', diversityPenalty, similarityThreshold, layer);
                 });
             }
 
-            this.#applyVectorScaling(this.#attentionBias[idx], baseThresholds['attentionBias'], diversityLoss);
-            applyWeightDecay(this.#attentionBias[idx], false, 'attentionBias');
+            this.#applyVectorScaling(this.#attentionBias[idx], this.#regularizationParams['attentionBias'].scale, diversityLoss);
+            this.#applyWeightDecay(idx, this.#attentionBias[idx], false, 'attentionBias', null, diversityPenalty, similarityThreshold);
 
-            this.#applyVectorScaling(this.#attentionWeightMatrix[idx], baseThresholds['attentionWeightMatrix'], diversityLoss);
-            applyWeightDecay(this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix');
+            this.#applyVectorScaling(this.#attentionWeightMatrix[idx], this.#regularizationParams['attentionWeightMatrix'].scale, diversityLoss);
+            this.#applyWeightDecay(idx, this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix', null, diversityPenalty, similarityThreshold);
 
-            const specDecayRate = this.#weightDecayRate * Math.exp(-1.5 * specializationFactor);
+            const specDecayRate = Math.min(this.#weightDecayRate * Math.exp(-1.5 * specializationFactor), 0.9);
             for (let i = 0; i < this.#hiddenSize; i++) {
                 for (let j = 0; j < this.#hiddenSize; j++) {
                     if (isValidNumber(this.#specializationWeights[idx][i][j])) {
                         const weight = this.#specializationWeights[idx][i][j];
-                        if (Math.abs(weight) > smallWeightThreshold) {
+                        const dynamicSpecMin = this.#regularizationParams['specializationWeights'].min * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust));
+                        const dynamicSpecSmall = this.#regularizationParams['specializationWeights'].small * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust));
+                        if (Math.abs(weight) > dynamicSpecSmall) {
                             this.#specializationWeights[idx][i][j] *= (1 - specDecayRate);
                         }
-                        if (Math.abs(weight) < minWeightThreshold) {
-                            this.#specializationWeights[idx][i][j] = (Math.random() - 0.5) * noiseScale;
+                        if (Math.abs(weight) < dynamicSpecMin) {
+                            this.#specializationWeights[idx][i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * this.#regularizationParams['specializationWeights'].noise;
                         }
                     } else {
                         this.#specializationWeights[idx][i][j] = 0;
@@ -2164,7 +2492,7 @@ class HiveMind {
 
             const specMatrix = this.#specializationWeights[idx];
             const spectralNorm = this.#computeSpectralNorm(specMatrix);
-            const specThreshold = baseThresholds['specializationWeights'] * (1 + 0.05 * diversityLoss) * (1 + 0.1 * trust);
+            const specThreshold = this.#regularizationParams['specializationWeights'].scale * (1 + 0.05 * diversityLoss) * (1 + 0.1 * trust);
             if (spectralNorm > specThreshold) {
                 const scale = specThreshold / spectralNorm;
                 for (let j = 0; j < specMatrix.length; j++) {
@@ -2178,12 +2506,16 @@ class HiveMind {
             for (let otherIdx = 0; otherIdx < this.#ensembleSize; otherIdx++) {
                 if (otherIdx === idx) continue;
 
+                const otherTrustHistory = this.#trustScoresHistory?.[otherIdx];
+                const otherTrust = Math.max(0.01, Math.min(1.0, Array.isArray(otherTrustHistory) && otherTrustHistory.length > 0 ? otherTrustHistory[otherTrustHistory.length - 1] : 0.5));
+                const trustFactor = Math.max(0.05, Math.min(0.95, otherTrust / (trust + otherTrust + 1e-6)));
+
                 const similarityOutput = this.#computeWeightSimilarity(
                     transformer.outputWeights,
                     this.#transformers[otherIdx].outputWeights
                 );
                 if (similarityOutput > similarityThreshold) {
-                    const penalty = diversityPenalty * (similarityOutput - similarityThreshold);
+                    const penalty = diversityPenalty * (similarityOutput - similarityThreshold) * (1 + 0.5 * trustFactor);
                     this.#applyOrthogonalization(
                         transformer.outputWeights,
                         this.#transformers[otherIdx].outputWeights,
@@ -2196,7 +2528,7 @@ class HiveMind {
                     this.#attentionBias[otherIdx]
                 );
                 if (similarityAttentionBias > similarityThreshold) {
-                    const penalty = diversityPenalty * (similarityAttentionBias - similarityThreshold);
+                    const penalty = diversityPenalty * (similarityAttentionBias - similarityThreshold) * (1 + 0.5 * trustFactor);
                     this.#applyOrthogonalization(
                         this.#attentionBias[idx],
                         this.#attentionBias[otherIdx],
@@ -2209,7 +2541,7 @@ class HiveMind {
                     this.#attentionWeightMatrix[otherIdx]
                 );
                 if (similarityAttentionWeightMatrix > similarityThreshold) {
-                    const penalty = diversityPenalty * (similarityAttentionWeightMatrix - similarityThreshold);
+                    const penalty = diversityPenalty * (similarityAttentionWeightMatrix - similarityThreshold) * (1 + 0.5 * trustFactor);
                     this.#applyOrthogonalization(
                         this.#attentionWeightMatrix[idx],
                         this.#attentionWeightMatrix[otherIdx],
@@ -2223,7 +2555,7 @@ class HiveMind {
                         const otherWeightMatrix = this.#transformers[otherIdx].attentionWeights[layer][key];
                         const similarity = this.#computeWeightSimilarity(weightMatrix, otherWeightMatrix);
                         if (similarity > similarityThreshold) {
-                            const penalty = diversityPenalty * (similarity - similarityThreshold);
+                            const penalty = diversityPenalty * (similarity - similarityThreshold) * (1 + 0.5 * trustFactor);
                             this.#applyOrthogonalization(weightMatrix, otherWeightMatrix, penalty);
                         }
                     });
@@ -2233,7 +2565,7 @@ class HiveMind {
                         const otherWeightMatrix = this.#transformers[otherIdx].ffnWeights[layer][key];
                         const similarity = this.#computeWeightSimilarity(weightMatrix, otherWeightMatrix);
                         if (similarity > similarityThreshold) {
-                            const penalty = diversityPenalty * (similarity - similarityThreshold);
+                            const penalty = diversityPenalty * (similarity - similarityThreshold) * (1 + 0.5 * trustFactor);
                             this.#applyOrthogonalization(weightMatrix, otherWeightMatrix, penalty);
                         }
                     });
@@ -2244,7 +2576,7 @@ class HiveMind {
 
     //--------------------------------
 
-    #distillKnowledge(outputs, target) {
+    #distillKnowledge (outputs, target) {
         if (
             !Array.isArray(outputs) ||
             outputs.length !== this.#ensembleSize ||
@@ -2626,7 +2958,7 @@ class HiveMind {
 
     //--------------------------------
 
-    predict(inputs) {
+    predict (inputs) {
         if ( !Array.isArray(inputs) || inputs.length !== this.#inputSize || !inputs.every(isValidNumber) ) { return 0 }
 
         const outputs = this.#transformers.map((_, idx) => this.#processTransformer(inputs, idx));
@@ -2639,8 +2971,10 @@ class HiveMind {
         return this.#sigmoid(isValidNumber(finalOutput) ? finalOutput : 0);
     }
 
-    train(inputs, target) {
+    train (inputs, target) {
         if ( !Array.isArray(inputs) || inputs.length !== this.#inputSize || !inputs.every(isValidNumber) || !isValidNumber(target) ) { return }
+
+        this.#trainingStepCount++;
 
         const linearOutputs = [];
         const layerOutputs = this.#transformers.map(() => []);
@@ -2675,46 +3009,37 @@ class HiveMind {
             }
         }
 
-        for (let t = 0; t < this.#ensembleSize; t++) {
-            const grad = dL_d_scores[t] / this.#hiddenSize;
-            for (let k = 0; k < this.#hiddenSize; k++) {
-                this.#gradientAccumulation[t].attentionBias[k] += grad;
-                const inputFeatures = inputs.map(x =>
-                    Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
-                );
-                for (let i = 0; i < this.#inputSize; i++) {
-                    if (isValidNumber(inputFeatures[i][k])) {
-                        this.#gradientAccumulation[t].attentionWeightMatrix[k] += grad * inputFeatures[i][k];
-                    }
-                }
-            }
-        }
-
-        this.#performanceScores = this.#performanceScores.map((score, idx) => {
-            const individualProbability = this.#sigmoid(linearOutputs[idx]);
-            const individualError = Math.abs(target - individualProbability);
-            const newScore = 0.9 * score + 0.1 * (1 - individualError);
-            this.#historicalPerformance[idx].push(isValidNumber(newScore) ? newScore : 0);
-            if (this.#historicalPerformance[idx].length > this.#maxPerformanceHistory) {
-                this.#historicalPerformance[idx].shift();
-            }
-            return isValidNumber(newScore) ? newScore : 0;
-        });
-
-        this.#agreementScores = this.#agreementScores.map((score, idx) => {
-            const individualProbability = this.#sigmoid(linearOutputs[idx]);
-            const agreement = 1 - Math.abs(individualProbability - finalProbability);
-            const newScore = 0.9 * score + 0.1 * (isValidNumber(agreement) ? agreement : 0);
-            return isValidNumber(newScore) ? newScore : 0;
-        });
-
-        this.#updateTrustScores();
+        this.#updatePerformanceScores(linearOutputs, target);
+        this.#updateAgreementScores(linearOutputs, finalProbability);
         this.#computeSpecializationScores(inputs, linearOutputs);
+        this.#updateTrustScores();
+        this.#adjustPerformanceScores();
+        this.#updateEnsembleWeights();
+        this.#normalizeEnsembleWeights();
         this.#updateAdaptiveLearningRates();
+
+        const inputFeatures = inputs.map(x =>
+            Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
+        );
 
         this.#transformers.forEach((transformer, idx) => {
             const adjustedLearningRate = this.#adaptiveLearningRate[idx];
             const delta = dL_d_output * adjustedLearningRate;
+
+            const attentionGrad = dL_d_scores[idx] / this.#hiddenSize;
+
+            for (let k = 0; k < this.#hiddenSize; k++) {
+                this.#gradientAccumulation[idx].attentionBias[k] += attentionGrad;
+                for (let i = 0; i < this.#inputSize; i++) {
+                    if (isValidNumber(inputFeatures[i][k])) {
+                        const specializationFactor = isValidNumber(this.#specializationScores[idx])
+                            ? 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor
+                            : 1;
+                        this.#gradientAccumulation[idx].attentionWeightMatrix[k] += (attentionGrad * inputFeatures[i][k] * specializationFactor) / (this.#inputSize + 1e-6);
+                    }
+                }
+            }
+
             let grad = Array(this.#hiddenSize).fill(0);
 
             for (let i = 0; i < this.#hiddenSize; i++) {
@@ -2850,10 +3175,15 @@ class HiveMind {
                 }
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
-                        const wqUpdate = qGrad.reduce((sum, row) => sum + (isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
-                        const wkUpdate = kGrad.reduce((sum, row) => sum + (isValidNumber(row[j]) && isValidNumber(normX[i % this.#inputSize][i]) ? row[j] * normX[i % this.#inputSize][i] : 0), 0);
-                        const wvUpdate = vGrad.reduce((sum, head) => sum + (isValidNumber(head[i % this.#inputSize][j % headSize]) ? head[i % this.#inputSize][j % headSize] : 0), 0);
+                        const wqUpdate = qGrad.reduce((sum, row, t) => sum + (isValidNumber(row[j]) && isValidNumber(normX[t][i]) ? row[j] * normX[t][i] : 0), 0);
+                        const wkUpdate = kGrad.reduce((sum, row, t) => sum + (isValidNumber(row[j]) && isValidNumber(normX[t][i]) ? row[j] * normX[t][i] : 0), 0);
+                        const wvUpdate = vGrad.reduce((sum, head, h) => 
+                            sum + head.reduce((innerSum, token, t) => 
+                                innerSum + (isValidNumber(token[j % headSize]) && isValidNumber(normX[t][i]) 
+                                    ? token[j % headSize] * normX[t][i] 
+                                    : 0), 0), 0);
                         const woUpdate = isValidNumber(woGrad[i][j]) ? woGrad[i][j] : 0;
+
                         const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
                             ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
                             : 1;
@@ -2895,12 +3225,24 @@ class HiveMind {
                         this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta) ? updateBeta : 0;
                     }
                 }
-                grad = qGrad[0];
+
+                grad = qGrad.reduce((acc, vec) => acc.map((v, i) => v + vec[i]), Array(qGrad[0].length).fill(0)).map(v => v / this.#inputSize);
             }
         });
 
         this.#transformers.forEach((transformer, idx) => {
+            if (!(this.#trainingStepCount % this.#gradientResetFrequency === 0)) { return }
+
             this.#scaleGradients(idx);
+
+            for (let k = 0; k < this.#hiddenSize; k++) {
+                if (isValidNumber(this.#gradientAccumulation[idx].attentionBias[k])) {
+                    this.#attentionBias[idx][k] -= this.#gradientAccumulation[idx].attentionBias[k];
+                }
+                if (isValidNumber(this.#gradientAccumulation[idx].attentionWeightMatrix[k])) {
+                    this.#attentionWeightMatrix[idx][k] -= this.#gradientAccumulation[idx].attentionWeightMatrix[k];
+                }
+            }
 
             for (let i = 0; i < this.#hiddenSize; i++) {
                 for (let j = 0; j < 1; j++) {
@@ -2970,18 +3312,7 @@ class HiveMind {
                         : 0;
                 }
             }
-
-            for (let k = 0; k < this.#hiddenSize; k++) {
-                if (isValidNumber(this.#gradientAccumulation[idx].attentionBias[k])) {
-                    this.#attentionBias[idx][k] -= this.#gradientAccumulation[idx].attentionBias[k];
-                }
-                if (isValidNumber(this.#gradientAccumulation[idx].attentionWeightMatrix[k])) {
-                    this.#attentionWeightMatrix[idx][k] -= this.#gradientAccumulation[idx].attentionWeightMatrix[k];
-                }
-            }
         });
-
-        this.#trainingStepCount++;
 
         if (this.#trainingStepCount % this.#distillationFrequency === 0) {
             this.#distillKnowledge(linearOutputs, target);
@@ -2991,12 +3322,14 @@ class HiveMind {
             this.#regulateWeightsAndMemory();
         }
 
-        this.#gradientAccumulation = this.#createWeightStructure();
+        if (this.#trainingStepCount % this.#gradientResetFrequency === 0) {
+            this.#gradientAccumulation = this.#setGradientStructure();
+        }
 
-        return this.#trainingStepCount
+        return this.#trainingStepCount;
     }
 
-    dumpState() {
+    dumpState () {
         return this.#saveState()
     }
 }
