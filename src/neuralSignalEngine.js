@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import Database from 'better-sqlite3';
 
 import HiveMind from './hiveMind.js';
@@ -51,9 +52,13 @@ class NeuralSignalEngine {
                 close REAL NOT NULL,
                 volume REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS trained_features (
+                encoding TEXT PRIMARY KEY
+            );
             CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
             CREATE INDEX IF NOT EXISTS idx_open_trades_stopLoss ON open_trades(stopLoss);
             CREATE INDEX IF NOT EXISTS idx_candles_timestamp ON candles(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_trained_features_encoding ON trained_features(encoding);
         `);
     }
 
@@ -137,8 +142,13 @@ class NeuralSignalEngine {
         const sortedData = [...data].sort((a, b) => a - b);
         const lowerIdx = Math.floor(lowerPercentile * sortedData.length);
         const upperIdx = Math.ceil(upperPercentile * sortedData.length) - 1;
-        let min = sortedData[lowerIdx];
-        let max = sortedData[upperIdx];
+        let min_h = sortedData[lowerIdx];
+        let max_h = sortedData[upperIdx];
+        
+        const recentMin = Math.min(...valuesToNormalize);
+        const recentMax = Math.max(...valuesToNormalize);
+        let min = Math.min(min_h, recentMin);
+        let max = Math.max(max_h, recentMax);
         
         if (max === min) {
             const median = sortedData[Math.floor(sortedData.length / 2)];
@@ -229,20 +239,34 @@ class NeuralSignalEngine {
         if (closedTrades.length > 0) {
             const transaction = this.#db.transaction(() => {
                 const deleteTradeStmt = this.#db.prepare(`DELETE FROM open_trades WHERE timestamp = ?`);
+                const checkEncodingStmt = this.#db.prepare(`SELECT encoding FROM trained_features WHERE encoding = ?`);
+                const insertEncodingStmt = this.#db.prepare(`INSERT INTO trained_features (encoding) VALUES (?)`);
 
                 let tradeCounter = 0;
                 for (const trade of closedTrades) {
                     tradeCounter++;
 
+                    const flatFeatures = trade.features.flat()
+                    const encodingString = `${flatFeatures.join(',')}|${trade.outcome}`;
+                    const encodingHash = crypto.createHash('sha256').update(encodingString).digest('hex');
+
+                    const existingEncoding = checkEncodingStmt.get(encodingHash);
+                    if (existingEncoding) {
+                        console.log(`Skipping training for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length} (duplicate encoding)`);
+                        keysToDelete.add(trade.timestamp);
+                        continue;
+                    }
+
                     console.log(`Training triggered for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length}`);
                     const startTime = process.hrtime();
-                    const trainingStep = this.#hivemind.train( trade.features.flat(), trade.outcome);
+                    const trainingStep = this.#hivemind.train(flatFeatures, trade.outcome);
                     const diff = process.hrtime(startTime);
                     const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
                     console.log(`Training complete (${trainingStep})! - Execution time: ${executionTime} seconds`);
 
                     this.#trainingStep = trainingStep;
 
+                    insertEncodingStmt.run(encodingHash);
                     keysToDelete.add(trade.timestamp);
 
                     if (cutoff !== null && this.#trainingStep === cutoff) { break }

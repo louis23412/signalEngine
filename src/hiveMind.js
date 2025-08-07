@@ -20,7 +20,6 @@ class HiveMind {
     #contextSensitivity = 0.5;
     #swarmIntelligenceFactor = 0.6;
 
-    #distillationFrequency = 100;
     #regulationFrequency = 1000;
     #gradientResetFrequency = 100;
 
@@ -198,7 +197,8 @@ class HiveMind {
                 beta2: Array(this.#hiddenSize).fill(0)
             })),
             attentionBias: Array(this.#hiddenSize).fill(0),
-            attentionWeightMatrix: Array(this.#hiddenSize).fill(0)
+            attentionWeightMatrix: Array(this.#hiddenSize).fill(0),
+            specializationWeights: Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0))
         }));
     }
 
@@ -1521,24 +1521,6 @@ class HiveMind {
             const bounded = 1 / (1 + Math.exp(-magnitude));
             return bounded * (0.5 + 0.5 * performance);
         });
-
-        for (let i = 0; i < this.#ensembleSize; i++) {
-            const specializationFactor = Math.min(
-                Math.max(1 + this.#specializationScores[i] * this.#swarmIntelligenceFactor * 0.5, 0.5),
-                1.5
-            );
-
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    const inputIdx = (j + k) % this.#inputSize;
-                    const inputVal = isValidNumber(inputs[inputIdx]) ? inputs[inputIdx] : 0;
-                    const update = isValidNumber(this.#adaptiveLearningRate[i])
-                        ? this.#adaptiveLearningRate[i] * inputVal * zScores[i] * specializationFactor * 0.1
-                        : 0;
-                    this.#specializationWeights[i][j][k] += update;
-                }
-            }
-        }
     }
 
     #updateAdaptiveLearningRates () {
@@ -2122,37 +2104,8 @@ class HiveMind {
         const dynamicSmall = this.#regularizationParams[weightType]?.small * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust)) || 1e-4;
 
         if (!grad) {
-            const decay = lambda;
-            if (isMatrix) {
-                for (let i = 0; i < weight.length; i++) {
-                    for (let j = 0; j < weight[i].length; j++) {
-                        if (isValidNumber(weight[i][j])) {
-                            if (Math.abs(weight[i][j]) > dynamicSmall) {
-                                weight[i][j] *= (1 - decay);
-                            }
-                            if (Math.abs(weight[i][j]) < dynamicMin) {
-                                weight[i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
-                            }
-                        } else {
-                            weight[i][j] = 0;
-                        }
-                    }
-                }
-            } else {
-                for (let i = 0; i < weight.length; i++) {
-                    if (isValidNumber(weight[i])) {
-                        if (Math.abs(weight[i]) > dynamicSmall) {
-                            weight[i] *= (1 - decay);
-                        }
-                        if (Math.abs(weight[i]) < dynamicMin) {
-                            weight[i] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
-                        }
-                    } else {
-                        weight[i] = 0;
-                    }
-                }
-            }
-            return;
+            console.log('Critical fail - No grad for weight type:', weightType)
+            process.exit()
         }
 
         const { mean, std } = this.#computeGradientStats(grad, isMatrix);
@@ -2293,6 +2246,7 @@ class HiveMind {
         const attentionMatrixNorms = [];
         const ffnMatrixNorms = [];
         const vectorNorms = [];
+        const specMatrixNorms = [];
 
         const outputWeightsGrad = this.#gradientAccumulation[idx].outputWeights;
         ffnMatrixNorms.push(this.#computeSpectralNorm(outputWeightsGrad));
@@ -2326,14 +2280,19 @@ class HiveMind {
         const attentionWeightMatrixGrad = this.#gradientAccumulation[idx].attentionWeightMatrix;
         vectorNorms.push(this.#computeGradientNorm(attentionWeightMatrixGrad, false));
 
-        const sparseThreshold = this.#computeSparseThreshold([...attentionMatrixNorms, ...ffnMatrixNorms, ...vectorNorms]);
+        const specializationWeightsGrad = this.#gradientAccumulation[idx].specializationWeights;
+        specMatrixNorms.push(this.#computeSpectralNorm(specializationWeightsGrad));
+
+        const sparseThreshold = this.#computeSparseThreshold([...attentionMatrixNorms, ...ffnMatrixNorms, ...vectorNorms, ...specMatrixNorms]);
 
         const attentionPercentile = this.#computeDynamicPercentile(attentionMatrixNorms, baseAttentionPercentile);
         const ffnPercentile = this.#computeDynamicPercentile(ffnMatrixNorms, baseFfnPercentile);
         const vectorPercentile = this.#computeDynamicPercentile(vectorNorms, baseVectorPercentile);
+        const specPercentile = this.#computeDynamicPercentile(specMatrixNorms, baseAttentionPercentile);
         const attentionMatrixThreshold = Math.min(this.#computePercentile(attentionMatrixNorms, attentionPercentile), 1.0) * weightFactor;
         const ffnMatrixThreshold = Math.min(this.#computePercentile(ffnMatrixNorms, ffnPercentile), 1.0) * weightFactor;
         const vectorThreshold = Math.min(this.#computePercentile(vectorNorms, vectorPercentile), 1.0) * weightFactor;
+        const specMatrixThreshold = Math.min(this.#computePercentile(specMatrixNorms, specPercentile), 1.0) * weightFactor;
 
         this.#scaleGradientMatrix(outputWeightsGrad, ffnMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         this.#scaleGradientVector(outputBiasGrad, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
@@ -2358,6 +2317,8 @@ class HiveMind {
 
         this.#scaleGradientVector(attentionBiasGrad, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         this.#scaleGradientVector(attentionWeightMatrixGrad, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
+
+        this.#scaleGradientMatrix(specializationWeightsGrad, specMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
     }
 
     #regulateWeightsAndMemory () {
@@ -2421,8 +2382,6 @@ class HiveMind {
 
         for (let idx = 0; idx < this.#ensembleSize; idx++) {
             const transformer = this.#transformers[idx];
-            const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
-            const specializationFactor = isValidNumber(this.#specializationScores[idx]) ? this.#specializationScores[idx] : 0.5;
             const trustHistory = this.#trustScoresHistory?.[idx];
             const trust = Math.max(0.01, Math.min(1.0, Array.isArray(trustHistory) && trustHistory.length > 0 ? trustHistory[trustHistory.length - 1] : 0.5));
 
@@ -2471,41 +2430,10 @@ class HiveMind {
             this.#applyVectorScaling(this.#attentionWeightMatrix[idx], this.#regularizationParams['attentionWeightMatrix'].scale, diversityLoss);
             this.#applyWeightDecay(idx, this.#attentionWeightMatrix[idx], false, 'attentionWeightMatrix', null, diversityPenalty, similarityThreshold);
 
-            const specDecayRate = Math.min(this.#weightDecayRate * Math.exp(-1.5 * specializationFactor), 0.9);
-            for (let i = 0; i < this.#hiddenSize; i++) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    if (isValidNumber(this.#specializationWeights[idx][i][j])) {
-                        const weight = this.#specializationWeights[idx][i][j];
-                        const dynamicSpecMin = this.#regularizationParams['specializationWeights'].min * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust));
-                        const dynamicSpecSmall = this.#regularizationParams['specializationWeights'].small * (1 + 0.1 * (1 - performanceFactor) + 0.05 * (1 - trust));
-                        if (Math.abs(weight) > dynamicSpecSmall) {
-                            this.#specializationWeights[idx][i][j] *= (1 - specDecayRate);
-                        }
-                        if (Math.abs(weight) < dynamicSpecMin) {
-                            this.#specializationWeights[idx][i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * this.#regularizationParams['specializationWeights'].noise;
-                        }
-                    } else {
-                        this.#specializationWeights[idx][i][j] = 0;
-                    }
-                }
-            }
+            this.#applyMatrixScaling(this.#specializationWeights[idx], this.#regularizationParams['specializationWeights'].scale, diversityLoss);
+            this.#applyWeightDecay(idx, this.#specializationWeights[idx], true, 'specializationWeights', null, diversityPenalty, similarityThreshold);
 
-            const specMatrix = this.#specializationWeights[idx];
-            const spectralNorm = this.#computeSpectralNorm(specMatrix);
-            const specThreshold = this.#regularizationParams['specializationWeights'].scale * (1 + 0.05 * diversityLoss) * (1 + 0.1 * trust);
-            if (spectralNorm > specThreshold) {
-                const scale = specThreshold / spectralNorm;
-                for (let j = 0; j < specMatrix.length; j++) {
-                    const row = specMatrix[j];
-                    for (let k = 0; k < row.length; k++) {
-                        row[k] *= scale;
-                    }
-                }
-            }
-
-            for (let otherIdx = 0; otherIdx < this.#ensembleSize; otherIdx++) {
-                if (otherIdx === idx) continue;
-
+            for (let otherIdx = idx + 1; otherIdx < this.#ensembleSize; otherIdx++) {
                 const otherTrustHistory = this.#trustScoresHistory?.[otherIdx];
                 const otherTrust = Math.max(0.01, Math.min(1.0, Array.isArray(otherTrustHistory) && otherTrustHistory.length > 0 ? otherTrustHistory[otherTrustHistory.length - 1] : 0.5));
                 const trustFactor = Math.max(0.05, Math.min(0.95, otherTrust / (trust + otherTrust + 1e-6)));
@@ -2549,6 +2477,19 @@ class HiveMind {
                     );
                 }
 
+                const similaritySpecialization = this.#computeWeightSimilarity(
+                    this.#specializationWeights[idx],
+                    this.#specializationWeights[otherIdx]
+                );
+                if (similaritySpecialization > similarityThreshold) {
+                    const penalty = diversityPenalty * (similaritySpecialization - similarityThreshold) * (1 + 0.5 * trustFactor);
+                    this.#applyOrthogonalization(
+                        this.#specializationWeights[idx],
+                        this.#specializationWeights[otherIdx],
+                        penalty
+                    );
+                }
+
                 for (let layer = 0; layer < this.#numLayers; layer++) {
                     ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                         const weightMatrix = transformer.attentionWeights[layer][key];
@@ -2575,6 +2516,324 @@ class HiveMind {
     }
 
     //--------------------------------
+
+    #accumulateGradients (inputs, layerOutputs, activations, attentionIntermediates, dL_d_output, dL_d_scores) {
+        const inputFeatures = inputs.map(x =>
+            Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
+        );
+
+        this.#transformers.forEach((transformer, idx) => {
+            const adjustedLearningRate = this.#adaptiveLearningRate[idx];
+            const delta = dL_d_output * adjustedLearningRate;
+
+            const attentionGrad = dL_d_scores[idx] / this.#hiddenSize;
+
+            for (let k = 0; k < this.#hiddenSize; k++) {
+                this.#gradientAccumulation[idx].attentionBias[k] += attentionGrad;
+                for (let i = 0; i < this.#inputSize; i++) {
+                    if (isValidNumber(inputFeatures[i][k])) {
+                        const specializationFactor = isValidNumber(this.#specializationScores[idx])
+                            ? 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor
+                            : 1;
+                        this.#gradientAccumulation[idx].attentionWeightMatrix[k] += (attentionGrad * inputFeatures[i][k] * specializationFactor) / (this.#inputSize + 1e-6);
+                    }
+                }
+            }
+
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                for (let k = 0; k < this.#hiddenSize; k++) {
+                    const inputIdx = (j + k) % this.#inputSize;
+                    const inputVal = isValidNumber(inputs[inputIdx]) ? inputs[inputIdx] : 0;
+                    const specializationFactor = isValidNumber(this.#specializationScores[idx])
+                        ? 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor
+                        : 1;
+                    const gradUpdate = delta * inputVal * specializationFactor * 0.1;
+                    this.#gradientAccumulation[idx].specializationWeights[j][k] += isValidNumber(gradUpdate) ? gradUpdate : 0;
+                }
+            }
+
+            let grad = Array(this.#hiddenSize).fill(0);
+
+            for (let i = 0; i < this.#hiddenSize; i++) {
+                for (let j = 0; j < 1; j++) {
+                    const gradUpdate = isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) && isValidNumber(layerOutputs[idx][this.#numLayers][0][i])
+                        ? delta * this.#ensembleWeights[idx] * layerOutputs[idx][this.#numLayers][0][i]
+                        : 0;
+                    this.#gradientAccumulation[idx].outputWeights[i][j] += gradUpdate;
+                    grad[i] += isValidNumber(delta) && isValidNumber(transformer.outputWeights[i][j])
+                        ? delta * transformer.outputWeights[i][j]
+                        : 0;
+                }
+            }
+            this.#gradientAccumulation[idx].outputBias[0] += (isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]))
+                ? delta * this.#ensembleWeights[idx]
+                : 0;
+
+            for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
+                const { normX, attentionOutput, normAttention } = activations[idx][layer];
+                const { Q, K, V, attentionProbs } = attentionIntermediates[idx][layer];
+                const headSize = this.#hiddenSize / this.#numHeads;
+
+                const ffnInput = normAttention[0];
+                const hidden = Array(this.#feedForwardSize).fill(0);
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    for (let j = 0; j < this.#feedForwardSize; j++) {
+                        hidden[j] += isValidNumber(ffnInput[i]) && isValidNumber(transformer.ffnWeights[layer].W1[i][j])
+                            ? ffnInput[i] * transformer.ffnWeights[layer].W1[i][j]
+                            : 0;
+                    }
+                }
+                const activated = hidden.map((val, i) => this.#gelu(val + (isValidNumber(transformer.ffnWeights[layer].b1[i]) ? transformer.ffnWeights[layer].b1[i] : 0)));
+                let ffnGrad = Array(this.#feedForwardSize).fill(0);
+                for (let i = 0; i < this.#feedForwardSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        ffnGrad[i] += isValidNumber(grad[j]) && isValidNumber(transformer.ffnWeights[layer].W2[i][j])
+                            ? grad[j] * transformer.ffnWeights[layer].W2[i][j]
+                            : 0;
+                    }
+                    ffnGrad[i] = isValidNumber(ffnGrad[i]) ? ffnGrad[i] * this.#geluDerivative(hidden[i]) : 0;
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    for (let j = 0; j < this.#feedForwardSize; j++) {
+                        const update = adjustedLearningRate * ffnGrad[j] * ffnInput[i];
+                        this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j] += isValidNumber(update) ? update : 0;
+                    }
+                }
+                for (let i = 0; i < this.#feedForwardSize; i++) {
+                    const update = adjustedLearningRate * ffnGrad[i];
+                    this.#gradientAccumulation[idx].ffnWeights[layer].b1[i] += isValidNumber(update) ? update : 0;
+                }
+                for (let i = 0; i < this.#feedForwardSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const update = adjustedLearningRate * grad[j] * activated[i];
+                        this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j] += isValidNumber(update) ? update : 0;
+                    }
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    const update = adjustedLearningRate * grad[i];
+                    this.#gradientAccumulation[idx].ffnWeights[layer].b2[i] += isValidNumber(update) ? update : 0;
+                }
+
+                const normAttentionGrad = grad.slice();
+                const gamma2Grad = Array(this.#hiddenSize).fill(0);
+                const beta2Grad = Array(this.#hiddenSize).fill(0);
+                const meanAttention = normAttention[0].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
+                const varianceAttention = normAttention[0].reduce((sum, val) => sum + Math.pow(val - meanAttention, 2), 0) / this.#hiddenSize;
+                const stdAttention = Math.sqrt(varianceAttention + 1e-6);
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    const normalized = (normAttention[0][i] - meanAttention) / stdAttention;
+                    gamma2Grad[i] = isValidNumber(normAttentionGrad[i]) && isValidNumber(normalized)
+                        ? normAttentionGrad[i] * normalized
+                        : 0;
+                    beta2Grad[i] = isValidNumber(normAttentionGrad[i]) ? normAttentionGrad[i] : 0;
+                    const updateGamma = adjustedLearningRate * gamma2Grad[i];
+                    const updateBeta = adjustedLearningRate * beta2Grad[i];
+                    this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += isValidNumber(updateGamma) ? updateGamma : 0;
+                    this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += isValidNumber(updateBeta) ? updateBeta : 0;
+                }
+
+                const attentionGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+                for (let i = 0; i < this.#inputSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        attentionGrad[i][j] = grad[j];
+                    }
+                }
+                const woGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+                for (let i = 0; i < this.#inputSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        for (let k = 0; k < this.#hiddenSize; k++) {
+                            woGrad[k][j] += isValidNumber(attentionGrad[i][j]) && isValidNumber(attentionOutput[i][k])
+                                ? attentionGrad[i][j] * attentionOutput[i][k]
+                                : 0;
+                        }
+                    }
+                }
+                const vGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(headSize).fill(0)));
+                const scoreGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+                for (let h = 0; h < this.#numHeads; h++) {
+                    for (let i = 0; i < this.#inputSize; i++) {
+                        for (let j = 0; j < this.#inputSize; j++) {
+                            for (let k = 0; k < headSize; k++) {
+                                const idx = h * headSize + k;
+                                vGrad[h][j][k] += isValidNumber(attentionGrad[i][idx]) && isValidNumber(attentionProbs[h][i][j])
+                                    ? attentionGrad[i][idx] * attentionProbs[h][i][j]
+                                    : 0;
+                                scoreGrad[h][i][j] += isValidNumber(attentionGrad[i][idx]) && isValidNumber(V[j][idx])
+                                    ? attentionGrad[i][idx] * V[j][idx]
+                                    : 0;
+                            }
+                        }
+                    }
+                }
+                const qGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+                const kGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+                for (let h = 0; h < this.#numHeads; h++) {
+                    for (let i = 0; i < this.#inputSize; i++) {
+                        for (let j = 0; j < this.#inputSize; j++) {
+                            for (let k = 0; k < headSize; k++) {
+                                const idx = h * headSize + k;
+                                const scaledScore = isValidNumber(scoreGrad[h][i][j])
+                                    ? scoreGrad[h][i][j] / Math.sqrt(headSize)
+                                    : 0;
+                                qGrad[i][idx] += isValidNumber(scaledScore) && isValidNumber(K[j][idx])
+                                    ? scaledScore * K[j][idx]
+                                    : 0;
+                                kGrad[j][idx] += isValidNumber(scaledScore) && isValidNumber(Q[i][idx])
+                                    ? scaledScore * Q[i][idx]
+                                    : 0;
+                            }
+                        }
+                    }
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const wqUpdate = qGrad.reduce((sum, row, t) => sum + (isValidNumber(row[j]) && isValidNumber(normX[t][i]) ? row[j] * normX[t][i] : 0), 0);
+                        const wkUpdate = kGrad.reduce((sum, row, t) => sum + (isValidNumber(row[j]) && isValidNumber(normX[t][i]) ? row[j] * normX[t][i] : 0), 0);
+                        const wvUpdate = vGrad.reduce((sum, head, h) => 
+                            sum + head.reduce((innerSum, token, t) => 
+                                innerSum + (isValidNumber(token[j % headSize]) && isValidNumber(normX[t][i]) 
+                                    ? token[j % headSize] * normX[t][i] 
+                                    : 0), 0), 0);
+                        const woUpdate = isValidNumber(woGrad[i][j]) ? woGrad[i][j] : 0;
+
+                        const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
+                            ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
+                            : 1;
+                        if (isValidNumber(wqUpdate)) {
+                            const update = adjustedLearningRate * wqUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += isValidNumber(update) ? update : 0;
+                        }
+                        if (isValidNumber(wkUpdate)) {
+                            const update = adjustedLearningRate * wkUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += isValidNumber(update) ? update : 0;
+                        }
+                        if (isValidNumber(wvUpdate)) {
+                            const update = adjustedLearningRate * wvUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += isValidNumber(update) ? update : 0;
+                        }
+                        if (isValidNumber(woUpdate)) {
+                            const update = adjustedLearningRate * woUpdate * specializationFactor;
+                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += isValidNumber(update) ? update : 0;
+                        }
+                    }
+                }
+
+                const normXGrad = qGrad;
+                for (let i = 0; i < this.#inputSize; i++) {
+                    const gamma1Grad = Array(this.#hiddenSize).fill(0);
+                    const beta1Grad = Array(this.#hiddenSize).fill(0);
+                    const meanX = normX[i].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
+                    const varianceX = normX[i].reduce((sum, val) => sum + Math.pow(val - meanX, 2), 0) / this.#hiddenSize;
+                    const stdX = Math.sqrt(varianceX + 1e-6);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const normalized = (normX[i][j] - meanX) / stdX;
+                        gamma1Grad[j] = isValidNumber(normXGrad[i][j]) && isValidNumber(normalized)
+                            ? normXGrad[i][j] * normalized
+                            : 0;
+                        beta1Grad[j] = isValidNumber(normXGrad[i][j]) ? normXGrad[i][j] : 0;
+                        const updateGamma = adjustedLearningRate * gamma1Grad[j];
+                        const updateBeta = adjustedLearningRate * beta1Grad[j];
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma) ? updateGamma : 0;
+                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta) ? updateBeta : 0;
+                    }
+                }
+
+                grad = qGrad.reduce((acc, vec) => acc.map((v, i) => v + vec[i]), Array(qGrad[0].length).fill(0)).map(v => v / this.#inputSize);
+            }
+        });
+    }
+
+    #applyGradients () {
+        this.#transformers.forEach((transformer, idx) => {
+            this.#scaleGradients(idx);
+
+            for (let k = 0; k < this.#hiddenSize; k++) {
+                if (isValidNumber(this.#gradientAccumulation[idx].attentionBias[k])) {
+                    this.#attentionBias[idx][k] -= this.#gradientAccumulation[idx].attentionBias[k];
+                }
+                if (isValidNumber(this.#gradientAccumulation[idx].attentionWeightMatrix[k])) {
+                    this.#attentionWeightMatrix[idx][k] -= this.#gradientAccumulation[idx].attentionWeightMatrix[k];
+                }
+            }
+
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                for (let k = 0; k < this.#hiddenSize; k++) {
+                    if (isValidNumber(this.#gradientAccumulation[idx].specializationWeights[j][k])) {
+                        this.#specializationWeights[idx][j][k] -= this.#gradientAccumulation[idx].specializationWeights[j][k];
+                    }
+                }
+            }
+
+            for (let i = 0; i < this.#hiddenSize; i++) {
+                for (let j = 0; j < 1; j++) {
+                    transformer.outputWeights[i][j] -= isValidNumber(this.#gradientAccumulation[idx].outputWeights[i][j])
+                        ? this.#gradientAccumulation[idx].outputWeights[i][j]
+                        : 0;
+                }
+            }
+            for (let j = 0; j < 1; j++) {
+                transformer.outputBias[j] -= isValidNumber(this.#gradientAccumulation[idx].outputBias[j])
+                    ? this.#gradientAccumulation[idx].outputBias[j]
+                    : 0;
+            }
+            for (let layer = 0; layer < this.#numLayers; layer++) {
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    for (let j = 0; j < this.#feedForwardSize; j++) {
+                        transformer.ffnWeights[layer].W1[i][j] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j])
+                            ? this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j]
+                            : 0;
+                    }
+                }
+                for (let i = 0; i < this.#feedForwardSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        transformer.ffnWeights[layer].W2[i][j] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j])
+                            ? this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j]
+                            : 0;
+                    }
+                }
+                for (let i = 0; i < this.#feedForwardSize; i++) {
+                    transformer.ffnWeights[layer].b1[i] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].b1[i])
+                        ? this.#gradientAccumulation[idx].ffnWeights[layer].b1[i]
+                        : 0;
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    transformer.ffnWeights[layer].b2[i] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].b2[i])
+                        ? this.#gradientAccumulation[idx].ffnWeights[layer].b2[i]
+                        : 0;
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        transformer.attentionWeights[layer].Wq[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j])
+                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j]
+                            : 0;
+                        transformer.attentionWeights[layer].Wk[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j])
+                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j]
+                            : 0;
+                        transformer.attentionWeights[layer].Wv[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j])
+                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j]
+                            : 0;
+                        transformer.attentionWeights[layer].Wo[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j])
+                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j]
+                            : 0;
+                    }
+                }
+                for (let i = 0; i < this.#hiddenSize; i++) {
+                    transformer.layerNormWeights[layer].gamma1[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i]
+                        : 0;
+                    transformer.layerNormWeights[layer].beta1[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i]
+                        : 0;
+                    transformer.layerNormWeights[layer].gamma2[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i]
+                        : 0;
+                    transformer.layerNormWeights[layer].beta2[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i])
+                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i]
+                        : 0;
+                }
+            }
+        });
+    }
 
     #distillKnowledge (outputs, target) {
         if (
@@ -3018,311 +3277,16 @@ class HiveMind {
         this.#normalizeEnsembleWeights();
         this.#updateAdaptiveLearningRates();
 
-        const inputFeatures = inputs.map(x =>
-            Array(this.#hiddenSize).fill(isValidNumber(x) ? x : 0)
-        );
-
-        this.#transformers.forEach((transformer, idx) => {
-            const adjustedLearningRate = this.#adaptiveLearningRate[idx];
-            const delta = dL_d_output * adjustedLearningRate;
-
-            const attentionGrad = dL_d_scores[idx] / this.#hiddenSize;
-
-            for (let k = 0; k < this.#hiddenSize; k++) {
-                this.#gradientAccumulation[idx].attentionBias[k] += attentionGrad;
-                for (let i = 0; i < this.#inputSize; i++) {
-                    if (isValidNumber(inputFeatures[i][k])) {
-                        const specializationFactor = isValidNumber(this.#specializationScores[idx])
-                            ? 1 + this.#specializationScores[idx] * this.#swarmIntelligenceFactor
-                            : 1;
-                        this.#gradientAccumulation[idx].attentionWeightMatrix[k] += (attentionGrad * inputFeatures[i][k] * specializationFactor) / (this.#inputSize + 1e-6);
-                    }
-                }
-            }
-
-            let grad = Array(this.#hiddenSize).fill(0);
-
-            for (let i = 0; i < this.#hiddenSize; i++) {
-                for (let j = 0; j < 1; j++) {
-                    const gradUpdate = isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]) && isValidNumber(layerOutputs[idx][this.#numLayers][0][i])
-                        ? delta * this.#ensembleWeights[idx] * layerOutputs[idx][this.#numLayers][0][i]
-                        : 0;
-                    this.#gradientAccumulation[idx].outputWeights[i][j] += gradUpdate;
-                    grad[i] += isValidNumber(delta) && isValidNumber(transformer.outputWeights[i][j])
-                        ? delta * transformer.outputWeights[i][j]
-                        : 0;
-                }
-            }
-            this.#gradientAccumulation[idx].outputBias[0] += (isValidNumber(delta) && isValidNumber(this.#ensembleWeights[idx]))
-                ? delta * this.#ensembleWeights[idx]
-                : 0;
-
-            for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
-                const { normX, attentionOutput, normAttention } = activations[idx][layer];
-                const { Q, K, V, attentionProbs } = attentionIntermediates[idx][layer];
-                const headSize = this.#hiddenSize / this.#numHeads;
-
-                const ffnInput = normAttention[0];
-                const hidden = Array(this.#feedForwardSize).fill(0);
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    for (let j = 0; j < this.#feedForwardSize; j++) {
-                        hidden[j] += isValidNumber(ffnInput[i]) && isValidNumber(transformer.ffnWeights[layer].W1[i][j])
-                            ? ffnInput[i] * transformer.ffnWeights[layer].W1[i][j]
-                            : 0;
-                    }
-                }
-                const activated = hidden.map((val, i) => this.#gelu(val + (isValidNumber(transformer.ffnWeights[layer].b1[i]) ? transformer.ffnWeights[layer].b1[i] : 0)));
-                let ffnGrad = Array(this.#feedForwardSize).fill(0);
-                for (let i = 0; i < this.#feedForwardSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        ffnGrad[i] += isValidNumber(grad[j]) && isValidNumber(transformer.ffnWeights[layer].W2[i][j])
-                            ? grad[j] * transformer.ffnWeights[layer].W2[i][j]
-                            : 0;
-                    }
-                    ffnGrad[i] = isValidNumber(ffnGrad[i]) ? ffnGrad[i] * this.#geluDerivative(hidden[i]) : 0;
-                }
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    for (let j = 0; j < this.#feedForwardSize; j++) {
-                        const update = adjustedLearningRate * ffnGrad[j] * ffnInput[i];
-                        this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j] += isValidNumber(update) ? update : 0;
-                    }
-                }
-                for (let i = 0; i < this.#feedForwardSize; i++) {
-                    const update = adjustedLearningRate * ffnGrad[i];
-                    this.#gradientAccumulation[idx].ffnWeights[layer].b1[i] += isValidNumber(update) ? update : 0;
-                }
-                for (let i = 0; i < this.#feedForwardSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        const update = adjustedLearningRate * grad[j] * activated[i];
-                        this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j] += isValidNumber(update) ? update : 0;
-                    }
-                }
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    const update = adjustedLearningRate * grad[i];
-                    this.#gradientAccumulation[idx].ffnWeights[layer].b2[i] += isValidNumber(update) ? update : 0;
-                }
-
-                const normAttentionGrad = grad.slice();
-                const gamma2Grad = Array(this.#hiddenSize).fill(0);
-                const beta2Grad = Array(this.#hiddenSize).fill(0);
-                const meanAttention = normAttention[0].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
-                const varianceAttention = normAttention[0].reduce((sum, val) => sum + Math.pow(val - meanAttention, 2), 0) / this.#hiddenSize;
-                const stdAttention = Math.sqrt(varianceAttention + 1e-6);
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    const normalized = (normAttention[0][i] - meanAttention) / stdAttention;
-                    gamma2Grad[i] = isValidNumber(normAttentionGrad[i]) && isValidNumber(normalized)
-                        ? normAttentionGrad[i] * normalized
-                        : 0;
-                    beta2Grad[i] = isValidNumber(normAttentionGrad[i]) ? normAttentionGrad[i] : 0;
-                    const updateGamma = adjustedLearningRate * gamma2Grad[i];
-                    const updateBeta = adjustedLearningRate * beta2Grad[i];
-                    this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i] += isValidNumber(updateGamma) ? updateGamma : 0;
-                    this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i] += isValidNumber(updateBeta) ? updateBeta : 0;
-                }
-
-                const attentionGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-                for (let i = 0; i < this.#inputSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        attentionGrad[i][j] = grad[j];
-                    }
-                }
-                const woGrad = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-                for (let i = 0; i < this.#inputSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        for (let k = 0; k < this.#hiddenSize; k++) {
-                            woGrad[k][j] += isValidNumber(attentionGrad[i][j]) && isValidNumber(attentionOutput[i][k])
-                                ? attentionGrad[i][j] * attentionOutput[i][k]
-                                : 0;
-                        }
-                    }
-                }
-                const vGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(headSize).fill(0)));
-                const scoreGrad = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
-                for (let h = 0; h < this.#numHeads; h++) {
-                    for (let i = 0; i < this.#inputSize; i++) {
-                        for (let j = 0; j < this.#inputSize; j++) {
-                            for (let k = 0; k < headSize; k++) {
-                                const idx = h * headSize + k;
-                                vGrad[h][j][k] += isValidNumber(attentionGrad[i][idx]) && isValidNumber(attentionProbs[h][i][j])
-                                    ? attentionGrad[i][idx] * attentionProbs[h][i][j]
-                                    : 0;
-                                scoreGrad[h][i][j] += isValidNumber(attentionGrad[i][idx]) && isValidNumber(V[j][idx])
-                                    ? attentionGrad[i][idx] * V[j][idx]
-                                    : 0;
-                            }
-                        }
-                    }
-                }
-                const qGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-                const kGrad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-                for (let h = 0; h < this.#numHeads; h++) {
-                    for (let i = 0; i < this.#inputSize; i++) {
-                        for (let j = 0; j < this.#inputSize; j++) {
-                            for (let k = 0; k < headSize; k++) {
-                                const idx = h * headSize + k;
-                                const scaledScore = isValidNumber(scoreGrad[h][i][j])
-                                    ? scoreGrad[h][i][j] / Math.sqrt(headSize)
-                                    : 0;
-                                qGrad[i][idx] += isValidNumber(scaledScore) && isValidNumber(K[j][idx])
-                                    ? scaledScore * K[j][idx]
-                                    : 0;
-                                kGrad[j][idx] += isValidNumber(scaledScore) && isValidNumber(Q[i][idx])
-                                    ? scaledScore * Q[i][idx]
-                                    : 0;
-                            }
-                        }
-                    }
-                }
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        const wqUpdate = qGrad.reduce((sum, row, t) => sum + (isValidNumber(row[j]) && isValidNumber(normX[t][i]) ? row[j] * normX[t][i] : 0), 0);
-                        const wkUpdate = kGrad.reduce((sum, row, t) => sum + (isValidNumber(row[j]) && isValidNumber(normX[t][i]) ? row[j] * normX[t][i] : 0), 0);
-                        const wvUpdate = vGrad.reduce((sum, head, h) => 
-                            sum + head.reduce((innerSum, token, t) => 
-                                innerSum + (isValidNumber(token[j % headSize]) && isValidNumber(normX[t][i]) 
-                                    ? token[j % headSize] * normX[t][i] 
-                                    : 0), 0), 0);
-                        const woUpdate = isValidNumber(woGrad[i][j]) ? woGrad[i][j] : 0;
-
-                        const specializationFactor = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j])
-                            ? 1 + this.#specializationScores[idx] * this.#specializationWeights[idx][i % this.#hiddenSize][j]
-                            : 1;
-                        if (isValidNumber(wqUpdate)) {
-                            const update = adjustedLearningRate * wqUpdate * specializationFactor;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j] += isValidNumber(update) ? update : 0;
-                        }
-                        if (isValidNumber(wkUpdate)) {
-                            const update = adjustedLearningRate * wkUpdate * specializationFactor;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j] += isValidNumber(update) ? update : 0;
-                        }
-                        if (isValidNumber(wvUpdate)) {
-                            const update = adjustedLearningRate * wvUpdate * specializationFactor;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j] += isValidNumber(update) ? update : 0;
-                        }
-                        if (isValidNumber(woUpdate)) {
-                            const update = adjustedLearningRate * woUpdate * specializationFactor;
-                            this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j] += isValidNumber(update) ? update : 0;
-                        }
-                    }
-                }
-
-                const normXGrad = qGrad;
-                for (let i = 0; i < this.#inputSize; i++) {
-                    const gamma1Grad = Array(this.#hiddenSize).fill(0);
-                    const beta1Grad = Array(this.#hiddenSize).fill(0);
-                    const meanX = normX[i].reduce((sum, val) => sum + val, 0) / this.#hiddenSize;
-                    const varianceX = normX[i].reduce((sum, val) => sum + Math.pow(val - meanX, 2), 0) / this.#hiddenSize;
-                    const stdX = Math.sqrt(varianceX + 1e-6);
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        const normalized = (normX[i][j] - meanX) / stdX;
-                        gamma1Grad[j] = isValidNumber(normXGrad[i][j]) && isValidNumber(normalized)
-                            ? normXGrad[i][j] * normalized
-                            : 0;
-                        beta1Grad[j] = isValidNumber(normXGrad[i][j]) ? normXGrad[i][j] : 0;
-                        const updateGamma = adjustedLearningRate * gamma1Grad[j];
-                        const updateBeta = adjustedLearningRate * beta1Grad[j];
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += isValidNumber(updateGamma) ? updateGamma : 0;
-                        this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[j] += isValidNumber(updateBeta) ? updateBeta : 0;
-                    }
-                }
-
-                grad = qGrad.reduce((acc, vec) => acc.map((v, i) => v + vec[i]), Array(qGrad[0].length).fill(0)).map(v => v / this.#inputSize);
-            }
-        });
-
-        this.#transformers.forEach((transformer, idx) => {
-            if (!(this.#trainingStepCount % this.#gradientResetFrequency === 0)) { return }
-
-            this.#scaleGradients(idx);
-
-            for (let k = 0; k < this.#hiddenSize; k++) {
-                if (isValidNumber(this.#gradientAccumulation[idx].attentionBias[k])) {
-                    this.#attentionBias[idx][k] -= this.#gradientAccumulation[idx].attentionBias[k];
-                }
-                if (isValidNumber(this.#gradientAccumulation[idx].attentionWeightMatrix[k])) {
-                    this.#attentionWeightMatrix[idx][k] -= this.#gradientAccumulation[idx].attentionWeightMatrix[k];
-                }
-            }
-
-            for (let i = 0; i < this.#hiddenSize; i++) {
-                for (let j = 0; j < 1; j++) {
-                    transformer.outputWeights[i][j] -= isValidNumber(this.#gradientAccumulation[idx].outputWeights[i][j])
-                        ? this.#gradientAccumulation[idx].outputWeights[i][j]
-                        : 0;
-                }
-            }
-            for (let j = 0; j < 1; j++) {
-                transformer.outputBias[j] -= isValidNumber(this.#gradientAccumulation[idx].outputBias[j])
-                    ? this.#gradientAccumulation[idx].outputBias[j]
-                    : 0;
-            }
-            for (let layer = 0; layer < this.#numLayers; layer++) {
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    for (let j = 0; j < this.#feedForwardSize; j++) {
-                        transformer.ffnWeights[layer].W1[i][j] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j])
-                            ? this.#gradientAccumulation[idx].ffnWeights[layer].W1[i][j]
-                            : 0;
-                    }
-                }
-                for (let i = 0; i < this.#feedForwardSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        transformer.ffnWeights[layer].W2[i][j] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j])
-                            ? this.#gradientAccumulation[idx].ffnWeights[layer].W2[i][j]
-                            : 0;
-                    }
-                }
-                for (let i = 0; i < this.#feedForwardSize; i++) {
-                    transformer.ffnWeights[layer].b1[i] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].b1[i])
-                        ? this.#gradientAccumulation[idx].ffnWeights[layer].b1[i]
-                        : 0;
-                }
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    transformer.ffnWeights[layer].b2[i] -= isValidNumber(this.#gradientAccumulation[idx].ffnWeights[layer].b2[i])
-                        ? this.#gradientAccumulation[idx].ffnWeights[layer].b2[i]
-                        : 0;
-                }
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        transformer.attentionWeights[layer].Wq[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j])
-                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wq[i][j]
-                            : 0;
-                        transformer.attentionWeights[layer].Wk[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j])
-                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wk[i][j]
-                            : 0;
-                        transformer.attentionWeights[layer].Wv[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j])
-                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wv[i][j]
-                            : 0;
-                        transformer.attentionWeights[layer].Wo[i][j] -= isValidNumber(this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j])
-                            ? this.#gradientAccumulation[idx].attentionWeights[layer].Wo[i][j]
-                            : 0;
-                    }
-                }
-                for (let i = 0; i < this.#hiddenSize; i++) {
-                    transformer.layerNormWeights[layer].gamma1[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i])
-                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i]
-                        : 0;
-                    transformer.layerNormWeights[layer].beta1[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i])
-                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta1[i]
-                        : 0;
-                    transformer.layerNormWeights[layer].gamma2[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i])
-                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2[i]
-                        : 0;
-                    transformer.layerNormWeights[layer].beta2[i] -= isValidNumber(this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i])
-                        ? this.#gradientAccumulation[idx].layerNormWeights[layer].beta2[i]
-                        : 0;
-                }
-            }
-        });
-
-        if (this.#trainingStepCount % this.#distillationFrequency === 0) {
-            this.#distillKnowledge(linearOutputs, target);
-        }
-
-        if (this.#trainingStepCount % this.#regulationFrequency === 0) {
-            this.#regulateWeightsAndMemory();
-        }
+        this.#accumulateGradients(inputs, layerOutputs, activations, attentionIntermediates, dL_d_output, dL_d_scores);
 
         if (this.#trainingStepCount % this.#gradientResetFrequency === 0) {
+            this.#applyGradients();
+            this.#distillKnowledge(linearOutputs, target);
+
+            if (this.#trainingStepCount % this.#regulationFrequency === 0) {
+                this.#regulateWeightsAndMemory();
+            }
+
             this.#gradientAccumulation = this.#setGradientStructure();
         }
 
