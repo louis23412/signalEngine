@@ -290,7 +290,7 @@ class NeuralSignalEngine {
         }
     }
 
-    getSignal(candles, shouldSave = true, cutoff = null) {
+    getSignal(candles, shouldPredict = true, shouldSave = true, cutoff = null) {
         const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
 
         if (error) return { error };
@@ -305,15 +305,24 @@ class NeuralSignalEngine {
 
         const features = this.#extractFeatures(indicators, 1);
 
-        console.log(`Forward triggered`);
-        const startTime = process.hrtime();
-        const confidence = truncateToDecimals(this.#hivemind.predict(features.flat()) * 100, 4);
-        const diff = process.hrtime(startTime);
-        const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-        console.log(`Forward complete! (${confidence} %) Execution time: ${executionTime} seconds`);
+        let confidence = 'disabled';
+        let multiplier = 'disabled';
 
-        const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
-        const multiplier = truncateToDecimals(Math.min(Math.max(this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier), this.#config.maxMultiplier), 4);
+        if (shouldPredict) {
+            confidence = truncateToDecimals(this.#hivemind.predict(features.flat()) * 100, 4);
+
+            const scaleFactor = Math.max(0, (confidence - this.#config.baseConfidenceThreshold) / (100 - this.#config.baseConfidenceThreshold));
+
+            multiplier = truncateToDecimals(
+                Math.min(
+                    Math.max(
+                        this.#config.minMultiplier + (this.#config.maxMultiplier - this.#config.minMultiplier) * scaleFactor, this.#config.minMultiplier
+                    ), 
+                    this.#config.maxMultiplier
+                ),
+                4
+            );
+        }
         
         const entryPrice = indicators.lastClose;
         const atrBasedSellPrice = indicators.lastClose + this.#config.atrFactor * indicators.lastAtr;
@@ -338,6 +347,7 @@ class NeuralSignalEngine {
             INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, features)
             VALUES (?, ?, ?, ?, ?)
         `);
+        
         insertTradeStmt.run(
             recentCandles.at(-1).timestamp,
             sellPrice,

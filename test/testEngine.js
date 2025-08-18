@@ -14,7 +14,8 @@ let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
 let trainingSteps = 0;
-const trainingCutoff = null
+const trainingCutoff = null;
+const shouldPredict = true;
 
 const formatTime = (seconds) => {
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
@@ -85,7 +86,7 @@ const processCandles = () => {
                 const status = totalCandles === totalLines
 
                 const startTime = process.hrtime.bigint();
-                signal = engine.getSignal(cache.slice(-cacheSize), status, trainingCutoff);
+                signal = engine.getSignal(cache.slice(-cacheSize), shouldPredict, status, trainingCutoff);
                 const endTime = process.hrtime.bigint();
                 const durationSec = Number(endTime - startTime) / 1_000_000_000;
 
