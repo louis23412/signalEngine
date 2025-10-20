@@ -3279,14 +3279,19 @@ class HiveMind {
 
         this.#accumulateGradients(inputs, layerOutputs, activations, attentionIntermediates, dL_d_output, dL_d_scores);
 
-        if (this.#trainingStepCount % this.#gradientResetFrequency === 0) {
+        const shouldResetGradients = this.#trainingStepCount % this.#gradientResetFrequency === 0;
+        const shouldRegulate = this.#trainingStepCount % this.#regulationFrequency === 0;
+
+        if (shouldResetGradients) {
             this.#applyGradients();
             this.#distillKnowledge(linearOutputs, target);
+        }
 
-            if (this.#trainingStepCount % this.#regulationFrequency === 0) {
-                this.#regulateWeightsAndMemory();
-            }
+        if (shouldRegulate) {
+            this.#regulateWeightsAndMemory();
+        }
 
+        if (shouldResetGradients) {
             this.#gradientAccumulation = this.#setGradientStructure();
         }
 
