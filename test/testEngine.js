@@ -14,6 +14,7 @@ let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
 let trainingSteps = 0;
+
 const trainingCutoff = null;
 const shouldPredict = true;
 
