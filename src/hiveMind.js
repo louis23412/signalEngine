@@ -65,6 +65,8 @@ class HiveMind {
     #specializationWeights = [];
     #specializationScores = [];
 
+    #lastRegulateStep = null;
+    #lastGradientResetStep = null;
     #trainingStepCount = 0;
     #layerDecaySchedule;
     #directoryPath;
@@ -3289,17 +3291,30 @@ class HiveMind {
 
         if (shouldRegulate) {
             this.#regulateWeightsAndMemory();
+            this.#lastRegulateStep = this.#trainingStepCount;
         }
 
         if (shouldResetGradients) {
             this.#gradientAccumulation = this.#setGradientStructure();
+            this.#lastGradientResetStep = this.#trainingStepCount;
         }
 
-        return this.#trainingStepCount;
+        return {
+            step : this.#trainingStepCount,
+            lastGradientResetStep : this.#lastGradientResetStep,
+            lastRegulateStep : this.#lastRegulateStep
+        };
     }
 
     dumpState () {
         return this.#saveState()
+    }
+
+    getFreq () {
+        return {
+            gradientResetFreq : this.#gradientResetFrequency,
+            regulateFreq : this.#regulationFrequency
+        }
     }
 }
 

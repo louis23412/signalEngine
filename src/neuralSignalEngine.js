@@ -25,10 +25,22 @@ class NeuralSignalEngine {
     };
     #trainingStep = 0;
 
+    #resetData = {
+        gradientResetFreq : null,
+        gradientResetStep : null,
+        regulateFreq : null,
+        regulateStep : null
+    };
+
     constructor() {
         fs.mkdirSync(directoryPath, { recursive: true });
 
         this.#hivemind = new HiveMind(directoryPath);
+
+        const resetFreq = this.#hivemind.getFreq();
+        this.#resetData.gradientResetFreq = resetFreq.gradientResetFreq
+        this.#resetData.regulateFreq = resetFreq.regulateFreq
+
         this.#indicators = new IndicatorProcessor();
         this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
 
@@ -259,12 +271,16 @@ class NeuralSignalEngine {
 
                     console.log(`Training triggered for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length}`);
                     const startTime = process.hrtime();
-                    const trainingStep = this.#hivemind.train(flatFeatures, trade.outcome);
+
+                    const trainingData = this.#hivemind.train(flatFeatures, trade.outcome)
+
                     const diff = process.hrtime(startTime);
                     const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-                    console.log(`Training complete (${trainingStep})! - Execution time: ${executionTime} seconds`);
+                    console.log(`Training complete (${trainingData.step})! - Execution time: ${executionTime} seconds`);
 
-                    this.#trainingStep = trainingStep;
+                    this.#trainingStep = trainingData.step;
+                    this.#resetData.gradientResetStep = trainingData.lastGradientResetStep
+                    this.#resetData.regulateStep = trainingData.lastRegulateStep
 
                     insertEncodingStmt.run(encodingHash);
                     keysToDelete.add(trade.timestamp);
@@ -287,6 +303,13 @@ class NeuralSignalEngine {
                 }
             });
             transaction();
+        }
+    }
+
+    getFreq () {
+        return {
+            gradientResetFreq : this.#resetData.gradientResetFreq,
+            regulateFreq : this.#resetData.regulateFreq,
         }
     }
 
@@ -363,7 +386,9 @@ class NeuralSignalEngine {
             multiplier,
             confidence,
             threshold: this.#config.baseConfidenceThreshold,
-            lastTrainingStep : this.#trainingStep
+            lastTrainingStep : this.#trainingStep,
+            lastGradientResetStep : this.#resetData.gradientResetStep,
+            lastRegulateStep : this.#resetData.regulateStep
         };
     }
 }

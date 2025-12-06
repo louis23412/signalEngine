@@ -5,6 +5,9 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
+const trainingCutoff = null;
+const shouldPredict = true;
+
 const cacheSize = 1000;
 const cache = [];
 const signalTimes = [];
@@ -14,33 +17,39 @@ let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
 let trainingSteps = 0;
-let gradientResetFreq;
-let regulateFreq;
+let gradientResetFreq = null;
+let gradientResetStep = null;
+let regulateFreq = null;
+let regulateStep = null;
 
-// ──────────────────────────────
-// ADVANCED CONFIDENCE ANALYTICS
-// ──────────────────────────────
-
-// Lifetime running stats (O(1) memory)
 let lifetimeCount = 0;
 let lifetimeSum = 0;
 let lifetimeSumSq = 0;
 let allTimeMinConfidence = Infinity;
 let allTimeMaxConfidence = -Infinity;
 
-// Rolling windows: 100, 500, 1000, 5000
+let previousConfidence = null;
+
 const windows = {
-    100: [],
-    500: [],
-    1000: [],
-    5000: []
+    10:    [],
+    50:    [],
+    100:   [],
+    500:   [],
+    1000:  [],
+    5000:  [],
+    10000: [],
+    25000: []
 };
 
 const windowStats = {
-    100: { mean: null, std: null, size: 0, trend: '—' },
-    500: { mean: null, std: null, size: 0, trend: '—' },
-    1000: { mean: null, std: null, size: 0, trend: '—' },
-    5000: { mean: null, std: null, size: 0, trend: '—' }
+    10:    { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    50:    { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    100:   { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    500:   { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    1000:  { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    5000:  { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    10000: { mean: null, std: null, min: null, max: null, size: 0, trend: '—' },
+    25000: { mean: null, std: null, min: null, max: null, size: 0, trend: '—' }
 };
 
 const lifetimeStats = {
@@ -50,7 +59,7 @@ const lifetimeStats = {
 const updateWindowStats = (size) => {
     const arr = windows[size];
     if (arr.length === 0) {
-        windowStats[size] = { mean: null, std: null, size: 0, trend: '—' };
+        windowStats[size] = { mean: null, std: null, min: null, max: null, size: 0, trend: '—' };
         return;
     }
 
@@ -58,8 +67,9 @@ const updateWindowStats = (size) => {
     const mean = sum / arr.length;
     const variance = arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length;
     const std = Math.sqrt(variance);
+    const min = Math.min(...arr);
+    const max = Math.max(...arr);
 
-    // Trend: last 20% vs first 20%
     const segment = Math.max(5, Math.floor(arr.length * 0.2));
     const recentMean = arr.slice(-segment).reduce((a, b) => a + b, 0) / segment;
     const olderMean = arr.slice(0, segment).reduce((a, b) => a + b, 0) / segment;
@@ -69,6 +79,8 @@ const updateWindowStats = (size) => {
     windowStats[size] = {
         mean: mean.toFixed(6),
         std: std.toFixed(6),
+        min: min.toFixed(6),
+        max: max.toFixed(6),
         size: arr.length,
         trend
     };
@@ -89,10 +101,6 @@ const updateAllStats = () => {
         lifetimeStats.count = lifetimeCount;
     }
 };
-// ──────────────────────────────
-
-const trainingCutoff = null;
-const shouldPredict = true;
 
 const formatTime = (seconds) => {
     if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
@@ -123,22 +131,22 @@ const formatSignal = (options = {}) => {
         estimatedTimeSec = null
     } = options;
 
-    const ANSI_CYAN = '\x1b[36m';
-    const ANSI_GREEN = '\x1b[32m';
-    const ANSI_YELLOW = '\x1b[33m';
-    const ANSI_RED = '\x1b[31m';
-    const ANSI_MAGENTA = '\x1b[35m';
-    const ANSI_RESET = '\x1b[0m';
+    const CYAN = '\x1b[36m';
+    const GREEN = '\x1b[32m';
+    const YELLOW = '\x1b[33m';
+    const RED = '\x1b[31m';
+    const MAGENTA = '\x1b[35m';
+    const RESET = '\x1b[0m';
     const BOLD = '\x1b[1m';
 
     let progressLine = '';
     if (totalCandles !== null && totalLines !== null && durationSec !== null && avgSignalTime !== null && estimatedTimeSec !== null) {
         const progressPercent = ((totalCandles / totalLines) * 100).toFixed(4);
-        progressLine = `${BOLD}Progress:${ANSI_RESET} ${ANSI_CYAN}${totalCandles}/${totalLines}${ANSI_RESET} candles ` +
-                      `(${ANSI_CYAN}${progressPercent}%${ANSI_RESET}) | ` +
-                      `Time: ${ANSI_CYAN}${formatTime(durationSec)}${ANSI_RESET} | ` +
-                      `Avg: ${ANSI_CYAN}${avgSignalTime.toFixed(3)}s${ANSI_RESET} | ` +
-                      `ETA: ${ANSI_CYAN}${formatTime(estimatedTimeSec)}${ANSI_RESET}\n`;
+        progressLine = `${BOLD}Progress:${RESET} ${CYAN}${totalCandles.toLocaleString()}/${totalLines.toLocaleString()}${RESET} candles ` +
+                      `(${CYAN}${progressPercent}%${RESET}) | ` +
+                      `Time: ${CYAN}${formatTime(durationSec)}${RESET} | ` +
+                      `Avg: ${CYAN}${avgSignalTime.toFixed(3)}s${RESET} | ` +
+                      `ETA: ${CYAN}${formatTime(estimatedTimeSec)}${RESET}\n`;
     }
 
     if (!shouldPredict || !signal) {
@@ -152,22 +160,43 @@ const formatSignal = (options = {}) => {
         ? (recent1000.filter(c => c <= signal.confidence).length / recent1000.length * 100).toFixed(1)
         : '—';
 
-    const trendColor = (t) => t === 'rising' ? ANSI_GREEN : t === 'falling' ? ANSI_RED : ANSI_YELLOW;
+    const delta = previousConfidence !== null ? signal.confidence - previousConfidence : null;
+    const deltaStr = delta === null ? '—' : delta > 0 ? `+${delta.toFixed(6)}` : delta.toFixed(6);
+    const deltaColor = delta === null ? '' : delta > 0 ? GREEN : RED;
+
+    previousConfidence = signal.confidence;
+
+    const trendColor = (t) => t === 'rising' ? GREEN : t === 'falling' ? RED : YELLOW;
+
+    const stepsToNextRegulate = (regulateFreq > 0)
+        ? regulateFreq - (trainingSteps % regulateFreq)
+        : null;
+
+    const stepsToNextGradientReset = (gradientResetFreq > 0)
+        ? gradientResetFreq - (trainingSteps % gradientResetFreq)
+        : null;
 
     const signalLine = 
-`${BOLD}Signal @ candle ${totalCandles}${ANSI_RESET}
-  Entry : ${ANSI_CYAN}${signal.entryPrice}${ANSI_RESET}   Sell : ${ANSI_CYAN}${signal.sellPrice}${ANSI_RESET}   Stop : ${ANSI_CYAN}${signal.stopLoss}${ANSI_RESET}
-  Mult  : ${ANSI_CYAN}${signal.multiplier.toFixed(3)}${ANSI_RESET}   Conf : ${ANSI_GREEN}${currentConf}${ANSI_RESET} ${ANSI_MAGENTA}(${percentile}%ile)${ANSI_RESET}   Step : ${ANSI_CYAN}${signal.lastTrainingStep}${ANSI_RESET}
+`
+${BOLD}Signal @ candle ${totalCandles.toLocaleString()}${RESET}
+  Entry : ${CYAN}${signal.entryPrice}${RESET}   Sell : ${CYAN}${signal.sellPrice}${RESET}   Stop : ${CYAN}${signal.stopLoss}${RESET}
+  Mult  : ${CYAN}${signal.multiplier.toFixed(3)}${RESET}   Conf : ${GREEN}${currentConf}${RESET} ${deltaColor}(${deltaStr})${RESET} ${MAGENTA}(${percentile}%ile)${RESET}   Step : ${CYAN}${signal.lastTrainingStep.toLocaleString()}${RESET}
 
-${BOLD}LIFETIME CONFIDENCE (${lifetimeStats.count.toLocaleString()} signals)${ANSI_RESET}
-  Range  : ${ANSI_RED}${lifetimeStats.min ?? '—'}${ANSI_RESET} → ${ANSI_GREEN}${lifetimeStats.max ?? '—'}${ANSI_RESET}
-  Mean   : ${ANSI_YELLOW}${lifetimeStats.mean ?? '—'}${ANSI_RESET} ± ${ANSI_YELLOW}${lifetimeStats.std ?? '—'}${ANSI_RESET}
+  Regulate every ${YELLOW}${regulateFreq ?? '—'}${RESET} → last: ${CYAN}${regulateStep ?? '—'}${RESET}   next in ${MAGENTA}${stepsToNextRegulate ?? '—'}${RESET} steps
+  Gradient reset ${YELLOW}${gradientResetFreq ?? '—'}${RESET} → last: ${CYAN}${gradientResetStep ?? '—'}${RESET}   next in ${MAGENTA}${stepsToNextGradientReset ?? '—'}${RESET} steps
 
-${BOLD}ROLLING CONFIDENCE WINDOWS${ANSI_RESET}
-  100   → ${ANSI_YELLOW}${windowStats[100].mean ?? '—'}${ANSI_RESET} (σ:${windowStats[100].std ?? '—'}) [${trendColor(windowStats[100].trend)}${windowStats[100].trend}${ANSI_RESET}] ${ANSI_CYAN}${windowStats[100].size}/100${ANSI_RESET}
-  500   → ${ANSI_YELLOW}${windowStats[500].mean ?? '—'}${ANSI_RESET} (σ:${windowStats[500].std ?? '—'}) [${trendColor(windowStats[500].trend)}${windowStats[500].trend}${ANSI_RESET}] ${ANSI_CYAN}${windowStats[500].size}/500${ANSI_RESET}
-  1000  → ${ANSI_YELLOW}${windowStats[1000].mean ?? '—'}${ANSI_RESET} (σ:${windowStats[1000].std ?? '—'}) [${trendColor(windowStats[1000].trend)}${windowStats[1000].trend}${ANSI_RESET}] ${ANSI_CYAN}${windowStats[1000].size}/1000${ANSI_RESET}
-  5000  → ${ANSI_YELLOW}${windowStats[5000].mean ?? '—'}${ANSI_RESET} (σ:${windowStats[5000].std ?? '—'}) [${trendColor(windowStats[5000].trend)}${windowStats[5000].trend}${ANSI_RESET}] ${ANSI_CYAN}${windowStats[5000].size}/5000${ANSI_RESET}
+${BOLD}LIFETIME CONFIDENCE (${lifetimeStats.count.toLocaleString()} signals)${RESET}
+  Range : ${RED}${lifetimeStats.min ?? '—'}${RESET} → ${GREEN}${lifetimeStats.max ?? '—'}${RESET}   Mean  : ${YELLOW}${lifetimeStats.mean ?? '—'}${RESET} ± ${YELLOW}${lifetimeStats.std ?? '—'}${RESET}
+
+${BOLD}ROLLING CONFIDENCE WINDOWS${RESET}
+   10   → ${YELLOW}${windowStats[10].mean ?? '—'}${RESET} ±${windowStats[10].std ?? '—'}  [${RED}${windowStats[10].min ?? '—'}${RESET} → ${GREEN}${windowStats[10].max ?? '—'}${RESET}] (${CYAN}${windowStats[10].size}/10${RESET})    [${trendColor(windowStats[10].trend)}${windowStats[10].trend}${RESET}]
+   50   → ${YELLOW}${windowStats[50].mean ?? '—'}${RESET} ±${windowStats[50].std ?? '—'}  [${RED}${windowStats[50].min ?? '—'}${RESET} → ${GREEN}${windowStats[50].max ?? '—'}${RESET}] (${CYAN}${windowStats[50].size}/50${RESET})    [${trendColor(windowStats[50].trend)}${windowStats[50].trend}${RESET}]
+  100   → ${YELLOW}${windowStats[100].mean ?? '—'}${RESET} ±${windowStats[100].std ?? '—'}  [${RED}${windowStats[100].min ?? '—'}${RESET} → ${GREEN}${windowStats[100].max ?? '—'}${RESET}] (${CYAN}${windowStats[100].size}/100${RESET})   [${trendColor(windowStats[100].trend)}${windowStats[100].trend}${RESET}]
+  500   → ${YELLOW}${windowStats[500].mean ?? '—'}${RESET} ±${windowStats[500].std ?? '—'}  [${RED}${windowStats[500].min ?? '—'}${RESET} → ${GREEN}${windowStats[500].max ?? '—'}${RESET}] (${CYAN}${windowStats[500].size}/500${RESET})   [${trendColor(windowStats[500].trend)}${windowStats[500].trend}${RESET}]
+ 1000   → ${YELLOW}${windowStats[1000].mean ?? '—'}${RESET} ±${windowStats[1000].std ?? '—'}  [${RED}${windowStats[1000].min ?? '—'}${RESET} → ${GREEN}${windowStats[1000].max ?? '—'}${RESET}] (${CYAN}${windowStats[1000].size}/1000${RESET})  [${trendColor(windowStats[1000].trend)}${windowStats[1000].trend}${RESET}]
+ 5000   → ${YELLOW}${windowStats[5000].mean ?? '—'}${RESET} ±${windowStats[5000].std ?? '—'}  [${RED}${windowStats[5000].min ?? '—'}${RESET} → ${GREEN}${windowStats[5000].max ?? '—'}${RESET}] (${CYAN}${windowStats[5000].size}/5000${RESET})  [${trendColor(windowStats[5000].trend)}${windowStats[5000].trend}${RESET}]
+10000   → ${YELLOW}${windowStats[10000].mean ?? '—'}${RESET} ±${windowStats[10000].std ?? '—'}  [${RED}${windowStats[10000].min ?? '—'}${RESET} → ${GREEN}${windowStats[10000].max ?? '—'}${RESET}] (${CYAN}${windowStats[10000].size}/10000${RESET}) [${trendColor(windowStats[10000].trend)}${windowStats[10000].trend}${RESET}]
+25000   → ${YELLOW}${windowStats[25000].mean ?? '—'}${RESET} ±${windowStats[25000].std ?? '—'}  [${RED}${windowStats[25000].min ?? '—'}${RESET} → ${GREEN}${windowStats[25000].max ?? '—'}${RESET}] (${CYAN}${windowStats[25000].size}/25000${RESET}) [${trendColor(windowStats[25000].trend)}${windowStats[25000].trend}${RESET}]
 `;
 
     process.stdout.write(`\n${'─'.repeat(92)}\n${progressLine}${signalLine}${'─'.repeat(92)}\n\n`);
@@ -178,10 +207,9 @@ const processCandles = () => {
         input: fs.createReadStream(path.join(import.meta.dirname, 'candles.jsonl'))
     });
 
-    // Set freq here
-    const resetFreq = engine.getFreq();
-    gradientResetFreq = resetFreq.gradientResetFreq
-    regulateFreq = resetFreq.regulateFreq
+    const freqs = engine.getFreq();
+    gradientResetFreq = freqs.gradientResetFreq;
+    regulateFreq = freqs.regulateFreq;
 
     rd.on('line', (line) => {
         const candleObj = JSON.parse(line);
@@ -198,19 +226,18 @@ const processCandles = () => {
                 const durationSec = Number(endTime - startTime) / 1_000_000_000;
 
                 trainingSteps = signal.lastTrainingStep;
+                gradientResetStep = signal.lastGradientResetStep;
+                regulateStep = signal.lastRegulateStep;
 
-                // ADVANCED CONFIDENCE TRACKING
                 if (shouldPredict && signal.confidence != null) {
                     const conf = signal.confidence;
 
-                    // Lifetime updates
                     lifetimeCount++;
                     lifetimeSum += conf;
                     lifetimeSumSq += conf * conf;
                     if (conf < allTimeMinConfidence) allTimeMinConfidence = conf;
                     if (conf > allTimeMaxConfidence) allTimeMaxConfidence = conf;
 
-                    // Rolling windows
                     for (const size of Object.keys(windows)) {
                         const win = windows[size];
                         win.push(conf);
