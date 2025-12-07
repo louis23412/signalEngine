@@ -5,7 +5,7 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
-const trainingCutoff = 1001;
+const trainingCutoff = null;
 const shouldPredict = true;
 
 const cacheSize = 1000;
@@ -32,6 +32,10 @@ let lifetimeSumSq = 0;
 let allTimeMinConfidence = Infinity;
 let allTimeMaxConfidence = -Infinity;
 let previousConfidence = null;
+let maxRangeInStep = 0;
+let maxRangeStep = null;
+let maxRangeAtGradientStep = null;
+let maxRangeAtRegulateStep = null;
 
 const windows = {
     10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: []
@@ -49,6 +53,13 @@ const windowStats = {
 };
 
 const lifetimeStats = { min: null, max: null, mean: null, std: null, count: 0 };
+
+const formatWindow = (lastResetStep, freq) => {
+    if (freq === null || freq <= 0) return '—';
+    const start = (lastResetStep === null || lastResetStep <=  0) ? 0 : lastResetStep;
+    const end = start + freq;
+    return `${start.toLocaleString()} – ${end.toLocaleString()}`;
+};
 
 const updateWindowStats = (size) => {
     const arr = windows[size];
@@ -165,6 +176,10 @@ ${B}STEP STABILITY WINDOW${X}
   Candles since last step increase : ${M}${candlesSinceStepIncrease.toLocaleString()}${X}
   Confidence range in current step : ${R}${minConfidenceInCurrentStep === Infinity ? '—' : minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep === -Infinity ? '—' : maxConfidenceInCurrentStep.toFixed(6)}${X}  ${M}Δ${stepDiff}${X}
 
+  Largest range ever in a stable window : ${G}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
+        └─ at training step ${C}${maxRangeStep ?? '—'}${X}
+           in gradient reset window ${Y}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate window ${Y}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X}
+
 ${B}LIFETIME CONFIDENCE${X} (${C}${lifetimeStats.count.toLocaleString()}${X} signals)
   Range : ${R}${lifetimeStats.min ?? '—'}${X} → ${G}${lifetimeStats.max ?? '—'}${X}   Mean : ${Y}${lifetimeStats.mean ?? '—'}${X} ± ${Y}${lifetimeStats.std ?? '—'}${X}
 
@@ -213,9 +228,7 @@ const processCandles = () => {
                 if (shouldPredict && signal.confidence != null) {
                     const conf = signal.confidence;
 
-                    if (currentStep === -1) {
-                        currentStep = trainingSteps;
-                    }
+                    if (currentStep === -1) currentStep = trainingSteps;
 
                     if (trainingSteps > currentStep) {
                         candlesSinceStepIncrease = 0;
@@ -226,6 +239,15 @@ const processCandles = () => {
                         candlesSinceStepIncrease++;
                         if (conf < minConfidenceInCurrentStep) minConfidenceInCurrentStep = conf;
                         if (conf > maxConfidenceInCurrentStep) maxConfidenceInCurrentStep = conf;
+                    }
+
+                    const rangeInCurrentStep = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
+
+                    if (rangeInCurrentStep > maxRangeInStep) {
+                        maxRangeInStep = rangeInCurrentStep;
+                        maxRangeStep = currentStep;
+                        maxRangeAtGradientStep = gradientResetStep;
+                        maxRangeAtRegulateStep = regulateStep;
                     }
 
                     lifetimeCount++;
