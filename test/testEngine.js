@@ -5,7 +5,7 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
-const trainingCutoff = null;
+const trainingCutoff = 1001;
 const shouldPredict = true;
 
 const cacheSize = 1000;
@@ -33,29 +33,59 @@ let gradientResetFreq = null;
 let gradientResetStep = null;
 let regulateFreq = null;
 let regulateStep = null;
-let lifetimeCount = 0;
-let lifetimeSum = 0;
-let lifetimeSumSq = 0;
-let allTimeMinConfidence = Infinity;
-let allTimeMaxConfidence = -Infinity;
-let previousConfidence = null;
 
-const windows = {
-    10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: []
-};
+let lifetimeConfCount = 0;
+let lifetimeConfSum = 0;
+let lifetimeConfSumSq = 0;
+let allTimeMinConf = Infinity;
+let allTimeMaxConf = -Infinity;
+
+let lifetimeAccCount = 0;
+let lifetimeAccSum = 0;
+let lifetimeAccSumSq = 0;
+let allTimeMinAcc = Infinity;
+let allTimeMaxAcc = -Infinity;
+
+let corrSumXY = 0;
+let corrSumX = 0;
+let corrSumY = 0;
+let corrSumX2 = 0;
+let corrSumY2 = 0;
+let corrN = 0;
+
+let previousConfidence = null;
+let previousOverallHealth = null;
+
+const confidenceWindows = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
+const accuracyWindows   = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
 
 const windowStats = {
-    10:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    50:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    100:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    500:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    1000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    5000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    10000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
-    25000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' }
+    conf: {
+        10:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        50:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        100:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        500:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        1000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        5000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        10000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        25000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' }
+    },
+    acc: {
+        10:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        50:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        100:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        500:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        1000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        5000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        10000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' },
+        25000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' }
+    }
 };
 
-const lifetimeStats = { min: null, max: null, mean: null, std: null, count: 0 };
+const lifetimeStats = {
+    conf: { min: null, max: null, mean: null, std: null, count: 0 },
+    acc:  { min: null, max: null, mean: null, std: null, count: 0 }
+};
 
 const formatWindow = (lastResetStep, freq) => {
     if (freq === null || freq <= 0) return '—';
@@ -66,40 +96,51 @@ const formatWindow = (lastResetStep, freq) => {
 
 const computeHealthScore = (arr, windowSize = null) => {
     if (!arr || arr.length < 3) return '—';
-
     let totalAbsChange = 0;
     let oscillations = 0;
     let prevDiff = null;
-
     for (let i = 1; i < arr.length; i++) {
         const diff = arr[i] - arr[i - 1];
         totalAbsChange += Math.abs(diff);
-        if (prevDiff !== null && Math.sign(diff) !== Math.sign(prevDiff) && Math.abs(diff) > 1e-8) {
-            oscillations++;
-        }
+        if (prevDiff !== null && Math.sign(diff) !== Math.sign(prevDiff) && Math.abs(diff) > 1e-8) oscillations++;
         prevDiff = diff;
     }
-
     const n = arr.length - 1;
     const avgAbsChange = totalAbsChange / n;
-    const meanConfidence = arr.reduce((a, b) => a + b, 0) / arr.length;
-
-    const relativeChange = meanConfidence > 0 ? avgAbsChange / meanConfidence : avgAbsChange;
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const relativeChange = mean > 0 ? avgAbsChange / mean : avgAbsChange;
     const smoothness = Math.max(0, 1 - relativeChange * 9);
-
     const maxReasonableOsc = Math.max(1, n * 0.15);
     const oscillationPenalty = 1 - Math.min(oscillations / maxReasonableOsc, 0.9);
-
-    const variance = arr.reduce((a, v) => a + (v - meanConfidence) ** 2, 0) / arr.length;
-    const stdRel = meanConfidence > 0 ? Math.sqrt(variance) / meanConfidence : 1;
-    const stabilityBonus = meanConfidence > 0.3 ? Math.max(0, 1 - stdRel * 5) : 0;
-
+    const variance = arr.reduce((a, v) => a + (v - mean) ** 2, 0) / arr.length;
+    const stdRel = mean > 0 ? Math.sqrt(variance) / mean : 1;
+    const stabilityBonus = mean > 0.3 ? Math.max(0, 1 - stdRel * 5) : 0;
     let score = smoothness * 0.55 + oscillationPenalty * 0.30 + stabilityBonus * 0.15;
-
     if (windowSize && windowSize <= 50) score = Math.min(1, score * 1.08);
-
     return Math.max(0, Math.min(1, score)).toFixed(3);
 };
+
+const formatNum = (val) => {
+    if (val === null || val === undefined || val === '—') return '       —';
+    const num = parseFloat(val);
+    if (isNaN(num)) return '       —';
+    return num.toFixed(6).padStart(10, ' ');
+};
+
+const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
+const visibleLength = (str) => stripAnsi(str.toString()).length;
+
+const padVisible = (str, width, align = 'left') => {
+    if (str === null || str === undefined || str === '—') str = '—';
+    str = str.toString();
+    const visibleLen = visibleLength(str);
+    const paddingNeeded = Math.max(0, width - visibleLen);
+    const padding = ' '.repeat(paddingNeeded);
+    return align === 'right' ? padding + str : str + padding;
+};
+
+const padLabel = (label) => padVisible(label, 4);
+const padHealth = (score) => padVisible(colorHealthPct(score), 8, 'left');
 
 const colorHealthPct = (score) => {
     const G = '\x1b[32m';
@@ -122,10 +163,14 @@ const colorMeanByTrend = (mean, trend) => {
     return `${col}${mean}${X}`;
 };
 
-const updateWindowStats = (size) => {
+const updateWindowStats = (type, size) => {
+    const windows = type === 'conf' ? confidenceWindows : accuracyWindows;
+    const stats = windowStats[type][size];
     const arr = windows[size];
+
     if (arr.length === 0) {
-        windowStats[size] = { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0, healthScore: '—' };
+        stats.mean = stats.std = stats.min = stats.max = stats.diff = null;
+        stats.size = 0; stats.trend = 0; stats.healthScore = '—';
         return;
     }
 
@@ -143,31 +188,40 @@ const updateWindowStats = (size) => {
     const trendDiff = recent - older;
     const trend = trendDiff > 0.008 ? 1 : trendDiff < -0.008 ? -1 : 0;
 
-    const healthScore = computeHealthScore(arr, Number(size));
-
-    windowStats[size] = {
-        mean: mean.toFixed(6),
-        std: std.toFixed(6),
-        min: min.toFixed(6),
-        max: max.toFixed(6),
-        diff: diff.toFixed(6),
-        size: arr.length,
-        trend,
-        healthScore
-    };
+    stats.mean = mean.toFixed(6);
+    stats.std = std.toFixed(6);
+    stats.min = min.toFixed(6);
+    stats.max = max.toFixed(6);
+    stats.diff = diff.toFixed(6);
+    stats.size = arr.length;
+    stats.trend = trend;
+    stats.healthScore = computeHealthScore(arr, Number(size));
 };
 
 const updateAllStats = () => {
-    for (const size of Object.keys(windows)) updateWindowStats(Number(size));
+    for (const size of Object.keys(confidenceWindows)) {
+        updateWindowStats('conf', Number(size));
+        updateWindowStats('acc', Number(size));
+    }
 
-    if (lifetimeCount > 0) {
-        const mean = lifetimeSum / lifetimeCount;
-        const variance = lifetimeCount > 1 ? (lifetimeSumSq / lifetimeCount) - mean ** 2 : 0;
-        lifetimeStats.mean = mean.toFixed(6);
-        lifetimeStats.std = Math.sqrt(variance).toFixed(6);
-        lifetimeStats.min = allTimeMinConfidence === Infinity ? null : allTimeMinConfidence.toFixed(6);
-        lifetimeStats.max = allTimeMaxConfidence === -Infinity ? null : allTimeMaxConfidence.toFixed(6);
-        lifetimeStats.count = lifetimeCount;
+    if (lifetimeConfCount > 0) {
+        const mean = lifetimeConfSum / lifetimeConfCount;
+        const variance = lifetimeConfCount > 1 ? (lifetimeConfSumSq / lifetimeConfCount) - mean ** 2 : 0;
+        lifetimeStats.conf.mean = mean.toFixed(6);
+        lifetimeStats.conf.std = Math.sqrt(variance).toFixed(6);
+        lifetimeStats.conf.min = allTimeMinConf === Infinity ? null : allTimeMinConf.toFixed(6);
+        lifetimeStats.conf.max = allTimeMaxConf === -Infinity ? null : allTimeMaxConf.toFixed(6);
+        lifetimeStats.conf.count = lifetimeConfCount;
+    }
+
+    if (lifetimeAccCount > 0) {
+        const mean = lifetimeAccSum / lifetimeAccCount;
+        const variance = lifetimeAccCount > 1 ? (lifetimeAccSumSq / lifetimeAccCount) - mean ** 2 : 0;
+        lifetimeStats.acc.mean = mean.toFixed(6);
+        lifetimeStats.acc.std = Math.sqrt(variance).toFixed(6);
+        lifetimeStats.acc.min = allTimeMinAcc === Infinity ? null : allTimeMinAcc.toFixed(6);
+        lifetimeStats.acc.max = allTimeMaxAcc === -Infinity ? null : allTimeMaxAcc.toFixed(6);
+        lifetimeStats.acc.count = lifetimeAccCount;
     }
 };
 
@@ -181,12 +235,33 @@ const formatTime = (sec) => {
 
 const countLines = () => new Promise(resolve => {
     let count = 0;
-    const rl = readline.createInterface({
-        input: fs.createReadStream(path.join(import.meta.dirname, 'candles.jsonl'))
-    });
+    const rl = readline.createInterface({ input: fs.createReadStream(path.join(import.meta.dirname, 'candles.jsonl')) });
     rl.on('line', () => count++);
     rl.on('close', () => resolve(count));
 });
+
+const buildWindowRow = (label, stats) => {
+    const meanRaw = stats.mean ?? '—';
+    const stdRaw = stats.std ?? '—';
+    const minRaw = stats.min ?? '—';
+    const maxRaw = stats.max ?? '—';
+    const diffRaw = stats.diff ?? '—';
+
+    const mean = colorMeanByTrend(formatNum(meanRaw), stats.trend);
+    const std = '\x1b[33m' + formatNum(stdRaw) + '\x1b[0m';
+    const minVal = '\x1b[31m' + formatNum(minRaw) + '\x1b[0m';
+    const maxVal = '\x1b[32m' + formatNum(maxRaw) + '\x1b[0m';
+    const diff = '\x1b[35mΔ' + formatNum(diffRaw) + '\x1b[0m';
+
+    return `  ${padLabel(label)}: ${mean} ± ${std} [${minVal} → ${maxVal}] ${diff} H: ${padHealth(stats.healthScore)}`;
+};
+
+const getTrendArrow = (current, previous) => {
+    if (previous === null || current === '—') return ' ';
+    const diff = parseFloat(current) - parseFloat(previous);
+    if (Math.abs(diff) < 0.005) return '→';
+    return diff > 0 ? '↑' : '↓';
+};
 
 const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, estimatedTimeSec }) => {
     const C = '\x1b[36m';
@@ -208,8 +283,9 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     }
 
     const conf = signal.confidence?.toFixed(6) ?? '—';
-    const percentile = windows[1000].length > 10
-        ? (windows[1000].filter(c => c <= signal.confidence).length / windows[1000].length * 100).toFixed(1)
+    const acc = signal.globalAccuracy !== 'disabled' ? (typeof signal.globalAccuracy === 'number' ? signal.globalAccuracy.toFixed(3) : signal.globalAccuracy) : '—';
+    const percentile = confidenceWindows[1000].length > 10
+        ? (confidenceWindows[1000].filter(c => c <= signal.confidence).length / confidenceWindows[1000].length * 100).toFixed(1)
         : '—';
 
     const delta = previousConfidence !== null ? signal.confidence - previousConfidence : null;
@@ -220,12 +296,44 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const stepDiff = (maxConfidenceInCurrentStep - minConfidenceInCurrentStep).toFixed(6);
     const currentHealthScore = computeHealthScore(confidencePathInStep, confidencePathInStep.length);
 
+    const corrConfidence = Math.min(1, corrN / 500);
+    const corrNum = corrN > 10 ? (corrN * corrSumXY - corrSumX * corrSumY) / Math.sqrt((corrN * corrSumX2 - corrSumX ** 2) * (corrN * corrSumY2 - corrSumY ** 2) || 1) : 0;
+    const corrBonus = corrN > 10 ? Math.max(0, corrNum * 0.4) * corrConfidence : 0;
+    const corrPenalty = corrN > 10 && corrNum < 0 ? Math.abs(corrNum) * 0.5 * corrConfidence : 0;
+
+    const sizes = [500, 1000, 5000, 10000];
+    const weights = [0.2, 0.4, 0.3, 0.1];
+    let weightedConf = 0;
+    let weightedAcc = 0;
+    let totalWeight = 0;
+
+    const healthLines = sizes.map((size, i) => {
+        const ch = parseFloat(windowStats.conf[size].healthScore || '0');
+        const ah = parseFloat(windowStats.acc[size].healthScore || '0');
+        const blended = (ch * 0.55 + ah * 0.45) * (1 + corrBonus) * (1 - corrPenalty);
+        const score = Math.max(0, Math.min(1, blended)).toFixed(3);
+        const pct = (parseFloat(score) * 100).toFixed(1);
+        const col = parseFloat(score) >= 0.80 ? G : parseFloat(score) >= 0.60 ? Y : R;
+        weightedConf += ch * weights[i];
+        weightedAcc += ah * weights[i];
+        totalWeight += weights[i];
+        const label = size === 1000 ? '1K ' : size === 5000 ? '5K ' : size === 10000 ? '10K' : '500';
+        return `  ${padVisible(label, 4)} : ${col}${pct}%${X}`;
+    });
+
+    const finalBlended = totalWeight > 0 ? (weightedConf / totalWeight * 0.55 + weightedAcc / totalWeight * 0.45) * (1 + corrBonus) * (1 - corrPenalty) : 0;
+    const overallHealth = Math.max(0, Math.min(1, finalBlended)).toFixed(3);
+    const overallPct = (parseFloat(overallHealth) * 100).toFixed(1);
+    const overallColor = parseFloat(overallHealth) >= 0.80 ? G : parseFloat(overallHealth) >= 0.60 ? Y : R;
+    const trendArrow = getTrendArrow(overallHealth, previousOverallHealth);
+    previousOverallHealth = overallHealth;
+
     const signalLine = `
 ${B}Signal${X}
   Training Step : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
   Entry : ${C}${signal.entryPrice}${X}   Sell : ${C}${signal.sellPrice}${X}   Stop : ${C}${signal.stopLoss}${X}
   Mult  : ${C}${signal.multiplier.toFixed(3)}${X}   Conf : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
-  Prediction Accuracy : ${C}${signal.globalAccuracy}${X}${signal.globalAccuracy !== 'disabled' ? '%' : ''} Open simulations : ${C}${signal.openSimulations}${X}
+  Prediction Accuracy : ${C}${acc}${X}${signal.globalAccuracy !== 'disabled' ? '%' : ''} Open simulations : ${C}${signal.openSimulations}${X}
 
   Regulate every ${Y}${regulateFreq ?? '—'}${X} steps → last: ${C}${regulateStep ?? '—'}${X} next in ${M}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X}
   Gradient reset ${Y}${gradientResetFreq ?? '—'}${X} steps → last: ${C}${gradientResetStep ?? '—'}${X} next in ${M}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X}
@@ -239,17 +347,34 @@ ${B}STEP STABILITY WINDOW${X}
     └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles at step ${C}${maxRangeStep ?? '—'}${X} (gradient ${Y}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate ${Y}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
 
 ${B}LIFETIME CONFIDENCE${X}
-  Range : ${R}${lifetimeStats.min ?? '—'}${X} → ${G}${lifetimeStats.max ?? '—'}${X}   Mean : ${Y}${lifetimeStats.mean ?? '—'}${X} ± ${Y}${lifetimeStats.std ?? '—'}${X}
+  Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${Y}${lifetimeStats.conf.mean ?? '—'}${X} ± ${Y}${lifetimeStats.conf.std ?? '—'}${X}
+
+${B}LIFETIME ACCURACY${X}
+  Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${Y}${lifetimeStats.acc.mean ?? '—'}${X} ± ${Y}${lifetimeStats.acc.std ?? '—'}${X}
+
+${B}OVERALL MODEL HEALTH (Multi-Window)${X}
+${healthLines.join(' ')}
+  Final Blended : ${overallColor}${overallPct}%${X} ${M}${trendArrow}${X}
 
 ${B}ROLLING CONFIDENCE WINDOWS${X}
-  10  : ${colorMeanByTrend(windowStats[10].mean, windowStats[10].trend)} ± ${Y}${windowStats[10].std ?? '—'}${X} [${R}${windowStats[10].min ?? '—'}${X} → ${G}${windowStats[10].max ?? '—'}${X}] ${M}Δ${windowStats[10].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[10].healthScore)}
-  50  : ${colorMeanByTrend(windowStats[50].mean, windowStats[50].trend)} ± ${Y}${windowStats[50].std ?? '—'}${X} [${R}${windowStats[50].min ?? '—'}${X} → ${G}${windowStats[50].max ?? '—'}${X}] ${M}Δ${windowStats[50].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[50].healthScore)}
-  100 : ${colorMeanByTrend(windowStats[100].mean, windowStats[100].trend)} ± ${Y}${windowStats[100].std ?? '—'}${X} [${R}${windowStats[100].min ?? '—'}${X} → ${G}${windowStats[100].max ?? '—'}${X}] ${M}Δ${windowStats[100].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[100].healthScore)}
-  500 : ${colorMeanByTrend(windowStats[500].mean, windowStats[500].trend)} ± ${Y}${windowStats[500].std ?? '—'}${X} [${R}${windowStats[500].min ?? '—'}${X} → ${G}${windowStats[500].max ?? '—'}${X}] ${M}Δ${windowStats[500].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[500].healthScore)}
-  1K  : ${colorMeanByTrend(windowStats[1000].mean, windowStats[1000].trend)} ± ${Y}${windowStats[1000].std ?? '—'}${X} [${R}${windowStats[1000].min ?? '—'}${X} → ${G}${windowStats[1000].max ?? '—'}${X}] ${M}Δ${windowStats[1000].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[1000].healthScore)}
-  5K  : ${colorMeanByTrend(windowStats[5000].mean, windowStats[5000].trend)} ± ${Y}${windowStats[5000].std ?? '—'}${X} [${R}${windowStats[5000].min ?? '—'}${X} → ${G}${windowStats[5000].max ?? '—'}${X}] ${M}Δ${windowStats[5000].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[5000].healthScore)}
-  10K : ${colorMeanByTrend(windowStats[10000].mean, windowStats[10000].trend)} ± ${Y}${windowStats[10000].std ?? '—'}${X} [${R}${windowStats[10000].min ?? '—'}${X} → ${G}${windowStats[10000].max ?? '—'}${X}] ${M}Δ${windowStats[10000].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[10000].healthScore)}
-  25K : ${colorMeanByTrend(windowStats[25000].mean, windowStats[25000].trend)} ± ${Y}${windowStats[25000].std ?? '—'}${X} [${R}${windowStats[25000].min ?? '—'}${X} → ${G}${windowStats[25000].max ?? '—'}${X}] ${M}Δ${windowStats[25000].diff ?? '—'}${X} H: ${colorHealthPct(windowStats[25000].healthScore)}
+${buildWindowRow('10 ', windowStats.conf[10])}
+${buildWindowRow('50 ', windowStats.conf[50])}
+${buildWindowRow('100', windowStats.conf[100])}
+${buildWindowRow('500', windowStats.conf[500])}
+${buildWindowRow('1K ', windowStats.conf[1000])}
+${buildWindowRow('5K ', windowStats.conf[5000])}
+${buildWindowRow('10K', windowStats.conf[10000])}
+${buildWindowRow('25K', windowStats.conf[25000])}
+
+${B}ROLLING ACCURACY WINDOWS${X}
+${buildWindowRow('10 ', windowStats.acc[10])}
+${buildWindowRow('50 ', windowStats.acc[50])}
+${buildWindowRow('100', windowStats.acc[100])}
+${buildWindowRow('500', windowStats.acc[500])}
+${buildWindowRow('1K ', windowStats.acc[1000])}
+${buildWindowRow('5K ', windowStats.acc[5000])}
+${buildWindowRow('10K', windowStats.acc[10000])}
+${buildWindowRow('25K', windowStats.acc[25000])}
 `;
 
     process.stdout.write(`\n${'─'.repeat(100)}\n${progressLine}${signalLine}${'─'.repeat(100)}\n\n`);
@@ -284,6 +409,7 @@ const processCandles = () => {
 
                 if (shouldPredict && signal.confidence != null) {
                     const conf = signal.confidence;
+                    const acc = signal.globalAccuracy !== 'disabled' && typeof signal.globalAccuracy === 'number' ? signal.globalAccuracy : null;
 
                     if (currentStep === -1) currentStep = trainingSteps;
 
@@ -296,7 +422,6 @@ const processCandles = () => {
                             maxRangeAtGradientStep = gradientResetStep;
                             maxRangeAtRegulateStep = regulateStep;
                         }
-
                         candlesSinceStepIncrease = 0;
                         minConfidenceInCurrentStep = conf;
                         maxConfidenceInCurrentStep = conf;
@@ -309,15 +434,35 @@ const processCandles = () => {
                         confidencePathInStep.push(conf);
                     }
 
-                    lifetimeCount++;
-                    lifetimeSum += conf;
-                    lifetimeSumSq += conf * conf;
-                    allTimeMinConfidence = Math.min(allTimeMinConfidence, conf);
-                    allTimeMaxConfidence = Math.max(allTimeMaxConfidence, conf);
+                    lifetimeConfCount++;
+                    lifetimeConfSum += conf;
+                    lifetimeConfSumSq += conf * conf;
+                    allTimeMinConf = Math.min(allTimeMinConf, conf);
+                    allTimeMaxConf = Math.max(allTimeMaxConf, conf);
 
-                    for (const size of Object.keys(windows)) {
-                        windows[size].push(conf);
-                        if (windows[size].length > Number(size)) windows[size].shift();
+                    for (const size of Object.keys(confidenceWindows)) {
+                        confidenceWindows[size].push(conf);
+                        if (confidenceWindows[size].length > Number(size)) confidenceWindows[size].shift();
+                    }
+
+                    if (acc !== null) {
+                        lifetimeAccCount++;
+                        lifetimeAccSum += acc;
+                        lifetimeAccSumSq += acc * acc;
+                        allTimeMinAcc = Math.min(allTimeMinAcc, acc);
+                        allTimeMaxAcc = Math.max(allTimeMaxAcc, acc);
+
+                        for (const size of Object.keys(accuracyWindows)) {
+                            accuracyWindows[size].push(acc);
+                            if (accuracyWindows[size].length > Number(size)) accuracyWindows[size].shift();
+                        }
+
+                        corrN++;
+                        corrSumX += conf;
+                        corrSumY += acc;
+                        corrSumXY += conf * acc;
+                        corrSumX2 += conf * conf;
+                        corrSumY2 += acc * acc;
                     }
 
                     updateAllStats();
