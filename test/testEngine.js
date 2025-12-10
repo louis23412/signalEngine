@@ -197,6 +197,8 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const B = '\x1b[1m';
     const X = '\x1b[0m';
 
+    process.stdout.write('\x1b[2J\x1b[0f');
+
     const pct = totalLines ? ((totalCandles / totalLines) * 100).toFixed(3) : '0';
     const progressLine = `${B}Progress:${X} ${C}${totalCandles.toLocaleString()}${X}/${C}${totalLines.toLocaleString()}${X} (${C}${pct}%${X}) | Time: ${C}${formatTime(durationSec)}${X} | Avg: ${C}${avgSignalTime.toFixed(3)}s${X} | ETA: ${C}${formatTime(estimatedTimeSec)}${X}\n`;
 
@@ -222,7 +224,8 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
 ${B}Signal${X}
   Training Step : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
   Entry : ${C}${signal.entryPrice}${X}   Sell : ${C}${signal.sellPrice}${X}   Stop : ${C}${signal.stopLoss}${X}
-  Mult  : ${C}${signal.multiplier.toFixed(3)}${X}   Conf : ${G}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
+  Mult  : ${C}${signal.multiplier.toFixed(3)}${X}   Conf : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
+  Prediction Accuracy : ${C}${signal.globalAccuracy}${X}${signal.globalAccuracy !== 'disabled' ? '%' : ''} Open simulations : ${C}${signal.openSimulations}${X}
 
   Regulate every ${Y}${regulateFreq ?? '—'}${X} steps → last: ${C}${regulateStep ?? '—'}${X} next in ${M}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X}
   Gradient reset ${Y}${gradientResetFreq ?? '—'}${X} steps → last: ${C}${gradientResetStep ?? '—'}${X} next in ${M}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X}

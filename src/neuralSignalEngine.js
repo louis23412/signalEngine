@@ -32,6 +32,13 @@ class NeuralSignalEngine {
         regulateStep : null
     };
 
+    #globalAccuracy = {
+        total : 0,
+        correct : 0
+    }
+
+    #openSimulations = 0;
+
     constructor() {
         fs.mkdirSync(directoryPath, { recursive: true });
 
@@ -45,6 +52,7 @@ class NeuralSignalEngine {
         this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
 
         this.#initDatabase();
+        this.#loadGlobalAccuracy();
     }
 
     #initDatabase() {
@@ -54,7 +62,8 @@ class NeuralSignalEngine {
                 sellPrice REAL NOT NULL,
                 stopLoss REAL NOT NULL,
                 entryPrice REAL NOT NULL,
-                features TEXT NOT NULL
+                features TEXT NOT NULL,
+                confidence REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS candles (
                 timestamp TEXT PRIMARY KEY,
@@ -67,11 +76,45 @@ class NeuralSignalEngine {
             CREATE TABLE IF NOT EXISTS trained_features (
                 encoding TEXT PRIMARY KEY
             );
+            CREATE TABLE IF NOT EXISTS global_stats (
+                key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_open_trades_sellPrice ON open_trades(sellPrice);
             CREATE INDEX IF NOT EXISTS idx_open_trades_stopLoss ON open_trades(stopLoss);
             CREATE INDEX IF NOT EXISTS idx_candles_timestamp ON candles(timestamp);
             CREATE INDEX IF NOT EXISTS idx_trained_features_encoding ON trained_features(encoding);
         `);
+    }
+
+    #loadGlobalAccuracy() {
+        const selectStmt = this.#db.prepare(`
+            SELECT value FROM global_stats WHERE key = ?
+        `);
+
+        const totalRow = selectStmt.get('accuracy_total');
+        const correctRow = selectStmt.get('accuracy_correct');
+
+        if (totalRow) {
+            this.#globalAccuracy.total = totalRow.value;
+        }
+        if (correctRow) {
+            this.#globalAccuracy.correct = correctRow.value;
+        }
+    }
+
+    #saveGlobalAccuracy() {
+        const upsertStmt = this.#db.prepare(`
+            INSERT INTO global_stats (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `);
+
+        const transaction = this.#db.transaction(() => {
+            upsertStmt.run('accuracy_total', this.#globalAccuracy.total);
+            upsertStmt.run('accuracy_correct', this.#globalAccuracy.correct);
+        });
+        transaction();
     }
 
     #getRecentCandles(candles) {
@@ -218,12 +261,10 @@ class NeuralSignalEngine {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
         const tradesStmt = this.#db.prepare(`
-            SELECT timestamp, sellPrice, stopLoss, entryPrice, features
+            SELECT timestamp, sellPrice, stopLoss, entryPrice, features, confidence
             FROM open_trades
         `);
         const trades = tradesStmt.all();
-
-        console.log(`Current open trade simulations: ${trades.length}`);
 
         const closedTrades = [];
         const keysToDelete = new Set();
@@ -236,12 +277,14 @@ class NeuralSignalEngine {
                 if (candle.low <= trade.stopLoss || candle.high >= trade.sellPrice) {
                     const exitPrice = candle.low <= trade.stopLoss ? trade.stopLoss : trade.sellPrice;
                     const outcome = candle.low <= trade.stopLoss ? 0 : 1;
+                    
                     closedTrades.push({
                         timestamp: trade.timestamp,
                         entryPrice: trade.entryPrice,
                         exitPrice,
                         outcome,
-                        features
+                        features,
+                        confidence : trade.confidence
                     });
                     break;
                 }
@@ -257,6 +300,14 @@ class NeuralSignalEngine {
                 let tradeCounter = 0;
                 for (const trade of closedTrades) {
                     tradeCounter++;
+
+                    if (trade.confidence !== -1) {
+                        this.#globalAccuracy.total++
+
+                        if ((trade.confidence >= 50 && trade.outcome === 1) || (trade.confidence < 50 && trade.outcome === 0)) {
+                            this.#globalAccuracy.correct++;
+                        }
+                    }
 
                     const flatFeatures = trade.features.flat()
                     const encodingString = `${flatFeatures.join(',')}|${trade.outcome}`;
@@ -301,7 +352,10 @@ class NeuralSignalEngine {
                 for (const key of keysToDelete) {
                     deleteTradeStmt.run(key);
                 }
+
+                this.#saveGlobalAccuracy();
             });
+
             transaction();
         }
     }
@@ -318,7 +372,7 @@ class NeuralSignalEngine {
 
         if (error) return { error };
 
-        console.log(`Processed candles - Total: ${fullCandles.length} | Newly added: ${recentCandles.length}`);
+        // console.log(`Processed candles - Total: ${fullCandles.length} | Newly added: ${recentCandles.length}`);
 
         this.#updateOpenTrades(recentCandles, shouldSave, cutoff);
 
@@ -366,9 +420,11 @@ class NeuralSignalEngine {
         );
         const stopLoss = truncateToDecimals(entryPrice - stopLossDelta, 2);
 
+        const confidenceInsert = confidence !== 'disabled' ? confidence : -1
+
         const insertTradeStmt = this.#db.prepare(`
-            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, features)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO open_trades (timestamp, sellPrice, stopLoss, entryPrice, features, confidence)
+            VALUES (?, ?, ?, ?, ?, ?)
         `);
         
         insertTradeStmt.run(
@@ -376,8 +432,21 @@ class NeuralSignalEngine {
             sellPrice,
             stopLoss,
             entryPrice,
-            JSON.stringify(features)
+            JSON.stringify(features),
+            confidenceInsert
         );
+
+        let currentAcc;
+        if (confidenceInsert !== -1) {
+            currentAcc = this.#globalAccuracy.total > 0 
+                ? truncateToDecimals((this.#globalAccuracy.correct / this.#globalAccuracy.total) * 100, 3)
+                : 0
+        } else {
+            currentAcc = 'disabled'
+        }
+
+        const tradesStmt = this.#db.prepare(`SELECT timestamp FROM open_trades`);
+        this.#openSimulations = tradesStmt.all().length;
 
         return {
             entryPrice,
@@ -388,7 +457,9 @@ class NeuralSignalEngine {
             threshold: this.#config.baseConfidenceThreshold,
             lastTrainingStep : this.#trainingStep,
             lastGradientResetStep : this.#resetData.gradientResetStep,
-            lastRegulateStep : this.#resetData.regulateStep
+            lastRegulateStep : this.#resetData.regulateStep,
+            globalAccuracy : currentAcc,
+            openSimulations : this.#openSimulations
         };
     }
 }
