@@ -88,10 +88,10 @@ const lifetimeStats = {
 };
 
 const formatWindow = (lastResetStep, freq) => {
-    if (freq === null || freq <= 0) return '—';
-    const start = lastResetStep ?? 0;
+    if (lastResetStep === null || freq === null || freq <= 0) return '—';
+    const start = lastResetStep;
     const end = start + freq;
-    return `${start.toLocaleString()} – ${end.toLocaleString()}`;
+    return `${start.toLocaleString()} - ${end.toLocaleString()}`;
 };
 
 const computeHealthScore = (arr, windowSize = null) => {
@@ -413,22 +413,22 @@ const processCandles = () => {
 
                     if (currentStep === -1) currentStep = trainingSteps;
 
-                if (trainingSteps > currentStep) {
-                    const range = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
-                    if (range > maxRangeInStep) {
-                        maxRangeInStep = range;
-                        maxRangeStep = currentStep;
-                        maxRangeStableSteps = candlesSinceStepIncrease;
-                        maxRangeAtGradientStep = gradientResetFreq ? trainingSteps - (trainingSteps % gradientResetFreq) : null;
-                        maxRangeAtRegulateStep = regulateFreq ? trainingSteps - (trainingSteps % regulateFreq) : null;
-                    }
+                    if (trainingSteps > currentStep) {
+                        const range = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
+                        if (range > maxRangeInStep) {
+                            maxRangeInStep = range;
+                            maxRangeStep = currentStep;
+                            maxRangeStableSteps = candlesSinceStepIncrease;
+                            maxRangeAtGradientStep = gradientResetFreq ? currentStep - (currentStep % gradientResetFreq) : null;
+                            maxRangeAtRegulateStep = regulateFreq ? currentStep - (currentStep % regulateFreq) : null;
+                        }
 
-                    candlesSinceStepIncrease = 0;
-                    minConfidenceInCurrentStep = conf;
-                    maxConfidenceInCurrentStep = conf;
-                    confidencePathInStep = [conf];
-                    currentStep = trainingSteps;
-                } else {
+                        candlesSinceStepIncrease = 0;
+                        minConfidenceInCurrentStep = conf;
+                        maxConfidenceInCurrentStep = conf;
+                        confidencePathInStep = [conf];
+                        currentStep = trainingSteps;
+                    } else {
                         candlesSinceStepIncrease++;
                         minConfidenceInCurrentStep = Math.min(minConfidenceInCurrentStep, conf);
                         maxConfidenceInCurrentStep = Math.max(maxConfidenceInCurrentStep, conf);
