@@ -328,6 +328,9 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const trendArrow = getTrendArrow(overallHealth, previousOverallHealth);
     previousOverallHealth = overallHealth;
 
+    const isCurrentRecord = maxRangeStep === currentStep;
+    const recordLabel = isCurrentRecord ? `${Y}(current step)${X}` : `(step ${C}${maxRangeStep}${X})`;
+
     const signalLine = `
 ${B}Signal${X}
   Training Step : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
@@ -344,7 +347,7 @@ ${B}STEP STABILITY WINDOW${X}
   Health : ${colorHealthPct(currentHealthScore)}
 
   Largest range in stable window  : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
-    └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles at step ${C}${maxRangeStep ?? '—'}${X} (gradient ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
+    └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles ${recordLabel} (gradient ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
 
 ${B}LIFETIME CONFIDENCE${X}
   Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
@@ -414,9 +417,9 @@ const processCandles = () => {
                     if (currentStep === -1) currentStep = trainingSteps;
 
                     if (trainingSteps > currentStep) {
-                        const range = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
-                        if (range > maxRangeInStep) {
-                            maxRangeInStep = range;
+                        const completedRange = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
+                        if (completedRange > maxRangeInStep) {
+                            maxRangeInStep = completedRange;
                             maxRangeStep = currentStep;
                             maxRangeStableSteps = candlesSinceStepIncrease;
                             maxRangeAtGradientStep = gradientResetFreq ? currentStep - (currentStep % gradientResetFreq) : null;
@@ -433,6 +436,15 @@ const processCandles = () => {
                         minConfidenceInCurrentStep = Math.min(minConfidenceInCurrentStep, conf);
                         maxConfidenceInCurrentStep = Math.max(maxConfidenceInCurrentStep, conf);
                         confidencePathInStep.push(conf);
+
+                        const currentRange = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
+                        if (currentRange > maxRangeInStep) {
+                            maxRangeInStep = currentRange;
+                            maxRangeStep = currentStep;
+                            maxRangeStableSteps = candlesSinceStepIncrease;
+                            maxRangeAtGradientStep = gradientResetFreq ? currentStep - (currentStep % gradientResetFreq) : null;
+                            maxRangeAtRegulateStep = regulateFreq ? currentStep - (currentStep % regulateFreq) : null;
+                        }
                     }
 
                     lifetimeConfCount++;
