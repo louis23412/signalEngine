@@ -20,7 +20,7 @@ class HiveMind {
     #contextSensitivity = 0.5;
     #swarmIntelligenceFactor = 0.6;
 
-    #regulationFrequency = 1000;
+    #regulationFrequency = 10000;
     #gradientResetFrequency = 100;
 
     #contextWindow = this.#hiddenSize * 2;

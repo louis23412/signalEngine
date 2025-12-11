@@ -5,7 +5,7 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
-const trainingCutoff = 1001;
+const trainingCutoff = null;
 const shouldPredict = true;
 
 const cacheSize = 1000;
@@ -248,7 +248,7 @@ const buildWindowRow = (label, stats) => {
     const diffRaw = stats.diff ?? '—';
 
     const mean = colorMeanByTrend(formatNum(meanRaw), stats.trend);
-    const std = '\x1b[33m' + formatNum(stdRaw) + '\x1b[0m';
+    const std = '\x1b[36m' + formatNum(stdRaw) + '\x1b[0m';
     const minVal = '\x1b[31m' + formatNum(minRaw) + '\x1b[0m';
     const maxVal = '\x1b[32m' + formatNum(maxRaw) + '\x1b[0m';
     const diff = '\x1b[35mΔ' + formatNum(diffRaw) + '\x1b[0m';
@@ -275,7 +275,7 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     process.stdout.write('\x1b[2J\x1b[0f');
 
     const pct = totalLines ? ((totalCandles / totalLines) * 100).toFixed(3) : '0';
-    const progressLine = `${B}Progress:${X} ${C}${totalCandles.toLocaleString()}${X}/${C}${totalLines.toLocaleString()}${X} (${C}${pct}%${X}) | Time: ${C}${formatTime(durationSec)}${X} | Avg: ${C}${avgSignalTime.toFixed(3)}s${X} | ETA: ${C}${formatTime(estimatedTimeSec)}${X}\n`;
+    const progressLine = `Progress : ${C}${totalCandles.toLocaleString()}${X} / ${C}${totalLines.toLocaleString()}${X} (${C}${pct}%${X}) | Time : ${C}${formatTime(durationSec)}${X} | Avg : ${C}${avgSignalTime.toFixed(3)}s${X} | ETA : ${C}${formatTime(estimatedTimeSec)}${X}\n`;
 
     if (!shouldPredict || !signal) {
         process.stdout.write(`\n${'─'.repeat(100)}\n${progressLine}${'─'.repeat(100)}\n\n`);
@@ -335,24 +335,24 @@ ${B}Signal${X}
   Mult  : ${C}${signal.multiplier.toFixed(3)}${X}   Conf : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
   Prediction Accuracy : ${C}${acc}${X}${signal.globalAccuracy !== 'disabled' ? '%' : ''} Open simulations : ${C}${signal.openSimulations}${X}
 
-  Regulate every ${Y}${regulateFreq ?? '—'}${X} steps → last: ${C}${regulateStep ?? '—'}${X} next in ${M}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X}
-  Gradient reset ${Y}${gradientResetFreq ?? '—'}${X} steps → last: ${C}${gradientResetStep ?? '—'}${X} next in ${M}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X}
+  Regulate every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X}
+  Gradient reset ${C}${gradientResetFreq ?? '—'}${X} steps → last : ${C}${gradientResetStep ?? '—'}${X} next in ${C}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X}
 
 ${B}STEP STABILITY WINDOW${X}
-  Candles in current step    : ${M}${candlesSinceStepIncrease.toLocaleString()}${X}
-  Confidence range (current) : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X}   ${M}Δ${stepDiff}${X}
-  Health                     : ${colorHealthPct(currentHealthScore)}
+  Candles in current step : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
+  Confidence range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
+  Health : ${colorHealthPct(currentHealthScore)}
 
-  Largest range in stable window  : ${G}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
-    └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles at step ${C}${maxRangeStep ?? '—'}${X} (gradient ${Y}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate ${Y}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
+  Largest range in stable window  : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
+    └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles at step ${C}${maxRangeStep ?? '—'}${X} (gradient ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
 
 ${B}LIFETIME CONFIDENCE${X}
-  Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${Y}${lifetimeStats.conf.mean ?? '—'}${X} ± ${Y}${lifetimeStats.conf.std ?? '—'}${X}
+  Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
 
 ${B}LIFETIME ACCURACY${X}
-  Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${Y}${lifetimeStats.acc.mean ?? '—'}${X} ± ${Y}${lifetimeStats.acc.std ?? '—'}${X}
+  Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
 
-${B}OVERALL MODEL HEALTH (Multi-Window)${X}
+${B}OVERALL MODEL HEALTH${X}
 ${healthLines.join(' ')}
   Final Blended : ${overallColor}${overallPct}%${X} ${M}${trendArrow}${X}
 
@@ -413,21 +413,22 @@ const processCandles = () => {
 
                     if (currentStep === -1) currentStep = trainingSteps;
 
-                    if (trainingSteps > currentStep) {
-                        const range = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
-                        if (range > maxRangeInStep) {
-                            maxRangeInStep = range;
-                            maxRangeStep = currentStep;
-                            maxRangeStableSteps = candlesSinceStepIncrease;
-                            maxRangeAtGradientStep = gradientResetStep;
-                            maxRangeAtRegulateStep = regulateStep;
-                        }
-                        candlesSinceStepIncrease = 0;
-                        minConfidenceInCurrentStep = conf;
-                        maxConfidenceInCurrentStep = conf;
-                        confidencePathInStep = [conf];
-                        currentStep = trainingSteps;
-                    } else {
+                if (trainingSteps > currentStep) {
+                    const range = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
+                    if (range > maxRangeInStep) {
+                        maxRangeInStep = range;
+                        maxRangeStep = currentStep;
+                        maxRangeStableSteps = candlesSinceStepIncrease;
+                        maxRangeAtGradientStep = gradientResetFreq ? trainingSteps - (trainingSteps % gradientResetFreq) : null;
+                        maxRangeAtRegulateStep = regulateFreq ? trainingSteps - (trainingSteps % regulateFreq) : null;
+                    }
+
+                    candlesSinceStepIncrease = 0;
+                    minConfidenceInCurrentStep = conf;
+                    maxConfidenceInCurrentStep = conf;
+                    confidencePathInStep = [conf];
+                    currentStep = trainingSteps;
+                } else {
                         candlesSinceStepIncrease++;
                         minConfidenceInCurrentStep = Math.min(minConfidenceInCurrentStep, conf);
                         maxConfidenceInCurrentStep = Math.max(maxConfidenceInCurrentStep, conf);
