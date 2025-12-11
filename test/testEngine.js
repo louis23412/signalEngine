@@ -329,7 +329,7 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     previousOverallHealth = overallHealth;
 
     const isCurrentRecord = maxRangeStep === currentStep;
-    const recordLabel = isCurrentRecord ? `${Y}(current step)${X}` : `(step ${C}${maxRangeStep}${X})`;
+    const recordLabel = isCurrentRecord ? `${C}(current step)${X}` : `(step ${C}${maxRangeStep}${X})`;
 
     const signalLine = `
 ${B}Signal${X}
@@ -438,7 +438,7 @@ const processCandles = () => {
                         confidencePathInStep.push(conf);
 
                         const currentRange = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
-                        if (currentRange > maxRangeInStep) {
+                        if (currentRange > maxRangeInStep || maxRangeStep === currentStep) {
                             maxRangeInStep = currentRange;
                             maxRangeStep = currentStep;
                             maxRangeStableSteps = candlesSinceStepIncrease;
