@@ -341,6 +341,9 @@ class NeuralSignalEngine {
                     const existingEncoding = checkEncodingStmt.get(encodingHash);
                     if (existingEncoding) {
                         console.log(`Skipping training for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length} (duplicate encoding)`);
+                        process.stdout.moveCursor(0, -1);
+                        process.stdout.clearScreenDown();
+
                         keysToDelete.add(trade.timestamp);
                         continue;
                     }
@@ -353,6 +356,8 @@ class NeuralSignalEngine {
                     const diff = process.hrtime(startTime);
                     const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
                     console.log(`Training complete (${trainingData.step})! - Execution time: ${executionTime} seconds`);
+                    process.stdout.moveCursor(0, -2);
+                    process.stdout.clearScreenDown();
 
                     this.#trainingStep = trainingData.step;
                     this.#resetData.gradientResetStep = trainingData.lastGradientResetStep
