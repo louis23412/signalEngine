@@ -5,7 +5,7 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
-const trainingCutoff = 1001;
+const trainingCutoff = null;
 const shouldPredict = true;
 
 const cacheSize = 1000;
