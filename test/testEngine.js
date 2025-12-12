@@ -283,7 +283,15 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     }
 
     const conf = signal.confidence?.toFixed(6) ?? '—';
-    const acc = signal.globalAccuracy !== 'disabled' ? (typeof signal.globalAccuracy === 'number' ? signal.globalAccuracy.toFixed(3) : signal.globalAccuracy) : '—';
+
+    const countAcc = signal.countAccuracy !== 'disabled' 
+        ? (typeof signal.countAccuracy === 'number' ? signal.countAccuracy.toFixed(3) : signal.countAccuracy) 
+        : '—';
+
+    const trueAcc = signal.trueAccuracy !== 'disabled' 
+        ? (typeof signal.trueAccuracy === 'number' ? signal.trueAccuracy.toFixed(3) : signal.trueAccuracy) 
+        : '—';
+
     const percentile = confidenceWindows[1000].length > 10
         ? (confidenceWindows[1000].filter(c => c <= signal.confidence).length / confidenceWindows[1000].length * 100).toFixed(1)
         : '—';
@@ -332,16 +340,18 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const recordLabel = isCurrentRecord ? `${C}(current step)${X}` : `(step ${C}${maxRangeStep}${X})`;
 
     const signalLine = `
-${B}Signal${X}
-  Training Step : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
-  Entry : ${C}${signal.entryPrice}${X}   Sell : ${C}${signal.sellPrice}${X}   Stop : ${C}${signal.stopLoss}${X}
-  Mult  : ${C}${signal.multiplier.toFixed(3)}${X}   Conf : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
-  Prediction Accuracy : ${C}${acc}${X}${signal.globalAccuracy !== 'disabled' ? '%' : ''} Open simulations : ${C}${signal.openSimulations}${X}
+Regulate every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X}
+Gradient reset ${C}${gradientResetFreq ?? '—'}${X} steps → last : ${C}${gradientResetStep ?? '—'}${X} next in ${C}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X}
 
-  Regulate every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X}
-  Gradient reset ${C}${gradientResetFreq ?? '—'}${X} steps → last : ${C}${gradientResetStep ?? '—'}${X} next in ${C}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X}
+${B}Current Signal${X}
+  Training Step : ${C}${signal.lastTrainingStep.toLocaleString()}${X} Open simulations : ${C}${signal.openSimulations}${X}
+  Entry : ${C}${signal.entryPrice}${X} Sell : ${C}${signal.sellPrice}${X} Stop : ${C}${signal.stopLoss}${X}
+  Mult : ${C}${signal.multiplier.toFixed(3)}${X} Conf : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
 
-${B}STEP STABILITY WINDOW${X}
+${B}Model Accuracies${X}
+  Count Accuracy : ${C}${countAcc}${X}${signal.countAccuracy !== 'disabled' ? '%' : ''}  True Accuracy  : ${C}${trueAcc}${X}${signal.trueAccuracy !== 'disabled' ? '%' : ''}
+
+${B}Step Stability Window${X}
   Candles in current step : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
   Confidence range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
   Health : ${colorHealthPct(currentHealthScore)}
@@ -349,17 +359,17 @@ ${B}STEP STABILITY WINDOW${X}
   Largest range in stable window  : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
     └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles ${recordLabel} (gradient ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regulate ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
 
-${B}LIFETIME CONFIDENCE${X}
+${B}Lifetime Confidence${X}
   Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
 
-${B}LIFETIME ACCURACY${X}
+${B}Lifetime True Accuracy${X}
   Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
 
-${B}OVERALL MODEL HEALTH${X}
+${B}Overall Model Health${X}
 ${healthLines.join(' ')}
   Final Blended : ${overallColor}${overallPct}%${X} ${M}${trendArrow}${X}
 
-${B}ROLLING CONFIDENCE WINDOWS${X}
+${B}Rolling Confidence Windows${X}
 ${buildWindowRow('10 ', windowStats.conf[10])}
 ${buildWindowRow('50 ', windowStats.conf[50])}
 ${buildWindowRow('100', windowStats.conf[100])}
@@ -369,7 +379,7 @@ ${buildWindowRow('5K ', windowStats.conf[5000])}
 ${buildWindowRow('10K', windowStats.conf[10000])}
 ${buildWindowRow('25K', windowStats.conf[25000])}
 
-${B}ROLLING ACCURACY WINDOWS${X}
+${B}Rolling True Accuracy Windows${X}
 ${buildWindowRow('10 ', windowStats.acc[10])}
 ${buildWindowRow('50 ', windowStats.acc[50])}
 ${buildWindowRow('100', windowStats.acc[100])}
@@ -412,7 +422,7 @@ const processCandles = () => {
 
                 if (shouldPredict && signal.confidence != null) {
                     const conf = signal.confidence;
-                    const acc = signal.globalAccuracy !== 'disabled' && typeof signal.globalAccuracy === 'number' ? signal.globalAccuracy : null;
+                    const acc = signal.trueAccuracy !== 'disabled' && typeof signal.trueAccuracy === 'number' ? signal.trueAccuracy : null;
 
                     if (currentStep === -1) currentStep = trainingSteps;
 

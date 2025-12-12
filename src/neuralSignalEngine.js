@@ -34,7 +34,9 @@ class NeuralSignalEngine {
 
     #globalAccuracy = {
         total : 0,
-        correct : 0
+        correct : 0,
+        currentPoints : 0,
+        maxPoints : 0
     }
 
     #openSimulations = 0;
@@ -94,12 +96,20 @@ class NeuralSignalEngine {
 
         const totalRow = selectStmt.get('accuracy_total');
         const correctRow = selectStmt.get('accuracy_correct');
+        const currentPointsRow = selectStmt.get('accuracy_current_points');
+        const maxPointsRow = selectStmt.get('accuracy_max_points');
 
         if (totalRow) {
             this.#globalAccuracy.total = totalRow.value;
         }
         if (correctRow) {
             this.#globalAccuracy.correct = correctRow.value;
+        }
+        if (currentPointsRow) {
+            this.#globalAccuracy.currentPoints = currentPointsRow.value;
+        }
+        if (maxPointsRow) {
+            this.#globalAccuracy.maxPoints = maxPointsRow.value;
         }
     }
 
@@ -113,6 +123,8 @@ class NeuralSignalEngine {
         const transaction = this.#db.transaction(() => {
             upsertStmt.run('accuracy_total', this.#globalAccuracy.total);
             upsertStmt.run('accuracy_correct', this.#globalAccuracy.correct);
+            upsertStmt.run('accuracy_current_points', this.#globalAccuracy.currentPoints);
+            upsertStmt.run('accuracy_max_points', this.#globalAccuracy.maxPoints);
         });
         transaction();
     }
@@ -303,9 +315,22 @@ class NeuralSignalEngine {
 
                     if (trade.confidence !== -1) {
                         this.#globalAccuracy.total++
+                        this.#globalAccuracy.maxPoints += 100
 
-                        if ((trade.confidence >= 50 && trade.outcome === 1) || (trade.confidence < 50 && trade.outcome === 0)) {
-                            this.#globalAccuracy.correct++;
+                        if (trade.outcome === 1) {
+                            if (trade.confidence >= 50) {
+                                this.#globalAccuracy.correct++;
+                            }
+
+                            this.#globalAccuracy.currentPoints += trade.confidence
+                        }
+
+                        if (trade.outcome === 0) {
+                            if (trade.confidence < 50) {
+                               this.#globalAccuracy.correct++; 
+                            }
+
+                            this.#globalAccuracy.currentPoints += Math.abs(trade.confidence - 100)
                         }
                     }
 
@@ -437,12 +462,18 @@ class NeuralSignalEngine {
         );
 
         let currentAcc;
+        let trueAcc;
         if (confidenceInsert !== -1) {
             currentAcc = this.#globalAccuracy.total > 0 
                 ? truncateToDecimals((this.#globalAccuracy.correct / this.#globalAccuracy.total) * 100, 3)
-                : 0
+                : 'N/A'
+
+            trueAcc = this.#globalAccuracy.maxPoints > 0 
+                ? truncateToDecimals((this.#globalAccuracy.currentPoints / this.#globalAccuracy.maxPoints) * 100, 3)
+                : 'N/A'
         } else {
-            currentAcc = 'disabled'
+            currentAcc = 'disabled';
+            trueAcc = 'disabled'
         }
 
         const tradesStmt = this.#db.prepare(`SELECT timestamp FROM open_trades`);
@@ -458,7 +489,8 @@ class NeuralSignalEngine {
             lastTrainingStep : this.#trainingStep,
             lastGradientResetStep : this.#resetData.gradientResetStep,
             lastRegulateStep : this.#resetData.regulateStep,
-            globalAccuracy : currentAcc,
+            countAccuracy : currentAcc,
+            trueAccuracy : trueAcc,
             openSimulations : this.#openSimulations
         };
     }
