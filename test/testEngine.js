@@ -426,11 +426,11 @@ const processCandles = () => {
                             maxRangeAtRegulateStep = regulateFreq ? currentStep - (currentStep % regulateFreq) : null;
                         }
 
-                        candlesSinceStepIncrease = 0;
+                        currentStep = trainingSteps;
+                        candlesSinceStepIncrease = 1;
                         minConfidenceInCurrentStep = conf;
                         maxConfidenceInCurrentStep = conf;
                         confidencePathInStep = [conf];
-                        currentStep = trainingSteps;
                     } else {
                         candlesSinceStepIncrease++;
                         minConfidenceInCurrentStep = Math.min(minConfidenceInCurrentStep, conf);
