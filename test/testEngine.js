@@ -125,11 +125,16 @@ const getHealthColor = (score) => {
     const Y = '\x1b[33m';
     const R = '\x1b[31m';
     const X = '\x1b[0m';
+
     if (score === null) return `${Y}—${X}`;
-    if (score >= 85) return `${G}${score.toFixed(1)}${X}`;
-    if (score >= 65) return `${G}${score.toFixed(1)}${X}`;
-    if (score >= 50) return `${Y}${score.toFixed(1)}${X}`;
-    return `${R}${score.toFixed(1)}${X}`;
+
+    if (score >= 75) {
+        return `${G}${score.toFixed(1)}${X}`;
+    } else if (score >= 50) {
+        return `${Y}${score.toFixed(1)}${X}`;
+    } else {
+        return `${R}${score.toFixed(1)}${X}`;
+    }
 };
 
 const updateWindowStats = (type, size) => {
@@ -194,14 +199,13 @@ const updateAllStats = () => {
 };
 
 const computeModelHealth = () => {
-    if (lifetimeAccCount < 100) {  // Need sufficient history for reliable metrics
+    if (lifetimeAccCount < 100) {
         modelHealthScore = null;
         return;
     }
 
     let score = 0.0;
 
-    // Parse all stats safely
     const getMean = (size) => parseFloat(windowStats.acc[size]?.mean || 0);
     const getStd  = (size) => parseFloat(windowStats.acc[size]?.std  || 100);
     const getTrend = (size) => windowStats.acc[size]?.trend || 0;
@@ -223,10 +227,7 @@ const computeModelHealth = () => {
 
     const currentAcc = currentTrueAccuracy ?? mean100;
 
-    // ===================================================================
-    // 1. Risk-Adjusted Performance (Sharpe-like) – Core of the score (40 pts)
-    // ===================================================================
-    const recentSharpe100  = std100  < 0.1 ? 100 : mean100  / (std100  + 0.5); // avoid div0
+    const recentSharpe100  = std100  < 0.1 ? 100 : mean100  / (std100  + 0.5);
     const recentSharpe500  = std500  < 0.1 ? 100 : mean500  / (std500  + 0.5);
     const recentSharpe1000 = std1000 < 0.1 ? 100 : mean1000 / (std1000 + 0.5);
 
@@ -235,60 +236,41 @@ const computeModelHealth = () => {
         Math.min(15, recentSharpe500  * 0.3) +
         Math.min(10, recentSharpe1000 * 0.2)
     );
-    score += sharpeScore; // Max ~45, but capped per window
+    score += sharpeScore;
 
-    // ===================================================================
-    // 2. Sustained Absolute Performance (25 pts)
-    // ===================================================================
     const weightedRecentMean = (mean10 * 0.1 + mean50 * 0.2 + mean100 * 0.3 + mean500 * 0.3 + mean1000 * 0.1);
     score += Math.min(25, weightedRecentMean * 0.35);
 
-    // ===================================================================
-    // 3. Trend Momentum & Consistency Bonus (15 pts)
-    // ===================================================================
     let momentumBonus = 0;
     const positiveTrends = [10, 50, 100, 500, 1000].filter(s => getTrend(s) > 0).length;
-    momentumBonus += positiveTrends * 2; // up to 10
+    momentumBonus += positiveTrends * 2;
 
-    // Extra for strong short-term lift above long-term
     if (mean100 > longTermMean + 3 && getTrend(100) > 0 && getTrend(500) > 0) {
         momentumBonus += 5;
     }
 
     score += Math.min(15, momentumBonus);
 
-    // ===================================================================
-    // 4. Peak Excellence – Discounted heavily by age (10 pts max)
-    // ===================================================================
     let peakBonus = 0;
-    const peakAgeFactor = Math.max(0, 1 - stepsSinceNewPeak / 3000); // decays to 0 after ~3000 steps
+    const peakAgeFactor = Math.max(0, 1 - stepsSinceNewPeak / 3000);
     peakBonus = peakTrueAccuracy * 0.12 * peakAgeFactor;
     score += Math.min(10, peakBonus);
 
-    // ===================================================================
-    // 5. Maximum Drawdown Penalty (up to -30 pts)
-    // ===================================================================
-    const effectivePeak = Math.max(peakTrueAccuracy, mean1000 + 5); // don't punish beating long-term avg
+    const effectivePeak = Math.max(peakTrueAccuracy, mean1000 + 5);
     const drawdown = Math.max(0, effectivePeak - currentAcc);
 
     let ddPenalty = 0;
     if (drawdown > 2)  ddPenalty -= 3;
     if (drawdown > 5)  ddPenalty -= 5 + (drawdown - 5) * 0.8;
     if (drawdown > 10) ddPenalty -= 8 + (drawdown - 10) * 1.0;
-    if (drawdown > 20) ddPenalty -= 10; // catastrophic
+    if (drawdown > 20) ddPenalty -= 10;
 
     score += ddPenalty;
 
-    // ===================================================================
-    // 6. Stability Bonus – Low volatility in recent windows (10 pts)
-    // ===================================================================
     const avgRecentStd = (std10 + std100 + std500) / 3;
     const stabilityBonus = Math.max(0, 10 - avgRecentStd * 0.8);
     score += stabilityBonus;
 
-    // ===================================================================
-    // 7. Recovery & Resilience Bonus (up to 10 pts)
-    // ===================================================================
     let recoveryBonus = 0;
     if (secondPeakTrueAccuracy > 0) {
         const recovery = currentAcc - (secondPeakTrueAccuracy - 3);
@@ -297,20 +279,11 @@ const computeModelHealth = () => {
     }
     score += recoveryBonus;
 
-    // ===================================================================
-    // 8. Outperformance vs Lifetime Baseline (+5 pts if clearly beating history)
-    // ===================================================================
     if (mean500 > longTermMean + 4 && std500 < longTermStd) {
         score += 5;
     }
 
-    // ===================================================================
-    // Final Normalization to 0–100
-    // ===================================================================
     modelHealthScore = Math.max(0, Math.min(100, score));
-
-    // Optional: debug breakdown (remove in production)
-    // console.log({sharpeScore, weightedRecentMeanBonus: Math.min(25,weightedRecentMean*0.35), momentumBonus, peakBonus, ddPenalty, stabilityBonus, recoveryBonus, score: modelHealthScore});
 };
 
 const formatTime = (sec) => {
@@ -435,16 +408,15 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
         Entry Price : ${C}${signal.entryPrice}${X} Sell Price : ${C}${signal.sellPrice}${X} Stop Price : ${C}${signal.stopLoss}${X}
         Trade Multiplier : ${C}${signal.multiplier.toFixed(3)}${X}
 
-        Current Model Confidence : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${M}(${percentile}%ile)${X}
-        Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
-
         Trade Win Accuracy : ${C}${countAcc}${X}${signal.countAccuracy !== 'disabled' ? '%' : ''}
         True Model Confidence Accuracy : ${C}${trueAcc}${X}${signal.trueAccuracy !== 'disabled' ? '%' : ''}
         Lifetime True Accuracy Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
         Model health : ${modelHealthScore === null ? '—' : getHealthColor(modelHealthScore)}%
 
         Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
+        Current Model Confidence : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${C}(${percentile}%ile)${X}
         Current Confidence Range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
+        Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
         Largest Lifetime Confidence Range  : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
             └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles ${recordLabel} (gradient reset window ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regularization window ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
 
