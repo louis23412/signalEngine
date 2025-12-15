@@ -16,7 +16,6 @@ let currentStep = -1;
 let candlesSinceStepIncrease = 0;
 let minConfidenceInCurrentStep = Infinity;
 let maxConfidenceInCurrentStep = -Infinity;
-let confidencePathInStep = [];
 
 let maxRangeInStep = 0;
 let maxRangeStep = null;
@@ -48,6 +47,11 @@ let allTimeMaxAcc = -Infinity;
 
 let previousConfidence = null;
 
+let peakTrueAccuracy = 0;
+let secondPeakTrueAccuracy = 0;
+let currentTrueAccuracy = null;
+let modelHealthScore = null;
+
 const confidenceWindows = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
 const accuracyWindows   = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
 
@@ -78,16 +82,6 @@ const lifetimeStats = {
     conf: { min: null, max: null, mean: null, std: null, count: 0 },
     acc:  { min: null, max: null, mean: null, std: null, count: 0 }
 };
-
-let peakTrueAccuracy = 0;
-let stepAtPeakAccuracy = 0;
-let secondPeakTrueAccuracy = 0;
-
-let stepsSinceNewPeak = 0;
-let lastAccuracyUpdateStep = -1;
-let currentTrueAccuracy = null;
-
-let modelHealthScore = null;
 
 const formatWindow = (lastResetStep, freq) => {
     if (lastResetStep === null || freq === null || freq <= 0) return '—';
@@ -215,7 +209,6 @@ const computeModelHealth = () => {
     const mean100  = getMean(100);
     const mean500  = getMean(500);
     const mean1000 = getMean(1000);
-    const mean5000 = getMean(5000);
 
     const std10    = getStd(10);
     const std100   = getStd(100);
@@ -225,62 +218,73 @@ const computeModelHealth = () => {
     const longTermMean = parseFloat(lifetimeStats.acc.mean || 0);
     const longTermStd  = parseFloat(lifetimeStats.acc.std  || 100);
 
+    const lifetimeMinAcc = allTimeMinAcc === Infinity ? longTermMean : allTimeMinAcc;
+    const lifetimeMaxAcc = allTimeMaxAcc === -Infinity ? longTermMean : allTimeMaxAcc;
+    const lifetimeRange = Math.max(lifetimeMaxAcc - lifetimeMinAcc, 1);
+
     const currentAcc = currentTrueAccuracy ?? mean100;
+    const recentAcc = Math.max(currentAcc, mean100);
 
     const recentSharpe100  = std100  < 0.1 ? 100 : mean100  / (std100  + 0.5);
     const recentSharpe500  = std500  < 0.1 ? 100 : mean500  / (std500  + 0.5);
     const recentSharpe1000 = std1000 < 0.1 ? 100 : mean1000 / (std1000 + 0.5);
 
-    const sharpeScore = (
-        Math.min(20, recentSharpe100  * 0.4) +
-        Math.min(15, recentSharpe500  * 0.3) +
-        Math.min(10, recentSharpe1000 * 0.2)
-    );
+    const sharpeScore = Math.min(18, recentSharpe100 * 0.4) +
+                        Math.min(12, recentSharpe500 * 0.3) +
+                        Math.min(8,  recentSharpe1000 * 0.2);
     score += sharpeScore;
 
     const weightedRecentMean = (mean10 * 0.1 + mean50 * 0.2 + mean100 * 0.3 + mean500 * 0.3 + mean1000 * 0.1);
-    score += Math.min(25, weightedRecentMean * 0.35);
+    score += Math.min(20, weightedRecentMean * 0.35);
 
     let momentumBonus = 0;
     const positiveTrends = [10, 50, 100, 500, 1000].filter(s => getTrend(s) > 0).length;
-    momentumBonus += positiveTrends * 2;
+    momentumBonus += positiveTrends * 2.5;
 
-    if (mean100 > longTermMean + 3 && getTrend(100) > 0 && getTrend(500) > 0) {
-        momentumBonus += 5;
+    if (mean100 > longTermMean + 2 && getTrend(100) > 0 && getTrend(500) > 0) {
+        momentumBonus += 6;
     }
-
     score += Math.min(15, momentumBonus);
 
-    let peakBonus = 0;
-    const peakAgeFactor = Math.max(0, 1 - stepsSinceNewPeak / 3000);
-    peakBonus = peakTrueAccuracy * 0.12 * peakAgeFactor;
-    score += Math.min(10, peakBonus);
+    let lifetimeContextScore = 0;
+    const positionInLifetimeRange = (recentAcc - lifetimeMinAcc) / lifetimeRange;
+    const clampedPos = Math.min(1.2, Math.max(0, positionInLifetimeRange));
 
-    const effectivePeak = Math.max(peakTrueAccuracy, mean1000 + 5);
-    const drawdown = Math.max(0, effectivePeak - currentAcc);
-
-    let ddPenalty = 0;
-    if (drawdown > 2)  ddPenalty -= 3;
-    if (drawdown > 5)  ddPenalty -= 5 + (drawdown - 5) * 0.8;
-    if (drawdown > 10) ddPenalty -= 8 + (drawdown - 10) * 1.0;
-    if (drawdown > 20) ddPenalty -= 10;
-
-    score += ddPenalty;
-
-    const avgRecentStd = (std10 + std100 + std500) / 3;
-    const stabilityBonus = Math.max(0, 10 - avgRecentStd * 0.8);
-    score += stabilityBonus;
-
-    let recoveryBonus = 0;
-    if (secondPeakTrueAccuracy > 0) {
-        const recovery = currentAcc - (secondPeakTrueAccuracy - 3);
-        if (recovery >= 0) recoveryBonus += 6;
-        if (currentAcc >= secondPeakTrueAccuracy) recoveryBonus += 4;
+    if (clampedPos >= 1.0) {
+        lifetimeContextScore = 25;
+    } else if (clampedPos >= 0.9) {
+        lifetimeContextScore = 20 + (clampedPos - 0.9) * 50;
+    } else if (clampedPos >= 0.7) {
+        lifetimeContextScore = 15 + (clampedPos - 0.7) * 25;
+    } else if (clampedPos >= 0.5) {
+        lifetimeContextScore = 10 + (clampedPos - 0.5) * 25;
+    } else if (clampedPos >= 0.3) {
+        lifetimeContextScore = 5 + (clampedPos - 0.3) * 16.7;
+    } else {
+        lifetimeContextScore = clampedPos * 16.7;
     }
-    score += recoveryBonus;
+    score += lifetimeContextScore;
 
-    if (mean500 > longTermMean + 4 && std500 < longTermStd) {
-        score += 5;
+    const relativeStability = std500 / Math.max(longTermStd, 0.1);
+    let stabilityScore = 0;
+    if (relativeStability < 0.7) stabilityScore = 10;
+    else if (relativeStability < 0.9) stabilityScore = 7;
+    else if (relativeStability < 1.1) stabilityScore = 4;
+    else if (relativeStability < 1.4) stabilityScore = 1;
+
+    score += stabilityScore;
+
+    const zScore = longTermStd > 0.1 ? (mean100 - longTermMean) / longTermStd : 0;
+    let zBonus = 0;
+    if (zScore > 2.0) zBonus = 8;
+    else if (zScore > 1.0) zBonus = 5;
+    else if (zScore > 0.5) zBonus = 3;
+    else if (zScore < -1.0) zBonus = -6;
+    else if (zScore < -0.5) zBonus = -3;
+    score += zBonus;
+
+    if (secondPeakTrueAccuracy > 0 && currentAcc >= secondPeakTrueAccuracy - 2) {
+        score += currentAcc >= secondPeakTrueAccuracy ? 6 : 3;
     }
 
     modelHealthScore = Math.max(0, Math.min(100, score));
@@ -400,20 +404,19 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const fmtDiff   = (v) => formatNum(wDiff, v);
 
     const signalLine = dedent(`
+        Entry Price : ${C}${signal.entryPrice}${X} | Sell Price : ${C}${signal.sellPrice}${X} | Stop Price : ${C}${signal.stopLoss}${X} | Trade Multiplier : ${C}${signal.multiplier.toFixed(3)}${X}
+
+        Current Open Trade Simulations : ${C}${signal.openSimulations}${X}
+        Training Steps Completed : ${C}${signal.lastTrainingStep.toLocaleString()}${X} | Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
+
         Regularize model every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X} steps
         Apply and reset gradients every ${C}${gradientResetFreq ?? '—'}${X} steps → last : ${C}${gradientResetStep ?? '—'}${X} next in ${C}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X} steps
 
-        Training Steps Completed : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
-        Current Open Simulations : ${C}${signal.openSimulations}${X}
-        Entry Price : ${C}${signal.entryPrice}${X} Sell Price : ${C}${signal.sellPrice}${X} Stop Price : ${C}${signal.stopLoss}${X}
-        Trade Multiplier : ${C}${signal.multiplier.toFixed(3)}${X}
-
-        Trade Win Accuracy : ${C}${countAcc}${X}${signal.countAccuracy !== 'disabled' ? '%' : ''}
-        True Model Confidence Accuracy : ${C}${trueAcc}${X}${signal.trueAccuracy !== 'disabled' ? '%' : ''}
-        Lifetime True Accuracy Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
         Model health : ${modelHealthScore === null ? '—' : getHealthColor(modelHealthScore)}%
 
-        Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
+        Trade Win Accuracy : ${C}${countAcc}${X}${signal.countAccuracy !== 'disabled' ? '%' : ''} | True Model Confidence Accuracy : ${C}${trueAcc}${X}${signal.trueAccuracy !== 'disabled' ? '%' : ''}
+        Lifetime True Accuracy Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
+
         Current Model Confidence : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${C}(${percentile}%ile)${X}
         Current Confidence Range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
         Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
@@ -497,12 +500,10 @@ const processCandles = () => {
                         candlesSinceStepIncrease = 1;
                         minConfidenceInCurrentStep = conf;
                         maxConfidenceInCurrentStep = conf;
-                        confidencePathInStep = [conf];
                     } else {
                         candlesSinceStepIncrease++;
                         minConfidenceInCurrentStep = Math.min(minConfidenceInCurrentStep, conf);
                         maxConfidenceInCurrentStep = Math.max(maxConfidenceInCurrentStep, conf);
-                        confidencePathInStep.push(conf);
 
                         const currentRange = maxConfidenceInCurrentStep - minConfidenceInCurrentStep;
                         if (currentRange > maxRangeInStep || maxRangeStep === currentStep) {
@@ -532,18 +533,8 @@ const processCandles = () => {
                             secondPeakTrueAccuracy = peakTrueAccuracy;
 
                             peakTrueAccuracy = acc;
-                            stepAtPeakAccuracy = trainingSteps;
-                            stepsSinceNewPeak = 0;
                         } else if (acc > secondPeakTrueAccuracy && acc < peakTrueAccuracy) {
                             secondPeakTrueAccuracy = acc;
-                        }
-
-                        if (trainingSteps > stepAtPeakAccuracy) {
-                            stepsSinceNewPeak = trainingSteps - stepAtPeakAccuracy;
-                        }
-
-                        if (trainingSteps > lastAccuracyUpdateStep) {
-                            lastAccuracyUpdateStep = trainingSteps;
                         }
 
                         lifetimeAccCount++;
