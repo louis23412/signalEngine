@@ -410,7 +410,7 @@ class NeuralSignalEngine {
 
         if (indicators.error) return { error: 'Indicators error' };
 
-        const features = this.#extractFeatures(indicators, 1);
+        const features = this.#extractFeatures(indicators, 10);
 
         let confidence = 'disabled';
         let multiplier = 'disabled';
@@ -471,11 +471,11 @@ class NeuralSignalEngine {
         if (confidenceInsert !== -1) {
             currentAcc = this.#globalAccuracy.total > 0 
                 ? truncateToDecimals((this.#globalAccuracy.correct / this.#globalAccuracy.total) * 100, 3)
-                : 'N/A'
+                : '—'
 
             trueAcc = this.#globalAccuracy.maxPoints > 0 
                 ? truncateToDecimals((this.#globalAccuracy.currentPoints / this.#globalAccuracy.maxPoints) * 100, 3)
-                : 'N/A'
+                : '—'
         } else {
             currentAcc = 'disabled';
             trueAcc = 'disabled'

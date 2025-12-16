@@ -5,8 +5,8 @@ import Database from 'better-sqlite3';
 import { isValidNumber } from './utils.js';
 
 class HiveMind {
-    #inputSize = 10;
-    #ensembleSize = 7;
+    #inputSize = 100;
+    #ensembleSize = 64;
     #numLayers = 3;
     #numHeads = 4;
     #hiddenSize = this.#numHeads * 4;

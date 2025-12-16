@@ -45,12 +45,25 @@ let lifetimeAccSumSq = 0;
 let allTimeMinAcc = Infinity;
 let allTimeMaxAcc = -Infinity;
 
+let lifetimeHealthCount = 0;
+let lifetimeHealthSum = 0;
+let lifetimeHealthSumSq = 0;
+let allTimeMinHealth = Infinity;
+let allTimeMaxHealth = -Infinity;
+
 let previousConfidence = null;
 
 let peakTrueAccuracy = 0;
 let secondPeakTrueAccuracy = 0;
 let currentTrueAccuracy = null;
 let modelHealthScore = null;
+
+const G = '\x1b[32m';
+const Y = '\x1b[33m';
+const R = '\x1b[31m';
+const X = '\x1b[0m';
+const C = '\x1b[36m';
+const M = '\x1b[35m';
 
 const confidenceWindows = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
 const accuracyWindows   = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
@@ -80,7 +93,8 @@ const windowStats = {
 
 const lifetimeStats = {
     conf: { min: null, max: null, mean: null, std: null, count: 0 },
-    acc:  { min: null, max: null, mean: null, std: null, count: 0 }
+    acc:  { min: null, max: null, mean: null, std: null, count: 0 },
+    health: { min: null, max: null, mean: null, std: null, count: 0 }
 };
 
 const formatWindow = (lastResetStep, freq) => {
@@ -90,36 +104,7 @@ const formatWindow = (lastResetStep, freq) => {
     return `${start.toLocaleString()} - ${end.toLocaleString()}`;
 };
 
-const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
-const visibleLength = (str) => stripAnsi(str.toString()).length;
-
-const padVisible = (str, width, align = 'left') => {
-    if (str === null || str === undefined || str === '—') str = '—';
-    str = str.toString();
-    const visibleLen = visibleLength(str);
-    const paddingNeeded = Math.max(0, width - visibleLen);
-    const padding = ' '.repeat(paddingNeeded);
-    return align === 'right' ? padding + str : str + padding;
-};
-
-const padLabel = (label) => padVisible(label, 4);
-
-const colorMeanByTrend = (mean, trend) => {
-    const G = '\x1b[32m';
-    const R = '\x1b[31m';
-    const Y = '\x1b[33m';
-    const X = '\x1b[0m';
-    if (mean === null) return `${Y}—${X}`;
-    const col = trend > 0 ? G : trend < 0 ? R : Y;
-    return `${col}${mean}${X}`;
-};
-
 const getHealthColor = (score) => {
-    const G = '\x1b[32m';
-    const Y = '\x1b[33m';
-    const R = '\x1b[31m';
-    const X = '\x1b[0m';
-
     if (score === null) return `${Y}—${X}`;
 
     if (score >= 75) {
@@ -190,6 +175,16 @@ const updateAllStats = () => {
         lifetimeStats.acc.max = allTimeMaxAcc === -Infinity ? null : allTimeMaxAcc.toFixed(6);
         lifetimeStats.acc.count = lifetimeAccCount;
     }
+
+    if (lifetimeHealthCount > 0) {
+        const mean = lifetimeHealthSum / lifetimeHealthCount;
+        const variance = lifetimeHealthCount > 1 ? (lifetimeHealthSumSq / lifetimeHealthCount) - mean ** 2 : 0;
+        lifetimeStats.health.mean = mean.toFixed(6);
+        lifetimeStats.health.std = Math.sqrt(variance).toFixed(6);
+        lifetimeStats.health.min = allTimeMinHealth === Infinity ? null : allTimeMinHealth.toFixed(6);
+        lifetimeStats.health.max = allTimeMaxHealth === -Infinity ? null : allTimeMaxHealth.toFixed(6);
+        lifetimeStats.health.count = lifetimeHealthCount;
+    }
 };
 
 const computeModelHealth = () => {
@@ -210,7 +205,6 @@ const computeModelHealth = () => {
     const mean500  = getMean(500);
     const mean1000 = getMean(1000);
 
-    const std10    = getStd(10);
     const std100   = getStd(100);
     const std500   = getStd(500);
     const std1000  = getStd(1000);
@@ -229,9 +223,7 @@ const computeModelHealth = () => {
     const recentSharpe500  = std500  < 0.1 ? 100 : mean500  / (std500  + 0.5);
     const recentSharpe1000 = std1000 < 0.1 ? 100 : mean1000 / (std1000 + 0.5);
 
-    const sharpeScore = Math.min(18, recentSharpe100 * 0.4) +
-                        Math.min(12, recentSharpe500 * 0.3) +
-                        Math.min(8,  recentSharpe1000 * 0.2);
+    const sharpeScore = Math.min(18, recentSharpe100 * 0.4) + Math.min(12, recentSharpe500 * 0.3) + Math.min(8,  recentSharpe1000 * 0.2);
     score += sharpeScore;
 
     const weightedRecentMean = (mean10 * 0.1 + mean50 * 0.2 + mean100 * 0.3 + mean500 * 0.3 + mean1000 * 0.1);
@@ -288,14 +280,22 @@ const computeModelHealth = () => {
     }
 
     modelHealthScore = Math.max(0, Math.min(100, score));
+
+    if (modelHealthScore !== null) {
+        lifetimeHealthCount++;
+        lifetimeHealthSum += modelHealthScore;
+        lifetimeHealthSumSq += modelHealthScore * modelHealthScore;
+        allTimeMinHealth = Math.min(allTimeMinHealth, modelHealthScore);
+        allTimeMaxHealth = Math.max(allTimeMaxHealth, modelHealthScore);
+    }
 };
 
 const formatTime = (sec) => {
-    if (sec < 1) return `${(sec * 1000).toFixed(0)}ms`;
+    if (sec < 1) return `${C}${(sec * 1000).toFixed(0)}${X}ms`;
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
-    return `${h ? h + 'h ' : ''}${m ? m + 'm ' : ''}${s}s`;
+    return `${h ? `${C}${h}` + `${X}h ` : ''}${m ? `${C}${m}` + `${X}m ` : ''}${`${C}${s}`}${X}s`;
 };
 
 const countLines = () => new Promise(resolve => {
@@ -304,26 +304,6 @@ const countLines = () => new Promise(resolve => {
     rl.on('line', () => count++);
     rl.on('close', () => resolve(count));
 });
-
-const formatNum = (width, val) => {
-    if (val === null || val === undefined || val === '—') {
-        return '—'.padStart(width, ' ');
-    }
-    const num = parseFloat(val);
-    if (isNaN(num)) return '—'.padStart(width, ' ');
-    return num.toFixed(6).padStart(width, ' ');
-};
-
-const getMaxWidth = (values) => {
-    let max = '—'.length;
-    for (const val of values) {
-        if (val !== null && val !== undefined) {
-            const str = parseFloat(val).toFixed(6);
-            max = Math.max(max, str.length);
-        }
-    }
-    return max;
-};
 
 const dedent = (str) => {
     const lines = str.split('\n');
@@ -340,24 +320,10 @@ const dedent = (str) => {
 };
 
 const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, estimatedTimeSec }) => {
-    const C = '\x1b[36m';
-    const G = '\x1b[32m';
-    const R = '\x1b[31m';
-    const M = '\x1b[35m';
-    const B = '\x1b[1m';
-    const X = '\x1b[0m';
-
-    process.stdout.write('\x1b[2J\x1b[0f');
-
     const pct = totalLines ? ((totalCandles / totalLines) * 100).toFixed(3) : '0';
-    const progressLine = `Progress : ${C}${totalCandles.toLocaleString()}${X} / ${C}${totalLines.toLocaleString()}${X} (${C}${pct}%${X}) | Time : ${C}${formatTime(durationSec)}${X} | Avg : ${C}${avgSignalTime.toFixed(3)}s${X} | ETA : ${C}${formatTime(estimatedTimeSec)}${X}\n\n`;
+    const progressLine = `Progress : ${C}${totalCandles.toLocaleString()}${X} / ${C}${totalLines.toLocaleString()}${X} (${C}${pct}${X}%) | Time : ${formatTime(durationSec)} | Avg : ${formatTime(avgSignalTime)} | ETA : ${formatTime(estimatedTimeSec)}\n\n`;
 
-    if (!shouldPredict || !signal) {
-        process.stdout.write(`\n${'─'.repeat(100)}\n${progressLine}${'─'.repeat(100)}\n\n`);
-        return;
-    }
-
-    const conf = signal.confidence?.toFixed(6) ?? '—';
+    const conf = signal.confidence ?? '—';
 
     const countAcc = signal.countAccuracy !== 'disabled' 
         ? (typeof signal.countAccuracy === 'number' ? signal.countAccuracy.toFixed(3) : signal.countAccuracy) 
@@ -381,76 +347,36 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const isCurrentRecord = maxRangeStep === currentStep;
     const recordLabel = isCurrentRecord ? `${C}(current step)${X}` : `(step ${C}${maxRangeStep}${X})`;
 
-    const allMeans = [];
-    const allStds = [];
-    const allMinMax = [];
-    const allDiffs = [];
-
-    Object.values(windowStats.conf).concat(Object.values(windowStats.acc)).forEach(s => {
-        allMeans.push(s.mean);
-        allStds.push(s.std);
-        allMinMax.push(s.min, s.max);
-        allDiffs.push(s.diff);
-    });
-
-    const wMean   = getMaxWidth(allMeans);
-    const wStd    = getMaxWidth(allStds);
-    const wMinMax = getMaxWidth(allMinMax);
-    const wDiff   = getMaxWidth(allDiffs);
-
-    const fmtMean   = (v) => formatNum(wMean, v);
-    const fmtStd    = (v) => formatNum(wStd, v);
-    const fmtMinMax = (v) => formatNum(wMinMax, v);
-    const fmtDiff   = (v) => formatNum(wDiff, v);
-
     const signalLine = dedent(`
-        Entry Price : ${C}${signal.entryPrice}${X} | Sell Price : ${C}${signal.sellPrice}${X} | Stop Price : ${C}${signal.stopLoss}${X} | Trade Multiplier : ${C}${signal.multiplier.toFixed(3)}${X}
+        Entry Price : ${C}${signal.entryPrice}${X} | Sell Price : ${C}${signal.sellPrice}${X} | Stop Price : ${C}${signal.stopLoss}${X} | Trade Multiplier : ${C}${signal.multiplier}${X}
 
         Current Open Trade Simulations : ${C}${signal.openSimulations}${X}
-        Training Steps Completed : ${C}${signal.lastTrainingStep.toLocaleString()}${X} | Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
+        Training Steps Completed : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
+        Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
 
+        ${shouldPredict ? 
+        `
         Regularize model every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X} steps
         Apply and reset gradients every ${C}${gradientResetFreq ?? '—'}${X} steps → last : ${C}${gradientResetStep ?? '—'}${X} next in ${C}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X} steps
 
-        Model health : ${modelHealthScore === null ? '—' : getHealthColor(modelHealthScore)}%
+        Model Health : ${modelHealthScore === null ? `${C}—${X}` : getHealthColor(modelHealthScore)}%
+        Lifetime Model Health Range : ${R}${lifetimeStats.health.min ?? '—'}${X} → ${G}${lifetimeStats.health.max ?? '—'}${X} Mean : ${C}${lifetimeStats.health.mean ?? '—'}${X} ± ${C}${lifetimeStats.health.std ?? '—'}${X}
 
-        Trade Win Accuracy : ${C}${countAcc}${X}${signal.countAccuracy !== 'disabled' ? '%' : ''} | True Model Confidence Accuracy : ${C}${trueAcc}${X}${signal.trueAccuracy !== 'disabled' ? '%' : ''}
-        Lifetime True Accuracy Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
+        Trade Win Accuracy : ${C}${countAcc}${X}${signal.countAccuracy !== 'disabled' ? '%' : ''}
+        True Model Confidence Accuracy : ${C}${trueAcc}${X}${signal.trueAccuracy !== 'disabled' ? '%' : ''}
+        Lifetime True Accuracy Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X} Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
 
         Current Model Confidence : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${C}(${percentile}%ile)${X}
         Current Confidence Range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
-        Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X}   Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
-        Largest Lifetime Confidence Range  : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
+        Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X} Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
+        Largest Lifetime Confidence Range : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
             └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles ${recordLabel} (gradient reset window ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regularization window ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
-
-        ${buildWindowRow('10 ', windowStats.conf[10], windowStats.acc[10], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('50 ', windowStats.conf[50], windowStats.acc[50], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('100', windowStats.conf[100], windowStats.acc[100], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('500', windowStats.conf[500], windowStats.acc[500], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('1K ', windowStats.conf[1000], windowStats.acc[1000], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('5K ', windowStats.conf[5000], windowStats.acc[5000], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('10K', windowStats.conf[10000], windowStats.acc[10000], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
-        ${buildWindowRow('25K', windowStats.conf[25000], windowStats.acc[25000], fmtMean, fmtStd, fmtMinMax, fmtDiff)}
+        ` 
+        : 'prediction + stats disabled'}
     `);
 
+    process.stdout.write('\x1b[2J\x1b[0f');
     process.stdout.write(`\n${'─'.repeat(100)}\n${progressLine}${signalLine}\n${'─'.repeat(100)}\n`);
-};
-
-const buildWindowRow = (label, confStats, accStats, fmtMean, fmtStd, fmtMinMax, fmtDiff) => {
-    const meanConf = colorMeanByTrend(fmtMean(confStats.mean), confStats.trend);
-    const stdConf  = '\x1b[36m' + fmtStd(confStats.std) + '\x1b[0m';
-    const minConf  = '\x1b[31m' + fmtMinMax(confStats.min) + '\x1b[0m';
-    const maxConf  = '\x1b[32m' + fmtMinMax(confStats.max) + '\x1b[0m';
-    const diffConf = '\x1b[35mΔ' + fmtDiff(confStats.diff) + '\x1b[0m';
-
-    const meanAcc = colorMeanByTrend(fmtMean(accStats.mean), accStats.trend);
-    const stdAcc  = '\x1b[36m' + fmtStd(accStats.std) + '\x1b[0m';
-    const minAcc  = '\x1b[31m' + fmtMinMax(accStats.min) + '\x1b[0m';
-    const maxAcc  = '\x1b[32m' + fmtMinMax(accStats.max) + '\x1b[0m';
-    const diffAcc = '\x1b[35mΔ' + fmtDiff(accStats.diff) + '\x1b[0m';
-
-    return `${padLabel(label)}Confidence : ${meanConf} ± ${stdConf} [${minConf} → ${maxConf}] ${diffConf}
-            └─True Acc : ${meanAcc} ± ${stdAcc} [${minAcc} → ${maxAcc}] ${diffAcc}`;
 };
 
 const processCandles = () => {
@@ -531,7 +457,6 @@ const processCandles = () => {
 
                         if (acc > peakTrueAccuracy) {
                             secondPeakTrueAccuracy = peakTrueAccuracy;
-
                             peakTrueAccuracy = acc;
                         } else if (acc > secondPeakTrueAccuracy && acc < peakTrueAccuracy) {
                             secondPeakTrueAccuracy = acc;
