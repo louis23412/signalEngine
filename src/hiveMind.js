@@ -6,7 +6,7 @@ import { isValidNumber } from './utils.js';
 
 class HiveMind {
     #inputSize = 100;
-    #ensembleSize = 64;
+    #ensembleSize = 7;
     #numLayers = 3;
     #numHeads = 4;
     #hiddenSize = this.#numHeads * 4;
@@ -20,7 +20,7 @@ class HiveMind {
     #contextSensitivity = 0.5;
     #swarmIntelligenceFactor = 0.6;
 
-    #regulationFrequency = 10000;
+    #regulationFrequency = 1000;
     #gradientResetFrequency = 100;
 
     #contextWindow = this.#hiddenSize * 2;

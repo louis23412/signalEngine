@@ -353,7 +353,6 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
         Current Open Trade Simulations : ${C}${signal.openSimulations}${X}
         Training Steps Completed : ${C}${signal.lastTrainingStep.toLocaleString()}${X}
         Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
-
         ${shouldPredict ? 
         `
         Regularize model every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X} steps
