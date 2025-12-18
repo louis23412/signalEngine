@@ -5,6 +5,8 @@ import NeuralSignalEngine from '../src/neuralSignalEngine.js';
 
 const engine = new NeuralSignalEngine();
 
+const scriptStartTime = process.hrtime.bigint();
+
 const trainingCutoff = null;
 const shouldPredict = true;
 
@@ -279,10 +281,17 @@ const computeModelHealth = () => {
 
 const formatTime = (sec) => {
     if (sec < 1) return `${C}${(sec * 1000).toFixed(0)}${X}ms`;
+
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
-    return `${h ? `${C}${h}` + `${X}h ` : ''}${m ? `${C}${m}` + `${X}m ` : ''}${`${C}${s}`}${X}s`;
+
+    const remainingSec = sec - (h * 3600 + m * 60 + s);
+    const ms = Math.round(remainingSec * 1000);
+
+    const sPart = ms > 0 ? `${C}${s}${X}s ${C}${ms}${X}ms` : `${C}${s}${X}s`;
+
+    return `${h ? `${C}${h}${X}h ` : ''}${m ? `${C}${m}${X}m ` : ''}${sPart}`;
 };
 
 const countLines = () => new Promise(resolve => {
@@ -308,7 +317,11 @@ const dedent = (str) => {
 
 const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, estimatedTimeSec }) => {
     const pct = totalLines ? ((totalCandles / totalLines) * 100).toFixed(3) : '0';
-    const progressLine = `Progress : ${C}${totalCandles.toLocaleString()}${X} / ${C}${totalLines.toLocaleString()}${X} (${C}${pct}${X}%) | Time : ${formatTime(durationSec)} | Avg : ${formatTime(avgSignalTime)} | ETA : ${formatTime(estimatedTimeSec)}\n\n`;
+
+    const now = process.hrtime.bigint();
+    const runtimeSec = Number(now - scriptStartTime) / 1e9;
+
+    const progressLine = `Progress : ${C}${totalCandles.toLocaleString()}${X} / ${C}${totalLines.toLocaleString()}${X} (${C}${pct}${X}%) | Time : ${formatTime(durationSec)} | Avg : ${formatTime(avgSignalTime)}\nRuntime : ${formatTime(runtimeSec)} | ETA : ${formatTime(estimatedTimeSec)}\n\n`;
 
     const conf = signal.confidence ?? '—';
 
@@ -469,8 +482,24 @@ const processCandles = () => {
 
     rd.on('close', () => {
         console.log(`\nCompleted. Processed ${totalCandles.toLocaleString()} candles.`);
+
+        const finalNow = process.hrtime.bigint();
+        const finalRuntimeSec = Number(finalNow - scriptStartTime) / 1e9;
+
+        console.log(`Total runtime: ${formatTime(finalRuntimeSec)}`);
+
         if (shouldPredict && signalCount > 0) {
-            formatSignal({ totalCandles, totalLines, durationSec: 0, avgSignalTime: 0, estimatedTimeSec: 0 });
+            const avg = signalTimes.length > 0 
+                ? signalTimes.reduce((a, b) => a + b, 0) / signalTimes.length 
+                : 0;
+
+            formatSignal({ 
+                totalCandles, 
+                totalLines, 
+                durationSec: 0, 
+                avgSignalTime: avg, 
+                estimatedTimeSec: 0 
+            });
         }
     });
 };

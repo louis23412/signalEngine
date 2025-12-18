@@ -77,8 +77,8 @@ class HiveMind {
         this.#hiddenSize = this.#numHeads * this.#headDim;
         this.#feedForwardSize = this.#hiddenSize * 4;
 
-        this.#learningRate = this.#inputSize / 1000000;
-        this.#learningRateDecay = this.#learningRate / 10;
+        this.#learningRate = Number(Math.min(0.001, 0.01 / Math.max(this.#inputSize, 1)).toPrecision(6));
+        this.#learningRateDecay = Number((this.#learningRate / 10).toPrecision(6));
         this.#weightDecayRate = this.#learningRate;
 
         this.#contextWindow = this.#hiddenSize * 2;
