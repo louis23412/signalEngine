@@ -20,18 +20,12 @@ let maxConfidenceInCurrentStep = -Infinity;
 let maxRangeInStep = 0;
 let maxRangeStep = null;
 let maxRangeStableSteps = 0;
-let maxRangeAtGradientStep = null;
-let maxRangeAtRegulateStep = null;
 
 let signal;
 let totalCandles = 0;
 let totalLines = 0;
 let signalCount = 0;
 let trainingSteps = 0;
-let gradientResetFreq = null;
-let gradientResetStep = null;
-let regulateFreq = null;
-let regulateStep = null;
 
 let lifetimeConfCount = 0;
 let lifetimeConfSum = 0;
@@ -95,13 +89,6 @@ const lifetimeStats = {
     conf: { min: null, max: null, mean: null, std: null, count: 0 },
     acc:  { min: null, max: null, mean: null, std: null, count: 0 },
     health: { min: null, max: null, mean: null, std: null, count: 0 }
-};
-
-const formatWindow = (lastResetStep, freq) => {
-    if (lastResetStep === null || freq === null || freq <= 0) return '—';
-    const start = lastResetStep;
-    const end = start + freq;
-    return `${start.toLocaleString()} - ${end.toLocaleString()}`;
 };
 
 const getHealthColor = (score) => {
@@ -344,9 +331,6 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
 
     const stepDiff = (maxConfidenceInCurrentStep - minConfidenceInCurrentStep).toFixed(6);
 
-    const isCurrentRecord = maxRangeStep === currentStep;
-    const recordLabel = isCurrentRecord ? `${C}(current step)${X}` : `(step ${C}${maxRangeStep}${X})`;
-
     const signalLine = dedent(`
         Entry Price : ${C}${signal.entryPrice}${X} | Sell Price : ${C}${signal.sellPrice}${X} | Stop Price : ${C}${signal.stopLoss}${X} | Trade Multiplier : ${C}${signal.multiplier}${X}
 
@@ -355,9 +339,6 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
         Candles Since Last Training Step Increase : ${C}${candlesSinceStepIncrease.toLocaleString()}${X}
         ${shouldPredict ? 
         `
-        Regularize model every ${C}${regulateFreq ?? '—'}${X} steps → last : ${C}${regulateStep ?? '—'}${X} next in ${C}${regulateFreq ? regulateFreq - (trainingSteps % regulateFreq) : '—'}${X} steps
-        Apply and reset gradients every ${C}${gradientResetFreq ?? '—'}${X} steps → last : ${C}${gradientResetStep ?? '—'}${X} next in ${C}${gradientResetFreq ? gradientResetFreq - (trainingSteps % gradientResetFreq) : '—'}${X} steps
-
         Model Health : ${modelHealthScore === null ? `${C}—${X}` : getHealthColor(modelHealthScore)}%
         Lifetime Model Health Range : ${R}${lifetimeStats.health.min ?? '—'}${X} → ${G}${lifetimeStats.health.max ?? '—'}${X} Mean : ${C}${lifetimeStats.health.mean ?? '—'}${X} ± ${C}${lifetimeStats.health.std ?? '—'}${X}
 
@@ -368,8 +349,7 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
         Current Model Confidence : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${C}(${percentile}%ile)${X}
         Current Confidence Range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
         Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X} Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
-        Largest Lifetime Confidence Range : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X}
-            └─ over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles ${recordLabel} (gradient reset window ${C}${formatWindow(maxRangeAtGradientStep, gradientResetFreq)}${X} / regularization window ${C}${formatWindow(maxRangeAtRegulateStep, regulateFreq)}${X})
+        Largest Lifetime Confidence Range : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X} over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles (step ${C}${maxRangeStep}${X})
         ` 
         : 'prediction + stats disabled'}
     `);
@@ -382,10 +362,6 @@ const processCandles = () => {
     const rd = readline.createInterface({
         input: fs.createReadStream(path.join(import.meta.dirname, 'candles.jsonl'))
     });
-
-    const freqs = engine.getFreq();
-    gradientResetFreq = freqs.gradientResetFreq;
-    regulateFreq = freqs.regulateFreq;
 
     rd.on('line', line => {
         const candle = JSON.parse(line);
@@ -402,8 +378,6 @@ const processCandles = () => {
                 const durationSec = Number(end - start) / 1e9;
 
                 trainingSteps = signal.lastTrainingStep;
-                gradientResetStep = signal.lastGradientResetStep;
-                regulateStep = signal.lastRegulateStep;
 
                 if (shouldPredict && signal.confidence != null) {
                     const conf = signal.confidence;
@@ -417,8 +391,6 @@ const processCandles = () => {
                             maxRangeInStep = completedRange;
                             maxRangeStep = currentStep;
                             maxRangeStableSteps = candlesSinceStepIncrease;
-                            maxRangeAtGradientStep = gradientResetFreq ? currentStep - (currentStep % gradientResetFreq) : null;
-                            maxRangeAtRegulateStep = regulateFreq ? currentStep - (currentStep % regulateFreq) : null;
                         }
 
                         currentStep = trainingSteps;
@@ -435,8 +407,6 @@ const processCandles = () => {
                             maxRangeInStep = currentRange;
                             maxRangeStep = currentStep;
                             maxRangeStableSteps = candlesSinceStepIncrease;
-                            maxRangeAtGradientStep = gradientResetFreq ? currentStep - (currentStep % gradientResetFreq) : null;
-                            maxRangeAtRegulateStep = regulateFreq ? currentStep - (currentStep % regulateFreq) : null;
                         }
                     }
 

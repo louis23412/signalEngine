@@ -23,14 +23,8 @@ class NeuralSignalEngine {
         minPriceMovement : 0.0021,
         maxPriceMovement : 0.05
     };
-    #trainingStep = 0;
 
-    #resetData = {
-        gradientResetFreq : null,
-        gradientResetStep : null,
-        regulateFreq : null,
-        regulateStep : null
-    };
+    #traningCandleSize = 10;
 
     #globalAccuracy = {
         total : 0,
@@ -39,16 +33,19 @@ class NeuralSignalEngine {
         maxPoints : 0
     }
 
+    #trainingStep = 0;
     #openSimulations = 0;
 
     constructor() {
         fs.mkdirSync(directoryPath, { recursive: true });
 
-        this.#hivemind = new HiveMind(directoryPath);
-
-        const resetFreq = this.#hivemind.getFreq();
-        this.#resetData.gradientResetFreq = resetFreq.gradientResetFreq
-        this.#resetData.regulateFreq = resetFreq.regulateFreq
+        this.#hivemind = new HiveMind({
+            dp : directoryPath,
+            es : 7,
+            is : this.#traningCandleSize * 10,
+            nl : 3,
+            nh : 4
+        });
 
         this.#indicators = new IndicatorProcessor();
         this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
@@ -351,17 +348,13 @@ class NeuralSignalEngine {
                     console.log(`Training triggered for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length}`);
                     const startTime = process.hrtime();
 
-                    const trainingData = this.#hivemind.train(flatFeatures, trade.outcome)
+                    this.#trainingStep = this.#hivemind.train(flatFeatures, trade.outcome)
 
                     const diff = process.hrtime(startTime);
                     const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-                    console.log(`Training complete (${trainingData.step})! - Execution time: ${executionTime} seconds`);
+                    console.log(`Training complete (${this.#trainingStep})! - Execution time: ${executionTime} seconds`);
                     process.stdout.moveCursor(0, -2);
                     process.stdout.clearScreenDown();
-
-                    this.#trainingStep = trainingData.step;
-                    this.#resetData.gradientResetStep = trainingData.lastGradientResetStep
-                    this.#resetData.regulateStep = trainingData.lastRegulateStep
 
                     insertEncodingStmt.run(encodingHash);
                     keysToDelete.add(trade.timestamp);
@@ -390,19 +383,10 @@ class NeuralSignalEngine {
         }
     }
 
-    getFreq () {
-        return {
-            gradientResetFreq : this.#resetData.gradientResetFreq,
-            regulateFreq : this.#resetData.regulateFreq,
-        }
-    }
-
     getSignal(candles, shouldPredict = true, shouldSave = true, cutoff = null) {
         const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
 
         if (error) return { error };
-
-        // console.log(`Processed candles - Total: ${fullCandles.length} | Newly added: ${recentCandles.length}`);
 
         this.#updateOpenTrades(recentCandles, shouldSave, cutoff);
 
@@ -410,7 +394,7 @@ class NeuralSignalEngine {
 
         if (indicators.error) return { error: 'Indicators error' };
 
-        const features = this.#extractFeatures(indicators, 10);
+        const features = this.#extractFeatures(indicators, this.#traningCandleSize);
 
         let confidence = 'disabled';
         let multiplier = 'disabled';
@@ -492,8 +476,6 @@ class NeuralSignalEngine {
             confidence,
             threshold: this.#config.baseConfidenceThreshold,
             lastTrainingStep : this.#trainingStep,
-            lastGradientResetStep : this.#resetData.gradientResetStep,
-            lastRegulateStep : this.#resetData.regulateStep,
             countAccuracy : currentAcc,
             trueAccuracy : trueAcc,
             openSimulations : this.#openSimulations

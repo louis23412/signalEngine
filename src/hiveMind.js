@@ -5,31 +5,6 @@ import Database from 'better-sqlite3';
 import { isValidNumber } from './utils.js';
 
 class HiveMind {
-    #inputSize = 100;
-    #ensembleSize = 7;
-    #numLayers = 3;
-    #numHeads = 4;
-    #hiddenSize = this.#numHeads * 4;
-    #feedForwardSize = this.#hiddenSize * 4;
-
-    #learningRate = 1e-3;
-    #learningRateDecay = 1e-4;
-    #weightDecayRate = 1e-3;
-
-    #dropoutRate = 0.1;
-    #contextSensitivity = 0.5;
-    #swarmIntelligenceFactor = 0.6;
-
-    #regulationFrequency = 1000;
-    #gradientResetFrequency = 100;
-
-    #contextWindow = this.#hiddenSize * 2;
-    #maxTrustHistory = this.#contextWindow * 2;
-    #maxPerformanceHistory = this.#contextWindow * 4;
-    #attentionScalingFactor = 1 / Math.sqrt(this.#hiddenSize / this.#numHeads);
-    
-    #noiseScale = 0.002;
-
     #regularizationParams = {
         'outputWeights': { min: 1e-5, small: 1e-4, scale: 5.0, decay : 0.7, noise: 0.6 },
         'outputBias': { min: 5e-7, small: 5e-6, scale: 3.0, decay : 0.3, noise: 1.0 },
@@ -51,6 +26,28 @@ class HiveMind {
         'attentionMemory': { decayMin: 0.8, decayMax: 0.9, cutoff: 1e-5, scaleMin: 0.7, scaleMax: 1.3, noise: 0.6 }
     };
 
+    #ensembleSize;
+    #inputSize;
+    #numLayers;
+    #numHeads;
+    #headDim;
+    #hiddenSize;
+    #feedForwardSize;
+    #learningRate;
+    #learningRateDecay;
+    #weightDecayRate;
+    #dropoutRate;
+    #contextSensitivity;
+    #swarmIntelligenceFactor;
+    #contextWindow;
+    #maxTrustHistory;
+    #trainingStepCount = 0;
+    #layerDecaySchedule;
+    #directoryPath;
+    #maxPerformanceHistory;
+    #attentionScalingFactor;
+    #gradientResetFrequency;
+    #regulationFrequency;
     #adaptiveLearningRate = [];
     #transformers = [];
     #ensembleWeights = [];
@@ -65,14 +62,31 @@ class HiveMind {
     #specializationWeights = [];
     #specializationScores = [];
 
-    #lastRegulateStep = null;
-    #lastGradientResetStep = null;
-    #trainingStepCount = 0;
-    #layerDecaySchedule;
-    #directoryPath;
-
-    constructor (dp) {
+    constructor ({ dp, es, is, nl, nh, dr = 0.1, cs = 0.5, sif = 0.6, grf = 100 }) {
         this.#directoryPath = dp;
+        this.#ensembleSize = es;
+        this.#inputSize = is;
+        this.#numLayers = nl;
+        this.#numHeads = nh;
+        this.#dropoutRate = dr;
+        this.#contextSensitivity = cs;
+        this.#swarmIntelligenceFactor = sif;
+        this.#gradientResetFrequency = grf;
+
+        this.#headDim = 32 * Math.ceil(this.#numHeads / 4);
+        this.#hiddenSize = this.#numHeads * this.#headDim;
+        this.#feedForwardSize = this.#hiddenSize * 4;
+
+        this.#learningRate = this.#inputSize / 1000000;
+        this.#learningRateDecay = this.#learningRate / 10;
+        this.#weightDecayRate = this.#learningRate;
+
+        this.#contextWindow = this.#hiddenSize * 2;
+        this.#maxTrustHistory = this.#contextWindow * 2;
+        this.#maxPerformanceHistory = this.#contextWindow * 4;
+        this.#attentionScalingFactor = 1 / Math.sqrt(this.#hiddenSize / this.#numHeads);
+
+        this.#regulationFrequency = this.#gradientResetFrequency * 10;
 
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
         this.#agreementScores = Array(this.#ensembleSize).fill(0);
@@ -144,10 +158,6 @@ class HiveMind {
         if (!loadStatus.status && loadStatus.error) {
             console.log(`Load state failed! Error: ${loadStatus.error}. Trace : ${loadStatus.trace}`)
             process.exit()
-        } else if (loadStatus.status) {
-            console.log('State loaded successfully!')
-        } else {
-            console.log('Started with new state!')
         }
     }
 
@@ -2131,7 +2141,7 @@ class HiveMind {
                             weight[i][j] *= (1 - decay);
                         }
                         if (Math.abs(weight[i][j]) < dynamicMin) {
-                            weight[i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                            weight[i][j] += (Math.random() - 0.5) * 0.002 * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
                         }
                     } else {
                         weight[i][j] = 0;
@@ -2151,7 +2161,7 @@ class HiveMind {
                             weight[i][j] *= (1 - decay);
                         }
                         if (Math.abs(weight[i][j]) < dynamicMin) {
-                            weight[i][j] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                            weight[i][j] += (Math.random() - 0.5) * 0.002 * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
                         }
                     } else {
                         weight[i][j] = 0;
@@ -2170,7 +2180,7 @@ class HiveMind {
                         weight[i] *= (1 - decay);
                     }
                     if (Math.abs(weight[i]) < dynamicMin) {
-                        weight[i] += (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
+                        weight[i] += (Math.random() - 0.5) * 0.002 * (performanceFactor + 0.1) * (this.#regularizationParams[weightType].noise || 1.0);
                     }
                 } else {
                     weight[i] = 0;
@@ -2372,7 +2382,7 @@ class HiveMind {
                             value = dynamicDecay * value + (1 - dynamicDecay) * prevValue;
 
                             if (Math.abs(value) > dynamicCutoff) {
-                                this.#attentionMemory[t][i][j][k] = value + (Math.random() - 0.5) * this.#noiseScale * (performanceFactor + 0.1) * this.#regularizationParams['attentionMemory'].noise;
+                                this.#attentionMemory[t][i][j][k] = value + (Math.random() - 0.5) * 0.002 * (performanceFactor + 0.1) * this.#regularizationParams['attentionMemory'].noise;
                             }
                         } else {
                             this.#attentionMemory[t][i][j][k] = 0;
@@ -3291,30 +3301,17 @@ class HiveMind {
 
         if (shouldRegulate) {
             this.#regulateWeightsAndMemory();
-            this.#lastRegulateStep = this.#trainingStepCount;
         }
 
         if (shouldResetGradients) {
             this.#gradientAccumulation = this.#setGradientStructure();
-            this.#lastGradientResetStep = this.#trainingStepCount;
         }
 
-        return {
-            step : this.#trainingStepCount,
-            lastGradientResetStep : this.#lastGradientResetStep,
-            lastRegulateStep : this.#lastRegulateStep
-        };
+        return this.#trainingStepCount
     }
 
     dumpState () {
         return this.#saveState()
-    }
-
-    getFreq () {
-        return {
-            gradientResetFreq : this.#gradientResetFrequency,
-            regulateFreq : this.#regulationFrequency
-        }
     }
 }
 
