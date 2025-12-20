@@ -358,7 +358,7 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
         Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X} Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
         Largest Lifetime Confidence Range : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(4)}${X} over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles (step ${C}${maxRangeStep}${X})
         ` 
-        : '\nprediction & stats disabled'}
+        : 'prediction & stats disabled'}
     `);
 
     process.stdout.write('\x1b[2J\x1b[0f');
