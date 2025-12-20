@@ -130,11 +130,11 @@ const updateWindowStats = (type, size) => {
     const trendDiff = recent - older;
     const trend = trendDiff > 0.008 ? 1 : trendDiff < -0.008 ? -1 : 0;
 
-    stats.mean = mean.toFixed(6);
-    stats.std = std.toFixed(6);
-    stats.min = min.toFixed(6);
-    stats.max = max.toFixed(6);
-    stats.diff = diff.toFixed(6);
+    stats.mean = mean.toFixed(4);
+    stats.std = std.toFixed(4);
+    stats.min = min.toFixed(4);
+    stats.max = max.toFixed(4);
+    stats.diff = diff.toFixed(4);
     stats.size = arr.length;
     stats.trend = trend;
 };
@@ -148,30 +148,30 @@ const updateAllStats = () => {
     if (lifetimeConfCount > 0) {
         const mean = lifetimeConfSum / lifetimeConfCount;
         const variance = lifetimeConfCount > 1 ? (lifetimeConfSumSq / lifetimeConfCount) - mean ** 2 : 0;
-        lifetimeStats.conf.mean = mean.toFixed(6);
-        lifetimeStats.conf.std = Math.sqrt(variance).toFixed(6);
-        lifetimeStats.conf.min = allTimeMinConf === Infinity ? null : allTimeMinConf.toFixed(6);
-        lifetimeStats.conf.max = allTimeMaxConf === -Infinity ? null : allTimeMaxConf.toFixed(6);
+        lifetimeStats.conf.mean = mean.toFixed(4);
+        lifetimeStats.conf.std = Math.sqrt(variance).toFixed(4);
+        lifetimeStats.conf.min = allTimeMinConf === Infinity ? null : allTimeMinConf.toFixed(4);
+        lifetimeStats.conf.max = allTimeMaxConf === -Infinity ? null : allTimeMaxConf.toFixed(4);
         lifetimeStats.conf.count = lifetimeConfCount;
     }
 
     if (lifetimeAccCount > 0) {
         const mean = lifetimeAccSum / lifetimeAccCount;
         const variance = lifetimeAccCount > 1 ? (lifetimeAccSumSq / lifetimeAccCount) - mean ** 2 : 0;
-        lifetimeStats.acc.mean = mean.toFixed(6);
-        lifetimeStats.acc.std = Math.sqrt(variance).toFixed(6);
-        lifetimeStats.acc.min = allTimeMinAcc === Infinity ? null : allTimeMinAcc.toFixed(6);
-        lifetimeStats.acc.max = allTimeMaxAcc === -Infinity ? null : allTimeMaxAcc.toFixed(6);
+        lifetimeStats.acc.mean = mean.toFixed(4);
+        lifetimeStats.acc.std = Math.sqrt(variance).toFixed(4);
+        lifetimeStats.acc.min = allTimeMinAcc === Infinity ? null : allTimeMinAcc.toFixed(4);
+        lifetimeStats.acc.max = allTimeMaxAcc === -Infinity ? null : allTimeMaxAcc.toFixed(4);
         lifetimeStats.acc.count = lifetimeAccCount;
     }
 
     if (lifetimeHealthCount > 0) {
         const mean = lifetimeHealthSum / lifetimeHealthCount;
         const variance = lifetimeHealthCount > 1 ? (lifetimeHealthSumSq / lifetimeHealthCount) - mean ** 2 : 0;
-        lifetimeStats.health.mean = mean.toFixed(6);
-        lifetimeStats.health.std = Math.sqrt(variance).toFixed(6);
-        lifetimeStats.health.min = allTimeMinHealth === Infinity ? null : allTimeMinHealth.toFixed(6);
-        lifetimeStats.health.max = allTimeMaxHealth === -Infinity ? null : allTimeMaxHealth.toFixed(6);
+        lifetimeStats.health.mean = mean.toFixed(4);
+        lifetimeStats.health.std = Math.sqrt(variance).toFixed(4);
+        lifetimeStats.health.min = allTimeMinHealth === Infinity ? null : allTimeMinHealth.toFixed(4);
+        lifetimeStats.health.max = allTimeMaxHealth === -Infinity ? null : allTimeMaxHealth.toFixed(4);
         lifetimeStats.health.count = lifetimeHealthCount;
     }
 };
@@ -324,25 +324,19 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
     const progressLine = `Progress : ${C}${totalCandles.toLocaleString()}${X} / ${C}${totalLines.toLocaleString()}${X} (${C}${pct}${X}%) | Time : ${formatTime(durationSec)} | Avg : ${formatTime(avgSignalTime)}\nRuntime : ${formatTime(runtimeSec)} | ETA : ${formatTime(estimatedTimeSec)}\n\n`;
 
     const conf = signal.confidence ?? '—';
-
-    const countAcc = signal.countAccuracy !== 'disabled' 
-        ? (typeof signal.countAccuracy === 'number' ? signal.countAccuracy.toFixed(3) : signal.countAccuracy) 
-        : '—';
-
-    const trueAcc = signal.trueAccuracy !== 'disabled' 
-        ? (typeof signal.trueAccuracy === 'number' ? signal.trueAccuracy.toFixed(3) : signal.trueAccuracy) 
-        : '—';
+    const countAcc = signal.countAccuracy !== 'disabled' ? signal.countAccuracy : '—';
+    const trueAcc = signal.trueAccuracy !== 'disabled' ? signal.trueAccuracy : '—';
 
     const percentile = confidenceWindows[1000].length > 10
         ? (confidenceWindows[1000].filter(c => c <= signal.confidence).length / confidenceWindows[1000].length * 100).toFixed(1)
         : '—';
 
     const delta = previousConfidence !== null ? signal.confidence - previousConfidence : null;
-    const deltaStr = delta === null ? '—' : delta > 0 ? `+${delta.toFixed(6)}` : delta.toFixed(6);
+    const deltaStr = delta === null ? '—' : delta > 0 ? `+${delta.toFixed(4)}` : delta.toFixed(4);
     const deltaCol = delta === null ? '' : delta > 0 ? G : R;
     previousConfidence = signal.confidence;
 
-    const stepDiff = (maxConfidenceInCurrentStep - minConfidenceInCurrentStep).toFixed(6);
+    const stepDiff = (maxConfidenceInCurrentStep - minConfidenceInCurrentStep).toFixed(4);
 
     const signalLine = dedent(`
         Entry Price : ${C}${signal.entryPrice}${X} | Sell Price : ${C}${signal.sellPrice}${X} | Stop Price : ${C}${signal.stopLoss}${X} | Trade Multiplier : ${C}${signal.multiplier}${X}
@@ -360,11 +354,11 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
         Lifetime True Accuracy Range : ${R}${lifetimeStats.acc.min ?? '—'}${X} → ${G}${lifetimeStats.acc.max ?? '—'}${X} Mean : ${C}${lifetimeStats.acc.mean ?? '—'}${X} ± ${C}${lifetimeStats.acc.std ?? '—'}${X}
 
         Current Model Confidence : ${C}${conf}${X} ${deltaCol}(${deltaStr})${X} ${C}(${percentile}%ile)${X}
-        Current Confidence Range : ${R}${minConfidenceInCurrentStep.toFixed(6)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(6)}${X} ${M}Δ${stepDiff}${X}
+        Current Confidence Range : ${R}${minConfidenceInCurrentStep.toFixed(4)}${X} → ${G}${maxConfidenceInCurrentStep.toFixed(4)}${X} ${M}Δ${stepDiff}${X}
         Lifetime Model Confidence Range : ${R}${lifetimeStats.conf.min ?? '—'}${X} → ${G}${lifetimeStats.conf.max ?? '—'}${X} Mean : ${C}${lifetimeStats.conf.mean ?? '—'}${X} ± ${C}${lifetimeStats.conf.std ?? '—'}${X}
-        Largest Lifetime Confidence Range : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(6)}${X} over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles (step ${C}${maxRangeStep}${X})
+        Largest Lifetime Confidence Range : ${C}${maxRangeInStep === 0 ? '—' : maxRangeInStep.toFixed(4)}${X} over ${C}${maxRangeStableSteps.toLocaleString()}${X} candles (step ${C}${maxRangeStep}${X})
         ` 
-        : 'prediction + stats disabled'}
+        : '\nprediction & stats disabled'}
     `);
 
     process.stdout.write('\x1b[2J\x1b[0f');

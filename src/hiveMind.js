@@ -62,31 +62,61 @@ class HiveMind {
     #specializationWeights = [];
     #specializationScores = [];
 
-    constructor ({ dp, es, is, nl, nh, dr = 0.1, cs = 0.5, sif = 0.6, grf = 100 }) {
+    constructor ( dp, es, is ) {
         this.#directoryPath = dp;
         this.#ensembleSize = es;
         this.#inputSize = is;
-        this.#numLayers = nl;
-        this.#numHeads = nh;
-        this.#dropoutRate = dr;
-        this.#contextSensitivity = cs;
-        this.#swarmIntelligenceFactor = sif;
-        this.#gradientResetFrequency = grf;
 
-        this.#headDim = 32 * Math.ceil(this.#numHeads / 4);
+        const layerDecay = Math.min(7.0, 2.5 * Math.log10(this.#ensembleSize || 1));
+        this.#numLayers = Math.max(1, Math.min(8, Math.round(8 - layerDecay)));
+
+        const headDecay = Math.min(6.0, 2.0 * Math.log10(this.#ensembleSize || 1));
+        this.#numHeads = Math.max(2, Math.min(8, Math.round(8 - headDecay)));
+
+        const complexity = this.#ensembleSize * this.#numLayers * this.#numHeads;
+        const safeComplexity = Math.max(1, complexity);
+        const logComplexity = Math.log10(safeComplexity);
+
+        const hsExponent = Math.max(2, Math.min(4, 4 - Math.log2(Math.sqrt(this.#ensembleSize || 1))));
+        const hs = Math.pow(2, Math.floor(hsExponent));
+        this.#headDim = hs * Math.ceil(this.#numHeads / 4);
         this.#hiddenSize = this.#numHeads * this.#headDim;
-        this.#feedForwardSize = this.#hiddenSize * 4;
+
+        const ffnDecay = Math.min(2.0, Math.log10(this.#ensembleSize || 1));
+        const ffnMultiplier = 4.0 - ffnDecay;
+        this.#feedForwardSize = Math.round(this.#hiddenSize * Math.max(2, Math.min(4, ffnMultiplier)));
 
         this.#learningRate = Number(Math.min(0.001, 0.01 / Math.max(this.#inputSize, 1)).toPrecision(6));
         this.#learningRateDecay = Number((this.#learningRate / 10).toPrecision(6));
         this.#weightDecayRate = this.#learningRate;
 
-        this.#contextWindow = this.#hiddenSize * 2;
-        this.#maxTrustHistory = this.#contextWindow * 2;
-        this.#maxPerformanceHistory = this.#contextWindow * 4;
-        this.#attentionScalingFactor = 1 / Math.sqrt(this.#hiddenSize / this.#numHeads);
+        const rawDropout = 0.05 * logComplexity;
+        this.#dropoutRate = Number(Math.max(0.05, Math.min(0.3, rawDropout)).toFixed(6));
 
-        this.#regulationFrequency = this.#gradientResetFrequency * 10;
+        const memoryFactor = 1 + 0.5 * Math.log10(this.#ensembleSize || 1);
+        this.#contextWindow = Math.round(this.#hiddenSize * 2 * memoryFactor);
+        this.#maxTrustHistory = Math.round(this.#contextWindow * 2);
+        this.#maxPerformanceHistory = Math.round(this.#contextWindow * 4);
+
+        this.#attentionScalingFactor = Number((1 / Math.sqrt(this.#hiddenSize / this.#numHeads)).toPrecision(6));
+
+        const baseGrf = 50 + 12 * logComplexity;
+        this.#gradientResetFrequency = Math.max(50, Math.min(600, Math.round(baseGrf)));
+
+        const complexityRatio = Math.max(1, safeComplexity / 1000);
+        const logRatio = Math.log10(complexityRatio);
+        const targetMultiplier = Math.min(20, Math.max(6, 8 + 2.5 * logRatio));
+        const snappedMultiplier = Math.round(targetMultiplier);
+        this.#regulationFrequency = this.#gradientResetFrequency * snappedMultiplier;
+
+        const csRaw = 0.4 + 0.22 * Math.log10(safeComplexity / 1e6 + 1);
+        this.#contextSensitivity = Number(Math.max(0.3, Math.min(0.8, csRaw)).toFixed(6));
+
+        const ensembleFactor = this.#ensembleSize > 1 
+            ? Math.min(2.0, Math.log10(this.#ensembleSize))
+            : 1;
+        const rawSwarm = 0.4 + 0.4 * (ensembleFactor / 2.0);
+        this.#swarmIntelligenceFactor = Number(rawSwarm.toFixed(6));
 
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
         this.#agreementScores = Array(this.#ensembleSize).fill(0);
@@ -153,11 +183,11 @@ class HiveMind {
 
         this.#normalizeEnsembleWeights();
 
-        const loadStatus = this.#loadState()
+        const loadStatus = this.#loadState();
 
         if (!loadStatus.status && loadStatus.error) {
-            console.log(`Load state failed! Error: ${loadStatus.error}. Trace : ${loadStatus.trace}`)
-            process.exit()
+            console.log(`Load state failed! Error: ${loadStatus.error}. Trace : ${loadStatus.trace}`);
+            process.exit();
         }
     }
 
@@ -3297,13 +3327,11 @@ class HiveMind {
         if (shouldResetGradients) {
             this.#applyGradients();
             this.#distillKnowledge(linearOutputs, target);
-        }
 
-        if (shouldRegulate) {
-            this.#regulateWeightsAndMemory();
-        }
+            if (shouldRegulate) {
+                this.#regulateWeightsAndMemory();
+            }
 
-        if (shouldResetGradients) {
             this.#gradientAccumulation = this.#setGradientStructure();
         }
 

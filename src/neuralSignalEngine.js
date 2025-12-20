@@ -39,14 +39,7 @@ class NeuralSignalEngine {
     constructor() {
         fs.mkdirSync(directoryPath, { recursive: true });
 
-        this.#hivemind = new HiveMind({
-            dp : directoryPath,
-            es : 7,
-            is : this.#traningCandleSize * 10,
-            nl : 3,
-            nh : 4
-        });
-
+        this.#hivemind = new HiveMind(directoryPath, 1024, this.#traningCandleSize * 10);
         this.#indicators = new IndicatorProcessor();
         this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
 
