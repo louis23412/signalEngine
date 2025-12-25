@@ -1,18 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
-import NeuralSignalEngine from '../src/neuralSignalEngine.js';
-
-const engine = new NeuralSignalEngine();
-
-const scriptStartTime = process.hrtime.bigint();
+import HiveMindController from '../src/hiveMindController.js';
 
 const trainingCutoff = null;
 const shouldPredict = true;
-
 const cacheSize = 1000;
-const cache = [];
-const signalTimes = [];
+const ensembleSize = 6;
+const candlesUsed = 10;
+const directoryPath = path.join(import.meta.dirname, '..', 'state');
+
+const scriptStartTime = process.hrtime.bigint();
+const controller = new HiveMindController(directoryPath, cacheSize, ensembleSize, candlesUsed);
 
 let currentStep = -1;
 let candlesSinceStepIncrease = 0;
@@ -60,6 +59,9 @@ const R = '\x1b[31m';
 const X = '\x1b[0m';
 const C = '\x1b[36m';
 const M = '\x1b[35m';
+
+const cache = [];
+const signalTimes = [];
 
 const confidenceWindows = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
 const accuracyWindows   = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
@@ -380,7 +382,7 @@ const processCandles = () => {
             try {
                 const isLast = totalCandles === totalLines;
                 const start = process.hrtime.bigint();
-                signal = engine.getSignal(cache, shouldPredict, isLast, trainingCutoff);
+                signal = controller.getSignal(cache, shouldPredict, isLast, trainingCutoff);
                 const end = process.hrtime.bigint();
                 const durationSec = Number(end - start) / 1e9;
 

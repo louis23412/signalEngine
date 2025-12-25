@@ -8,9 +8,7 @@ import IndicatorProcessor from './indicatorProcessor.js';
 
 import { truncateToDecimals, isValidNumber } from './utils.js';
 
-const directoryPath = path.join(import.meta.dirname, '..', 'state');
-
-class NeuralSignalEngine {
+class HiveMindController {
     #hivemind;
     #indicators;
     #db;
@@ -24,8 +22,6 @@ class NeuralSignalEngine {
         maxPriceMovement : 0.05
     };
 
-    #traningCandleSize = 10;
-
     #globalAccuracy = {
         total : 0,
         correct : 0,
@@ -33,15 +29,19 @@ class NeuralSignalEngine {
         maxPoints : 0
     }
 
+    #cacheSize;
+    #traningCandleSize;
     #trainingStep = 0;
     #openSimulations = 0;
 
-    constructor() {
-        fs.mkdirSync(directoryPath, { recursive: true });
+    constructor( dp, cs, es, is ) {
+        fs.mkdirSync(dp, { recursive: true });
+        this.#cacheSize = cs;
+        this.#traningCandleSize = is;
 
-        this.#hivemind = new HiveMind(directoryPath, 1024, this.#traningCandleSize * 10);
+        this.#hivemind = new HiveMind(dp, es, this.#traningCandleSize * 10);
         this.#indicators = new IndicatorProcessor();
-        this.#db = new Database(path.join(directoryPath, 'neural_engine.db'), { fileMustExist: false });
+        this.#db = new Database(path.join(dp, 'hivemind_controller.db'), { fileMustExist: false });
 
         this.#initDatabase();
         this.#loadGlobalAccuracy();
@@ -168,13 +168,13 @@ class NeuralSignalEngine {
             }
 
             const fetchCandlesStmt = this.#db.prepare(`
-                SELECT * FROM candles ORDER BY timestamp ASC LIMIT 1000
+                SELECT * FROM candles ORDER BY timestamp ASC LIMIT ${this.#cacheSize}
             `);
             fullCandles = fetchCandlesStmt.all();
 
             const cleanupStmt = this.#db.prepare(`
                 DELETE FROM candles WHERE timestamp NOT IN (
-                    SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT 1000
+                    SELECT timestamp FROM candles ORDER BY timestamp DESC LIMIT ${this.#cacheSize}
                 )
             `);
             cleanupStmt.run();
@@ -300,8 +300,15 @@ class NeuralSignalEngine {
                 const insertEncodingStmt = this.#db.prepare(`INSERT INTO trained_features (encoding) VALUES (?)`);
 
                 let tradeCounter = 0;
+                let completedTraining = 0;
+                let skippedTraining = 0;
                 for (const trade of closedTrades) {
                     tradeCounter++;
+
+                    const Y = '\x1b[33m';
+                    const X = '\x1b[0m';
+                    console.log(`Training in progress (${Y}${tradeCounter}${X} / ${Y}${closedTrades.length}${X})`);
+                    console.log(`Training steps completed : ${Y}${completedTraining}${X} | Skipped: ${Y}${skippedTraining}${X}`);
 
                     if (trade.confidence !== -1) {
                         this.#globalAccuracy.total++
@@ -330,27 +337,21 @@ class NeuralSignalEngine {
 
                     const existingEncoding = checkEncodingStmt.get(encodingHash);
                     if (existingEncoding) {
-                        console.log(`Skipping training for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length} (duplicate encoding)`);
-                        process.stdout.moveCursor(0, -1);
-                        process.stdout.clearScreenDown();
-
                         keysToDelete.add(trade.timestamp);
+                        skippedTraining++;
+                        process.stdout.moveCursor(0, -2);
+                        process.stdout.clearScreenDown();
                         continue;
                     }
 
-                    console.log(`Training triggered for closed trade (${trade.outcome ? 'win' : 'loss'}): ${tradeCounter} / ${closedTrades.length}`);
-                    const startTime = process.hrtime();
-
                     this.#trainingStep = this.#hivemind.train(flatFeatures, trade.outcome)
-
-                    const diff = process.hrtime(startTime);
-                    const executionTime = truncateToDecimals((diff[0] * 1e9 + diff[1]) / 1e9, 4);
-                    console.log(`Training complete (${this.#trainingStep})! - Execution time: ${executionTime} seconds`);
-                    process.stdout.moveCursor(0, -2);
-                    process.stdout.clearScreenDown();
+                    completedTraining++;
 
                     insertEncodingStmt.run(encodingHash);
                     keysToDelete.add(trade.timestamp);
+
+                    process.stdout.moveCursor(0, -2);
+                    process.stdout.clearScreenDown();
 
                     if (cutoff !== null && this.#trainingStep === cutoff) { break }
                 }
@@ -476,4 +477,4 @@ class NeuralSignalEngine {
     }
 }
 
-export default NeuralSignalEngine;
+export default HiveMindController;

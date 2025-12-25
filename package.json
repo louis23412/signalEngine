@@ -1,16 +1,13 @@
 {
-  "name": "signal-engine",
+  "name": "hivemind",
   "version": "1.0.0",
   "description": "",
   "license": "ISC",
   "author": "louis23412",
   "type": "module",
   "main": "index.js",
-  "directories": {
-    "test": "test"
-  },
   "scripts": {
-    "test": "node test/testEngine.js"
+    "train": "node training/hiveMindTrainer.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.5.0"
