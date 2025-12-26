@@ -9,6 +9,7 @@ const cacheSize = 1000;
 const ensembleSize = 6;
 const candlesUsed = 10;
 const directoryPath = path.join(import.meta.dirname, '..', 'state');
+const trainingFile = path.join(import.meta.dirname, 'candles.jsonl');
 
 const scriptStartTime = process.hrtime.bigint();
 const controller = new HiveMindController(directoryPath, cacheSize, ensembleSize, candlesUsed);
@@ -298,7 +299,7 @@ const formatTime = (sec) => {
 
 const countLines = () => new Promise(resolve => {
     let count = 0;
-    const rl = readline.createInterface({ input: fs.createReadStream(path.join(import.meta.dirname, 'candles.jsonl')) });
+    const rl = readline.createInterface({ input: fs.createReadStream(trainingFile) });
     rl.on('line', () => count++);
     rl.on('close', () => resolve(count));
 });
@@ -368,9 +369,7 @@ const formatSignal = ({ totalCandles, totalLines, durationSec, avgSignalTime, es
 };
 
 const processCandles = () => {
-    const rd = readline.createInterface({
-        input: fs.createReadStream(path.join(import.meta.dirname, 'candles.jsonl'))
-    });
+    const rd = readline.createInterface({ input: fs.createReadStream(trainingFile) });
 
     rd.on('line', line => {
         const candle = JSON.parse(line);
@@ -477,26 +476,24 @@ const processCandles = () => {
     });
 
     rd.on('close', () => {
-        console.log(`\nCompleted. Processed ${totalCandles.toLocaleString()} candles.`);
-
         const finalNow = process.hrtime.bigint();
         const finalRuntimeSec = Number(finalNow - scriptStartTime) / 1e9;
 
         console.log(`Total runtime: ${formatTime(finalRuntimeSec)}`);
 
-        if (shouldPredict && signalCount > 0) {
-            const avg = signalTimes.length > 0 
-                ? signalTimes.reduce((a, b) => a + b, 0) / signalTimes.length 
-                : 0;
+        const avg = signalTimes.length > 0 
+            ? signalTimes.reduce((a, b) => a + b, 0) / signalTimes.length 
+            : 0;
 
-            formatSignal({ 
-                totalCandles, 
-                totalLines, 
-                durationSec: 0, 
-                avgSignalTime: avg, 
-                estimatedTimeSec: 0 
-            });
-        }
+        formatSignal({ 
+            totalCandles, 
+            totalLines, 
+            durationSec: 0, 
+            avgSignalTime: avg, 
+            estimatedTimeSec: 0 
+        });
+
+        console.log(`Completed. Processed ${totalCandles.toLocaleString()} candles.`);
     });
 };
 

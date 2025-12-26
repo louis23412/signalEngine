@@ -307,8 +307,8 @@ class HiveMindController {
 
                     const Y = '\x1b[33m';
                     const X = '\x1b[0m';
-                    console.log(`Training in progress (${Y}${tradeCounter}${X} / ${Y}${closedTrades.length}${X})`);
-                    console.log(`Training steps completed : ${Y}${completedTraining}${X} | Skipped: ${Y}${skippedTraining}${X}`);
+                    console.log(`Training in progress for closed trade ${Y}${tradeCounter}${X} / ${Y}${closedTrades.length}${X} (Training step #${Y}${this.#trainingStep + 1}${X})`);
+                    console.log(`Training steps completed : ${Y}${completedTraining}${X} | Skipped (duplicate endcoding) : ${Y}${skippedTraining}${X}`);
 
                     if (trade.confidence !== -1) {
                         this.#globalAccuracy.total++
@@ -374,6 +374,16 @@ class HiveMindController {
             });
 
             transaction();
+        } 
+        
+        else if (closedTrades.length === 0 && shouldSave) {
+            const saveStatus = this.#hivemind.dumpState()
+
+            if (!saveStatus.status) {
+                console.log(`Hivemind state save failed! Error: ${saveStatus.error} Trace: ${saveStatus.trace}`)
+            } else {
+                console.log('Hivemind state saved!')
+            }
         }
     }
 
