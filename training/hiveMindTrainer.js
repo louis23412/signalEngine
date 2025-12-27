@@ -20,13 +20,12 @@ let minConfidenceInCurrentStep = Infinity;
 let maxConfidenceInCurrentStep = -Infinity;
 
 let maxRangeInStep = 0;
-let maxRangeStep = null;
+let maxRangeStep = 0;
 let maxRangeStableSteps = 0;
 
 let signal;
 let totalCandles = 0;
 let totalLines = 0;
-let signalCount = 0;
 let trainingSteps = 0;
 
 let lifetimeConfCount = 0;
@@ -64,29 +63,16 @@ const M = '\x1b[35m';
 const cache = [];
 const signalTimes = [];
 
-const confidenceWindows = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
-const accuracyWindows   = { 10: [], 50: [], 100: [], 500: [], 1000: [], 5000: [], 10000: [], 25000: [] };
+const confidenceWindows = { 1000: [] };
+const accuracyWindows   = { 10: [], 50: [], 100: [], 500: [], 1000: [] };
 
 const windowStats = {
-    conf: {
-        10:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        50:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        100:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        500:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        1000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        5000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        10000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        25000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 }
-    },
     acc: {
-        10:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        50:   { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        100:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        500:  { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        1000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        5000: { mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        10000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 },
-        25000:{ mean: null, std: null, min: null, max: null, diff: null, size: 0, trend: 0 }
+        10:   { mean: null, std: null, trend: 0 },
+        50:   { mean: null, std: null, trend: 0 },
+        100:  { mean: null, std: null, trend: 0 },
+        500:  { mean: null, std: null, trend: 0 },
+        1000: { mean: null, std: null, trend: 0 }
     }
 };
 
@@ -114,8 +100,8 @@ const updateWindowStats = (type, size) => {
     const arr = windows[size];
 
     if (arr.length === 0) {
-        stats.mean = stats.std = stats.min = stats.max = stats.diff = null;
-        stats.size = 0; stats.trend = 0;
+        stats.mean = stats.std = null;
+        stats.trend = 0;
         return;
     }
 
@@ -123,9 +109,6 @@ const updateWindowStats = (type, size) => {
     const mean = sum / arr.length;
     const variance = arr.reduce((a, v) => a + (v - mean) ** 2, 0) / arr.length;
     const std = Math.sqrt(variance);
-    const min = Math.min(...arr);
-    const max = Math.max(...arr);
-    const diff = max - min;
 
     const segment = Math.max(5, Math.floor(arr.length * 0.2));
     const recent = arr.slice(-segment).reduce((a, b) => a + b, 0) / segment;
@@ -135,16 +118,11 @@ const updateWindowStats = (type, size) => {
 
     stats.mean = mean.toFixed(4);
     stats.std = std.toFixed(4);
-    stats.min = min.toFixed(4);
-    stats.max = max.toFixed(4);
-    stats.diff = diff.toFixed(4);
-    stats.size = arr.length;
     stats.trend = trend;
 };
 
 const updateAllStats = () => {
-    for (const size of Object.keys(confidenceWindows)) {
-        updateWindowStats('conf', Number(size));
+    for (const size of Object.keys(accuracyWindows)) {
         updateWindowStats('acc', Number(size));
     }
 
@@ -461,7 +439,6 @@ const processCandles = () => {
                 const avg = signalTimes.reduce((a, b) => a + b, 0) / signalTimes.length;
                 const eta = (totalLines - totalCandles) * avg;
 
-                signalCount++;
                 formatSignal({ totalCandles, totalLines, durationSec, avgSignalTime: avg, estimatedTimeSec: eta });
 
                 if (trainingSteps === trainingCutoff) {

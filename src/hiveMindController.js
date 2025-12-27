@@ -301,14 +301,20 @@ class HiveMindController {
 
                 let tradeCounter = 0;
                 let completedTraining = 0;
+                let tradeWins = 0;
+                let tradeLosses = 0;
                 let skippedTraining = 0;
                 for (const trade of closedTrades) {
                     tradeCounter++;
 
+                    const G = '\x1b[32m';
+                    const R = '\x1b[31m';
                     const Y = '\x1b[33m';
                     const X = '\x1b[0m';
-                    console.log(`Training in progress for closed trade ${Y}${tradeCounter}${X} / ${Y}${closedTrades.length}${X} (Training step #${Y}${this.#trainingStep + 1}${X})`);
-                    console.log(`Training steps completed : ${Y}${completedTraining}${X} | Skipped (duplicate endcoding) : ${Y}${skippedTraining}${X}`);
+                    console.log(`Training in progress for closed trade ${Y}${tradeCounter}${X} / ${Y}${closedTrades.length}${X} => ${trade.outcome === 1 ? `${G}win${X}` : `${R}loss${X}`} | Training step #${Y}${this.#trainingStep + 1}${X}`);
+                    console.log(`Training steps completed : ${Y}${completedTraining}${X} | Skipped (duplicate endcoding) : ${Y}${skippedTraining}${X} | Wins : ${Y}${tradeWins}${X} | Losses : ${Y}${tradeLosses}${X}`);
+
+                    trade.outcome === 1 ? tradeWins++ : tradeLosses++
 
                     if (trade.confidence !== -1) {
                         this.#globalAccuracy.total++
