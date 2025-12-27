@@ -6,24 +6,24 @@ import { isValidNumber } from './utils.js';
 
 class HiveMind {
     #regularizationParams = {
-        'outputWeights': { min: 1e-5, scale: 18.0, decay: 0.7, noise: 0.6 },
-        'outputBias': { min: 5e-7, scale: 8.0, decay: 0.3, noise: 1.0 },
-        'Wq': { min: 5e-6, scale: 25.0, decay: 0.6, noise: 0.5 },
-        'Wk': { min: 5e-6, scale: 25.0, decay: 0.6, noise: 0.5 },
-        'Wv': { min: 5e-6, scale: 25.0, decay: 0.6, noise: 0.5 },
-        'Wo': { min: 5e-6, scale: 25.0, decay: 0.6, noise: 0.5 },
-        'W1': { min: 8e-6, scale: 35.0, decay: 0.8, noise: 0.8 },
-        'W2': { min: 8e-6, scale: 35.0, decay: 0.8, noise: 0.8 },
-        'b1': { min: 5e-7, scale: 8.0, decay: 0.3, noise: 1.2 },
-        'b2': { min: 5e-7, scale: 8.0, decay: 0.3, noise: 1.2 },
-        'gamma1': { min: 2e-7, scale: 6.0, decay: 0.3, noise: 0.8 },
-        'beta1': { min: 2e-7, scale: 6.0, decay: 0.3, noise: 0.8 },
-        'gamma2': { min: 2e-7, scale: 6.0, decay: 0.3, noise: 0.8 },
-        'beta2': { min: 2e-7, scale: 6.0, decay: 0.3, noise: 0.8 },
-        'attentionBias': { min: 5e-7, scale: 8.0, decay: 0.3, noise: 1.0 },
-        'attentionWeightMatrix': { min: 5e-6, scale: 25.0, decay: 0.6, noise: 0.6 },
-        'specializationWeights': { min: 3e-6, scale: 18.0, decay: 0.4, noise: 0.7 },
-        'attentionMemory': { scale: 10.0, decayMin: 0.88, decayMax: 0.98, shrinkFloor: 0.75 }
+        'outputWeights': { min: 1e-5, scale: 28.0, decay: 0.55, noise: 0.6 },
+        'outputBias': { min: 5e-7, scale: 1.0, decay: 0.15, noise: 1.0 },
+        'Wq': { min: 5e-6, scale: 32.0, decay: 0.5, noise: 0.5 },
+        'Wk': { min: 5e-6, scale: 32.0, decay: 0.5, noise: 0.5 },
+        'Wv': { min: 5e-6, scale: 32.0, decay: 0.5, noise: 0.5 },
+        'Wo': { min: 5e-6, scale: 28.0, decay: 0.5, noise: 0.5 },
+        'W1': { min: 8e-6, scale: 40.0, decay: 0.75, noise: 0.8 },
+        'W2': { min: 8e-6, scale: 40.0, decay: 0.75, noise: 0.8 },
+        'b1': { min: 5e-7, scale: 2.0, decay: 0.15, noise: 1.2 },
+        'b2': { min: 5e-7, scale: 2.0, decay: 0.15, noise: 1.2 },
+        'gamma1': { min: 2e-7, scale: 2.5, decay: 0.2, noise: 0.8 },
+        'beta1': { min: 2e-7, scale: 2.5, decay: 0.2, noise: 0.8 },
+        'gamma2': { min: 2e-7, scale: 2.5, decay: 0.2, noise: 0.8 },
+        'beta2': { min: 2e-7, scale: 2.5, decay: 0.2, noise: 0.8 },
+        'attentionBias': { min: 5e-7, scale: 1.0, decay: 0.15, noise: 1.0 },
+        'attentionWeightMatrix': { min: 5e-6, scale: 1.0, decay: 0.6, noise: 0.6 },
+        'specializationWeights': { min: 3e-6, scale: 1.0, decay: 0.4, noise: 0.7 },
+        'attentionMemory': { min: 1e-5, scale: 1.8, decayMin: 0.88, decayMax: 0.98, shrinkFloor: 0.75, noise: 0.5 }
     };
 
     #ensembleSize;
@@ -1244,9 +1244,10 @@ class HiveMind {
             finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, training);
         }
 
-        this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice()));
-
-        this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
+        if (training) {
+            this.#attentionMemory[transformerIdx].push(finalOutput.map(row => row.slice()));
+            this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
+        }
 
         return {
             output: finalOutput,
@@ -1331,9 +1332,8 @@ class HiveMind {
                 seq => Array.isArray(seq) && seq.length === this.#inputSize && seq.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
             )
         ) {
-            this.#attentionMemory[transformerIdx] = Array(this.#contextWindow).fill().map(() =>
-                Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
-            );
+            console.log(`CRITICAL: Invalid memory detected for transformer ${transformerIdx} - contextAwareAttention`)
+            process.exit();
         }
 
         const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
@@ -1392,9 +1392,8 @@ class HiveMind {
             this.#attentionMemory[idx].length === 0 ||
             !this.#attentionMemory[idx][0].every(row => Array.isArray(row) && row.length === this.#hiddenSize)
         ) {
-            this.#attentionMemory[idx] = Array(this.#contextWindow).fill().map(() =>
-                Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
-            );
+            console.log(`CRITICAL: Invalid memory detected for transformer ${idx} - processTransformer`)
+            process.exit();
         }
 
         let x = this.#contextAwareAttention(inputs, idx);
@@ -1487,9 +1486,8 @@ class HiveMind {
                 this.#attentionMemory[t][0].length !== this.#inputSize ||
                 !this.#attentionMemory[t][0].every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
             ) {
-                this.#attentionMemory[t] = Array(this.#contextWindow).fill().map(() =>
-                    Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
-                );
+                console.log(`CRITICAL: Invalid memory detected for transformer ${t} - computeAttentionWeights`)
+                process.exit();
             }
 
             const queries = inputFeatures.map(row =>
@@ -1697,7 +1695,7 @@ class HiveMind {
         });
     }
 
-    #updateTrustScores() {
+    #updateTrustScores () {
         const performanceMean = this.#performanceScores.reduce((sum, score) => sum + (isValidNumber(score) ? score : 0), 0) / this.#ensembleSize || 1;
         const performanceStd = Math.sqrt(
             this.#performanceScores.reduce((sum, score) => sum + ((isValidNumber(score) ? score : 0) - performanceMean) ** 2, 0) / this.#ensembleSize
@@ -2181,7 +2179,7 @@ class HiveMind {
         }
     }
 
-    #applyWeightDecay(idx, weight, isMatrix, weightType, diversityPenalty, similarityThreshold, layer = null, headSimilarities = null) {
+    #applyWeightDecay (idx, weight, isMatrix, weightType, diversityPenalty, similarityThreshold, layer = null, headSimilarities = null) {
         const performanceFactor = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
         const trustHistory = this.#trustScoresHistory?.[idx];
         const trust = Math.max(0.01, Math.min(1.0, Array.isArray(trustHistory) && trustHistory.length > 0 ? trustHistory[trustHistory.length - 1] : 0.5));
@@ -2243,7 +2241,7 @@ class HiveMind {
         }
     }
 
-    #applyGentleDecayToRow(row, lambdaEff, dynamicMin, performanceFactor, noiseScale) {
+    #applyGentleDecayToRow (row, lambdaEff, dynamicMin, performanceFactor, noiseScale) {
         const decayCap = Math.min(lambdaEff, 0.001);
 
         for (let j = 0; j < row.length; j++) {
@@ -2418,9 +2416,8 @@ class HiveMind {
                     seq => Array.isArray(seq) && seq.length === this.#inputSize && seq.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
                 )
             ) {
-                this.#attentionMemory[t] = Array(this.#contextWindow).fill().map(() =>
-                    Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
-                );
+                console.log(`CRITICAL: Invalid memory detected for transformer ${t} - regulateWeightsAndMemory`)
+                process.exit();
             }
 
             let varianceSum = 0;
@@ -2457,14 +2454,24 @@ class HiveMind {
 
                 for (let j = 0; j < this.#inputSize; j++) {
                     for (let k = 0; k < this.#hiddenSize; k++) {
-                        if (isValidNumber(this.#attentionMemory[t][i][j][k]) && this.#attentionMemory[t][i][j][k] !== 0) {
-                            let value = this.#attentionMemory[t][i][j][k] * normScale * adaptiveScale;
-                            const prevValue = i > 0 ? this.#attentionMemory[t][i-1][j][k] : 0;
-                            value = finalDecay * value + (1 - finalDecay) * prevValue;
-                            // value = this.#regularizationParams['attentionMemory'].scale * Math.tanh(value / this.#regularizationParams['attentionMemory'].scale);
-                            this.#attentionMemory[t][i][j][k] = value;
-                        } else {
-                            this.#attentionMemory[t][i][j][k] = 0;
+                        const originalVal = this.#attentionMemory[t][i][j][k];
+                        const minThreshold = this.#regularizationParams['attentionMemory'].min;
+                        const memScale = this.#regularizationParams['attentionMemory'].scale;
+
+                        if (isValidNumber(originalVal) && originalVal !== 0) {
+                            if (Math.abs(originalVal) > minThreshold) {
+                                let newVal = originalVal * normScale * adaptiveScale;
+                                const prevValue = i > 0 ? this.#attentionMemory[t][i-1][j][k] : 0;
+                                newVal = finalDecay * newVal + (1 - finalDecay) * prevValue;
+                                newVal = memScale * Math.tanh(newVal / memScale);
+                                this.#attentionMemory[t][i][j][k] = newVal;
+                            } 
+                            
+                            else if (Math.abs(originalVal) < minThreshold) {
+                                const noiseScale = this.#regularizationParams['attentionMemory'].noise || 1.0;
+                                const noise = (Math.random() - 0.5) * 0.002 * (performanceFactor + 0.1) * noiseScale;
+                                this.#attentionMemory[t][i][j][k] += noise;
+                            }
                         }
                     }
                 }
@@ -3069,9 +3076,8 @@ class HiveMind {
                             seq.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
                     )
                 ) {
-                    this.#attentionMemory[idx] = Array(this.#contextWindow).fill().map(() =>
-                        Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0))
-                    );
+                    console.log(`CRITICAL: Invalid memory detected for transformer ${idx} - distillKnowledge`)
+                    process.exit();
                 }
 
                 const attentionInput = this.#attentionMemory[idx][this.#attentionMemory[idx].length - 1];
