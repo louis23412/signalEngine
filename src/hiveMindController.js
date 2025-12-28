@@ -259,7 +259,7 @@ class HiveMindController {
         return result;
     }
 
-    #updateOpenTrades(candles, shouldSave, cutoff) {
+    #updateOpenTrades(candles, shouldSave, cutoff, checkpoint) {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
         const tradesStmt = this.#db.prepare(`
@@ -359,10 +359,10 @@ class HiveMindController {
                     process.stdout.moveCursor(0, -2);
                     process.stdout.clearScreenDown();
 
-                    if (cutoff !== null && this.#trainingStep === cutoff) { break }
+                    if (this.#trainingStep === cutoff || this.#trainingStep === checkpoint) { break }
                 }
 
-                if (shouldSave || (cutoff !== null && this.#trainingStep === cutoff)) {
+                if (shouldSave || this.#trainingStep === cutoff || this.#trainingStep === checkpoint) {
                     const saveStatus = this.#hivemind.dumpState()
 
                     if (!saveStatus.status) {
@@ -393,12 +393,12 @@ class HiveMindController {
         }
     }
 
-    getSignal(candles, shouldPredict = true, shouldSave = true, cutoff = null) {
+    getSignal(candles, shouldPredict = true, shouldSave = true, cutoff = null, checkpoint = null) {
         const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
 
         if (error) return { error };
 
-        this.#updateOpenTrades(recentCandles, shouldSave, cutoff);
+        this.#updateOpenTrades(recentCandles, shouldSave, cutoff, checkpoint);
 
         const indicators = this.#indicators.compute(fullCandles);
 

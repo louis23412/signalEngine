@@ -4,6 +4,7 @@ import readline from 'readline';
 import HiveMindController from '../src/hiveMindController.js';
 
 const trainingCutoff = null;
+const checkPointSave = null;
 const shouldPredict = true;
 const cacheSize = 1000;
 const ensembleSize = 6;
@@ -359,7 +360,7 @@ const processCandles = () => {
             try {
                 const isLast = totalCandles === totalLines;
                 const start = process.hrtime.bigint();
-                signal = controller.getSignal(cache, shouldPredict, isLast, trainingCutoff);
+                signal = controller.getSignal(cache, shouldPredict, isLast, trainingCutoff, checkPointSave);
                 const end = process.hrtime.bigint();
                 const durationSec = Number(end - start) / 1e9;
 
