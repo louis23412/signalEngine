@@ -34,7 +34,7 @@ class HiveMindController {
     #trainingStep = 0;
     #openSimulations = 0;
 
-    constructor( dp, cs, es, is ) {
+    constructor ( dp, cs, es, is ) {
         fs.mkdirSync(dp, { recursive: true });
         this.#cacheSize = cs;
         this.#traningCandleSize = is;
@@ -47,7 +47,7 @@ class HiveMindController {
         this.#loadGlobalAccuracy();
     }
 
-    #initDatabase() {
+    #initDatabase () {
         this.#db.exec(`
             CREATE TABLE IF NOT EXISTS open_trades (
                 timestamp TEXT PRIMARY KEY,
@@ -79,7 +79,7 @@ class HiveMindController {
         `);
     }
 
-    #loadGlobalAccuracy() {
+    #loadGlobalAccuracy () {
         const selectStmt = this.#db.prepare(`
             SELECT value FROM global_stats WHERE key = ?
         `);
@@ -103,7 +103,7 @@ class HiveMindController {
         }
     }
 
-    #saveGlobalAccuracy() {
+    #saveGlobalAccuracy () {
         const upsertStmt = this.#db.prepare(`
             INSERT INTO global_stats (key, value)
             VALUES (?, ?)
@@ -119,7 +119,7 @@ class HiveMindController {
         transaction();
     }
 
-    #getRecentCandles(candles) {
+    #getRecentCandles (candles) {
         if (!Array.isArray(candles) || candles.length === 0) {
             return { error: 'Invalid candle array type or length', recentCandles: [], fullCandles: [] };
         }
@@ -188,7 +188,7 @@ class HiveMindController {
         return { error: null, recentCandles, fullCandles };
     }
 
-    #robustNormalize(data, count = 1, lowerPercentile = 0.05, upperPercentile = 0.95) {
+    #robustNormalize (data, count = 1, lowerPercentile = 0.05, upperPercentile = 0.95) {
         if (!Array.isArray(data) || data.length < 2) return Array(count).fill(0);
         
         const actualCount = Math.min(count, data.length);
@@ -231,7 +231,7 @@ class HiveMindController {
         });
     }
 
-    #extractFeatures(data, candleCount) {
+    #extractFeatures (data, candleCount) {
         const normalizedRsi = this.#robustNormalize(data.rsi, candleCount);
         const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, candleCount);
         const normalizedAtr = this.#robustNormalize(data.atr, candleCount);
@@ -259,7 +259,7 @@ class HiveMindController {
         return result;
     }
 
-    #updateOpenTrades(candles, shouldSave, cutoff, checkpoint) {
+    #updateOpenTrades (candles, shouldSave, cutoff, checkpoint) {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
         const tradesStmt = this.#db.prepare(`
@@ -393,7 +393,7 @@ class HiveMindController {
         }
     }
 
-    getSignal(candles, shouldPredict = true, shouldSave = true, cutoff = null, checkpoint = null) {
+    getSignal (candles, shouldPredict = true, shouldSave = true, cutoff = null, checkpoint = null) {
         const { error, recentCandles, fullCandles } = this.#getRecentCandles(candles);
 
         if (error) return { error };
