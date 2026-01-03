@@ -996,8 +996,7 @@ class HiveMind {
 
         const output = x.map((val, i) => {
             const normalized = (val - mean) / Math.sqrt(variance + eps);
-            const gammaAdjusted = Math.abs(gamma[i] - 1.0) < 1e-6 ? 1.0 : gamma[i];
-            return isValidNumber(normalized) ? gammaAdjusted * normalized + beta[i] : 0;
+            return isValidNumber(normalized) ? gamma[i] * normalized + beta[i] : 0;
         });
 
         return output;
@@ -1126,22 +1125,6 @@ class HiveMind {
         }
     }
 
-    #normalizeToTarget = (vec, maxVal = 1.0) => {
-        const targetNorm = maxVal * Math.sqrt(this.#hiddenSize);
-
-        const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
-        let scaled = vec;
-        if (norm > targetNorm) {
-            const scale = targetNorm / Math.max(norm, 1e-8);
-            scaled = vec.map(v => v * scale);
-        }
-
-        const tanhScale = maxVal;
-        const tanhNorm = Math.tanh(tanhScale);
-
-        return scaled.map(v => Math.tanh(v * tanhScale) / tanhNorm * maxVal);
-    }
-
     #multiHeadAttention (x, layer, transformerIdx, training = true) {
         if (
             !Array.isArray(x) ||
@@ -1259,9 +1242,7 @@ class HiveMind {
             finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, training);
         }
 
-        const normalizedOutput = finalOutput.map(tokenVec => this.#normalizeToTarget(tokenVec));
-
-        const noisedOutput = normalizedOutput.map(tokenVec =>
+        const noisedOutput = finalOutput.map(tokenVec =>
             tokenVec.map(val => {  
                 const noiseSize = (Math.random() - 0.5) * 2;
                 const noiseScale = 0.1 + Math.random() * 0.3;
@@ -1275,7 +1256,7 @@ class HiveMind {
         }
 
         if (training) {
-            this.#attentionMemory[transformerIdx].push(normalizedOutput);
+            this.#attentionMemory[transformerIdx].push(finalOutput);
             this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
         }
 
@@ -1342,7 +1323,374 @@ class HiveMind {
         return this.#dropout(output, this.#dropoutRate, training);
     }
 
-    #contextAwareAttention (inputs, transformerIdx, training = true) {
+    // #contextAwareAttention (inputs, transformerIdx, training = true) {
+    //     if (
+    //         !Array.isArray(inputs) ||
+    //         inputs.length !== this.#inputSize ||
+    //         !inputs.every(isValidNumber) ||
+    //         !Number.isInteger(transformerIdx) ||
+    //         transformerIdx < 0 ||
+    //         transformerIdx >= this.#ensembleSize
+    //     ) {
+    //         return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     }
+
+    //     const transformer = this.#transformers[transformerIdx];
+
+    //     const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
+    //                 ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j], 0.5), 1.5)
+    //                 : 1;
+    //             inputProjection[i][j] = isValidNumber(inputs[i])
+    //                 ? inputs[i] * specWeight * (1 + this.#swarmIntelligenceFactor)
+    //                 : 0;
+    //         }
+    //     }
+
+    //     let rawComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             rawComponent[i][j] = isValidNumber(inputProjection[i][j]) && isValidNumber(transformer.positionalEncoding[i][j])
+    //                 ? inputProjection[i][j] + transformer.positionalEncoding[i][j]
+    //                 : inputProjection[i][j];
+    //         }
+    //     }
+
+    //     // -------------------------------------------------------------------------
+
+    //     // Fix this - Keep memory token, but find a better way than normalizing over all items
+
+    //     let longTermComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+    //     const memory = this.#attentionMemory[transformerIdx];
+    //     if (memory.length > 0) {
+    //         const importanceScores = memory.map((entry, idx) =>
+    //             this.#computeMemoryScore(entry, null, transformerIdx, idx, true)
+    //         );
+
+    //         const maxImp = Math.max(...importanceScores, 1);
+    //         const minImp = Math.min(...importanceScores);
+    //         const impRange = maxImp - minImp || 1;
+    //         const normalizedImportance = importanceScores.map(s => (s - minImp) / impRange);
+
+    //         const recencyWeights = [];
+    //         let recencySum = 0;
+    //         const decayBase = 0.98;
+    //         const minRecency = 0.01;
+    //         for (let age = 0; age < memory.length; age++) {
+    //             let w = Math.pow(decayBase, age);
+    //             w = Math.max(w, minRecency);
+    //             recencyWeights[age] = w;
+    //             recencySum += w;
+    //         }
+    //         const normalizedRecency = recencyWeights.map(w => w / recencySum);
+
+    //         const hybridWeights = normalizedRecency.map((r, age) => {
+    //             const memIdx = memory.length - 1 - age;
+    //             return r * (0.6 + 0.4 * normalizedImportance[memIdx]);
+    //         });
+
+    //         const totalWeight = hybridWeights.reduce((a, b) => a + b, 0) || 1;
+    //         const finalWeights = hybridWeights.map(w => w / totalWeight);
+
+    //         for (let i = 0; i < this.#inputSize; i++) {
+    //             const memoryToken = Array(this.#hiddenSize).fill(0);
+    //             for (let m = 0; m < memory.length; m++) {
+    //                 const age = memory.length - 1 - m;
+    //                 for (let j = 0; j < this.#hiddenSize; j++) {
+    //                     const val = isValidNumber(memory[m][i][j]) ? memory[m][i][j] : 0;
+    //                     memoryToken[j] += val * finalWeights[age];
+    //                 }
+    //             }
+
+    //             longTermComponent[i] = memoryToken;
+    //         }
+    //     }
+
+    //     // -------------------------------------------------------------------------
+
+    //     // -------------------------------------------------------------------------
+
+    //     // Fix this - Keep adaptive token, but find a better way than normalizing over all items
+
+    //     let adaptiveComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+    //     const adaptive = this.#adaptiveContext[transformerIdx];
+    //     if (adaptive.length > 0) {
+    //         const weights = [];
+    //         for (let i = 0; i < adaptive.length; i++) {
+    //             weights[i] = adaptive.length - i;
+    //         }
+    //         const weightSum = weights.reduce((a, b) => a + b, 0);
+    //         const normalizedWeights = weights.map(w => w / weightSum);
+
+    //         for (let i = 0; i < this.#inputSize; i++) {
+    //             const adaptiveToken = Array(this.#hiddenSize).fill(0);
+    //             for (let m = 0; m < adaptive.length; m++) {
+    //                 const weight = normalizedWeights[m];
+    //                 const entry = adaptive[m];
+    //                 for (let j = 0; j < this.#hiddenSize; j++) {
+    //                     const val = isValidNumber(entry[i][j]) ? entry[i][j] : 0;
+    //                     adaptiveToken[j] += val * weight;
+    //                 }
+    //             }
+                
+    //             adaptiveComponent[i] = adaptiveToken;
+    //         }
+    //     }
+
+    //     // -------------------------------------------------------------------------
+
+    //     adaptiveComponent = adaptiveComponent.map(tokenVec => 
+    //         this.#dropout(tokenVec, this.#dropoutRate, training)
+    //     );
+
+    //     const rawRatio       = 0.40;
+    //     const longTermRatio  = 0.25;
+    //     const adaptiveRatio  = 0.35;
+
+    //     let output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             output[i][j] =
+    //                 rawRatio       * rawComponent[i][j] +
+    //                 longTermRatio  * longTermComponent[i][j] +
+    //                 adaptiveRatio  * adaptiveComponent[i][j];
+    //         }
+    //     }
+
+    //     return output;
+    // }
+
+    // #contextAwareAttention (inputs, transformerIdx, training = true) {
+    //     if (
+    //         !Array.isArray(inputs) ||
+    //         inputs.length !== this.#inputSize ||
+    //         !inputs.every(isValidNumber) ||
+    //         !Number.isInteger(transformerIdx) ||
+    //         transformerIdx < 0 ||
+    //         transformerIdx >= this.#ensembleSize
+    //     ) {
+    //         return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     }
+
+    //     const transformer = this.#transformers[transformerIdx];
+
+    //     const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
+    //                 ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j], 0.5), 1.5)
+    //                 : 1;
+    //             inputProjection[i][j] = isValidNumber(inputs[i])
+    //                 ? inputs[i] * specWeight * (1 + this.#swarmIntelligenceFactor)
+    //                 : 0;
+    //         }
+    //     }
+
+    //     let rawComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             rawComponent[i][j] = isValidNumber(inputProjection[i][j]) && isValidNumber(transformer.positionalEncoding[i][j])
+    //                 ? inputProjection[i][j] + transformer.positionalEncoding[i][j]
+    //                 : inputProjection[i][j];
+    //         }
+    //     }
+
+    //     let queryVec = Array(this.#hiddenSize).fill(0);
+    //     let posCount = 0;
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             queryVec[j] += rawComponent[i][j];
+    //         }
+    //         posCount++;
+    //     }
+    //     if (posCount > 0) {
+    //         queryVec = queryVec.map(v => v / posCount);
+    //     }
+
+    //     let longTermComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+    //     const memory = this.#attentionMemory[transformerIdx];
+    //     if (memory.length > 0) {
+    //         const importanceScores = memory.map((entry, idx) =>
+    //             this.#computeMemoryScore(entry, null, transformerIdx, idx, true)
+    //         );
+    //         const maxImp = Math.max(...importanceScores, 1);
+    //         const minImp = Math.min(...importanceScores);
+    //         const impRange = maxImp - minImp || 1;
+    //         const normalizedImportance = importanceScores.map(s => (s - minImp) / impRange);
+
+    //         const recencyWeights = [];
+    //         let recencySum = 0;
+    //         const decayBase = 0.98;
+    //         const minRecency = 0.01;
+    //         for (let age = 0; age < memory.length; age++) {
+    //             let w = Math.pow(decayBase, age);
+    //             w = Math.max(w, minRecency);
+    //             recencyWeights[age] = w;
+    //             recencySum += w;
+    //         }
+
+    //         const relevanceScores = memory.map(entry => {
+    //             let memVec = Array(this.#hiddenSize).fill(0);
+    //             let count = 0;
+    //             for (let p = 0; p < this.#inputSize; p++) {
+    //                 for (let j = 0; j < this.#hiddenSize; j++) {
+    //                     const val = isValidNumber(entry[p][j]) ? entry[p][j] : 0;
+    //                     memVec[j] += val;
+    //                 }
+    //                 count++;
+    //             }
+    //             if (count > 0) {
+    //                 memVec = memVec.map(v => v / count);
+    //             }
+
+    //             let dot = 0, qNorm = 0, mNorm = 0;
+    //             for (let j = 0; j < this.#hiddenSize; j++) {
+    //                 dot += queryVec[j] * memVec[j];
+    //                 qNorm += queryVec[j] ** 2;
+    //                 mNorm += memVec[j] ** 2;
+    //             }
+    //             const sim = dot / (Math.sqrt(qNorm * mNorm) + 1e-8);
+    //             return Math.max(sim, -1);
+    //         });
+
+    //         const importanceCoeff = 2.5;
+    //         const relevanceCoeff = 4.0;
+    //         const hybridLogits = [];
+    //         for (let age = 0; age < memory.length; age++) {
+    //             const memIdx = memory.length - 1 - age;
+    //             const recencyNorm = recencyWeights[age] / recencySum;
+    //             let logit = Math.log(recencyNorm + 1e-8);
+    //             logit += importanceCoeff * normalizedImportance[memIdx];
+    //             logit += relevanceCoeff * ((relevanceScores[memIdx] + 1) / 2);
+    //             hybridLogits[age] = logit;
+    //         }
+
+    //         let probs = this.#softmax(hybridLogits);
+
+    //         const percent = 0.25;
+    //         const minK = 1;
+    //         let k = Math.max(minK, Math.ceil(memory.length * percent));
+
+    //         const weightedEntries = probs.map((prob, age) => ({prob, age}));
+    //         weightedEntries.sort((a, b) => b.prob - a.prob);
+    //         const topEntries = weightedEntries.slice(0, k);
+
+    //         const sumTop = topEntries.reduce((s, e) => s + e.prob, 0) || 1;
+    //         const finalWeights = Array(memory.length).fill(0);
+    //         for (const e of topEntries) {
+    //             finalWeights[e.age] = e.prob / sumTop;
+    //         }
+
+    //         for (let i = 0; i < this.#inputSize; i++) {
+    //             const memoryToken = Array(this.#hiddenSize).fill(0);
+    //             for (let m = 0; m < memory.length; m++) {
+    //                 const age = memory.length - 1 - m;
+    //                 const weight = finalWeights[age];
+    //                 if (weight === 0) continue;
+    //                 for (let j = 0; j < this.#hiddenSize; j++) {
+    //                     const val = isValidNumber(memory[m][i][j]) ? memory[m][i][j] : 0;
+    //                     memoryToken[j] += val * weight;
+    //                 }
+    //             }
+    //             longTermComponent[i] = memoryToken;
+    //         }
+    //     }
+
+    //     let adaptiveComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+    //     const adaptive = this.#adaptiveContext[transformerIdx];
+    //     if (adaptive.length > 0) {
+    //         const recencyLogits = [];
+    //         for (let i = 0; i < adaptive.length; i++) {
+    //             recencyLogits[i] = (adaptive.length - i) * 1.5;
+    //         }
+
+    //         const relevanceScores = adaptive.map(entry => {
+    //             let memVec = Array(this.#hiddenSize).fill(0);
+    //             let count = 0;
+    //             for (let p = 0; p < this.#inputSize; p++) {
+    //                 for (let j = 0; j < this.#hiddenSize; j++) {
+    //                     const val = isValidNumber(entry[p][j]) ? entry[p][j] : 0;
+    //                     memVec[j] += val;
+    //                 }
+    //                 count++;
+    //             }
+    //             if (count > 0) {
+    //                 memVec = memVec.map(v => v / count);
+    //             }
+    //             let dot = 0, qNorm = 0, mNorm = 0;
+    //             for (let j = 0; j < this.#hiddenSize; j++) {
+    //                 dot += queryVec[j] * memVec[j];
+    //                 qNorm += queryVec[j] ** 2;
+    //                 mNorm += memVec[j] ** 2;
+    //             }
+    //             const sim = dot / (Math.sqrt(qNorm * mNorm) + 1e-8);
+    //             return Math.max(sim, -1);
+    //         });
+
+    //         const relevanceCoeff = 3.0;
+    //         const hybridLogits = recencyLogits.map((logit, i) =>
+    //             logit + relevanceCoeff * ((relevanceScores[i] + 1) / 2)
+    //         );
+
+    //         let probs = this.#softmax(hybridLogits);
+
+    //         const percent = 0.25;
+    //         const minK = 1;
+    //         let k = Math.max(minK, Math.ceil(adaptive.length * percent));
+
+    //         const weightedEntries = probs.map((prob, idx) => ({prob, idx}));
+    //         weightedEntries.sort((a, b) => b.prob - a.prob);
+    //         const topEntries = weightedEntries.slice(0, k);
+
+    //         const sumTop = topEntries.reduce((s, e) => s + e.prob, 0) || 1;
+    //         const finalWeights = Array(adaptive.length).fill(0);
+    //         for (const e of topEntries) {
+    //             finalWeights[e.idx] = e.prob / sumTop;
+    //         }
+
+    //         for (let i = 0; i < this.#inputSize; i++) {
+    //             const adaptiveToken = Array(this.#hiddenSize).fill(0);
+    //             for (let m = 0; m < adaptive.length; m++) {
+    //                 const weight = finalWeights[m];
+    //                 if (weight === 0) continue;
+    //                 const entry = adaptive[m];
+    //                 for (let j = 0; j < this.#hiddenSize; j++) {
+    //                     const val = isValidNumber(entry[i][j]) ? entry[i][j] : 0;
+    //                     adaptiveToken[j] += val * weight;
+    //                 }
+    //             }
+    //             adaptiveComponent[i] = adaptiveToken;
+    //         }
+    //     }
+
+    //     adaptiveComponent = adaptiveComponent.map(tokenVec => 
+    //         this.#dropout(tokenVec, this.#dropoutRate, training)
+    //     );
+
+    //     const rawRatio       = 0.40;
+    //     const longTermRatio  = 0.25;
+    //     const adaptiveRatio  = 0.35;
+
+    //     let output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+    //     for (let i = 0; i < this.#inputSize; i++) {
+    //         for (let j = 0; j < this.#hiddenSize; j++) {
+    //             output[i][j] =
+    //                 rawRatio       * rawComponent[i][j] +
+    //                 longTermRatio  * longTermComponent[i][j] +
+    //                 adaptiveRatio  * adaptiveComponent[i][j];
+    //         }
+    //     }
+
+    //     return output;
+    // }
+
+    #contextAwareAttention(inputs, transformerIdx, training = true) {
         if (
             !Array.isArray(inputs) ||
             inputs.length !== this.#inputSize ||
@@ -1377,103 +1725,148 @@ class HiveMind {
             }
         }
 
-        let longTermComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        let queryVec = Array(this.#hiddenSize).fill(0);
+        let posCount = 0;
+        for (let i = 0; i < this.#inputSize; i++) {
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                queryVec[j] += rawComponent[i][j];
+            }
+            posCount++;
+        }
+        if (posCount > 0) {
+            queryVec = queryVec.map(v => v / posCount);
+        }
 
+        let longTermComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         const memory = this.#attentionMemory[transformerIdx];
+
         if (memory.length > 0) {
             const importanceScores = memory.map((entry, idx) =>
                 this.#computeMemoryScore(entry, null, transformerIdx, idx, true)
             );
-
             const maxImp = Math.max(...importanceScores, 1);
-            const minImp = Math.min(...importanceScores);
-            const impRange = maxImp - minImp || 1;
-            const normalizedImportance = importanceScores.map(s => (s - minImp) / impRange);
+            const normalizedImportance = importanceScores.map(s => s / maxImp);
 
-            const recencyWeights = [];
-            let recencySum = 0;
-            const decayBase = 0.98;
-            const minRecency = 0.01;
-            for (let age = 0; age < memory.length; age++) {
-                let w = Math.pow(decayBase, age);
-                w = Math.max(w, minRecency);
-                recencyWeights[age] = w;
-                recencySum += w;
-            }
-            const normalizedRecency = recencyWeights.map(w => w / recencySum);
+            const relevanceScores = memory.map(entry => {
+                let memVec = Array(this.#hiddenSize).fill(0);
+                let count = 0;
+                for (let p = 0; p < this.#inputSize; p++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const val = isValidNumber(entry[p][j]) ? entry[p][j] : 0;
+                        memVec[j] += val;
+                    }
+                    count++;
+                }
+                if (count > 0) memVec = memVec.map(v => v / count);
 
-            const hybridWeights = normalizedRecency.map((r, age) => {
-                const memIdx = memory.length - 1 - age;
-                return r * (0.6 + 0.4 * normalizedImportance[memIdx]);
+                let dot = 0, qNorm = 0, mNorm = 0;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    dot += queryVec[j] * memVec[j];
+                    qNorm += queryVec[j] ** 2;
+                    mNorm += memVec[j] ** 2;
+                }
+                return Math.max(dot / (Math.sqrt(qNorm * mNorm) + 1e-8), -1);
             });
 
-            const totalWeight = hybridWeights.reduce((a, b) => a + b, 0) || 1;
-            const finalWeights = hybridWeights.map(w => w / totalWeight);
+            const decayBase = 0.95;
+            const importanceCoeff = 4.0;
+            const relevanceCoeff = 5.0;
+            const temperature = 1.2;
+
+            const logits = memory.map((_, memIdx) => {
+                const age = memory.length - 1 - memIdx;
+                const recency = Math.max(Math.pow(decayBase, age), 0.01);
+                let logit = Math.log(recency + 1e-8);
+                logit += importanceCoeff * normalizedImportance[memIdx];
+                logit += relevanceCoeff * ((relevanceScores[memIdx] + 1) / 2);
+                return logit / temperature;
+            });
+
+            const weights = this.#softmax(logits);
 
             for (let i = 0; i < this.#inputSize; i++) {
-                const memoryToken = Array(this.#hiddenSize).fill(0);
+                const token = Array(this.#hiddenSize).fill(0);
                 for (let m = 0; m < memory.length; m++) {
-                    const age = memory.length - 1 - m;
+                    const w = weights[m];
+                    if (w < 1e-8) continue;
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         const val = isValidNumber(memory[m][i][j]) ? memory[m][i][j] : 0;
-                        memoryToken[j] += val * finalWeights[age];
+                        token[j] += val * w;
                     }
                 }
-                longTermComponent[i] = this.#normalizeToTarget(memoryToken);
+                longTermComponent[i] = token;
             }
         }
 
         let adaptiveComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-
         const adaptive = this.#adaptiveContext[transformerIdx];
+
         if (adaptive.length > 0) {
-            const weights = [];
-            for (let i = 0; i < adaptive.length; i++) {
-                weights[i] = adaptive.length - i;
-            }
-            const weightSum = weights.reduce((a, b) => a + b, 0);
-            const normalizedWeights = weights.map(w => w / weightSum);
+            const relevanceScores = adaptive.map(entry => {
+                let memVec = Array(this.#hiddenSize).fill(0);
+                let count = 0;
+                for (let p = 0; p < this.#inputSize; p++) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const val = isValidNumber(entry[p][j]) ? entry[p][j] : 0;
+                        memVec[j] += val;
+                    }
+                    count++;
+                }
+                if (count > 0) memVec = memVec.map(v => v / count);
+
+                let dot = 0, qNorm = 0, mNorm = 0;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    dot += queryVec[j] * memVec[j];
+                    qNorm += queryVec[j] ** 2;
+                    mNorm += memVec[j] ** 2;
+                }
+                return Math.max(dot / (Math.sqrt(qNorm * mNorm) + 1e-8), -1);
+            });
+
+            const recencyCoeff = 2.5;
+            const relevanceCoeff = 2.0;
+            const temperature = 0.8;
+
+            const logits = adaptive.map((_, idx) => {
+                const recency = adaptive.length - idx;
+                let logit = recencyCoeff * recency;
+                logit += relevanceCoeff * ((relevanceScores[idx] + 1) / 2);
+                return logit / temperature;
+            });
+
+            const weights = this.#softmax(logits);
 
             for (let i = 0; i < this.#inputSize; i++) {
-                const adaptiveToken = Array(this.#hiddenSize).fill(0);
+                const token = Array(this.#hiddenSize).fill(0);
                 for (let m = 0; m < adaptive.length; m++) {
-                    const weight = normalizedWeights[m];
+                    const w = weights[m];
+                    if (w < 1e-8) continue;
                     const entry = adaptive[m];
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         const val = isValidNumber(entry[i][j]) ? entry[i][j] : 0;
-                        adaptiveToken[j] += val * weight;
+                        token[j] += val * w;
                     }
                 }
-                adaptiveComponent[i] = this.#normalizeToTarget(adaptiveToken);
+                adaptiveComponent[i] = token;
             }
         }
 
-        adaptiveComponent = adaptiveComponent.map(tokenVec => 
+        adaptiveComponent = adaptiveComponent.map(tokenVec =>
             this.#dropout(tokenVec, this.#dropoutRate, training)
         );
 
-        const rawRatio       = 0.40;
-        const longTermRatio  = 0.25;
-        const adaptiveRatio  = 0.35;
+        const rawRatio      = 0.40;
+        const longTermRatio = 0.25;
+        const adaptiveRatio = 0.35;
 
         let output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         for (let i = 0; i < this.#inputSize; i++) {
             for (let j = 0; j < this.#hiddenSize; j++) {
                 output[i][j] =
-                    rawRatio       * rawComponent[i][j] +
-                    longTermRatio  * longTermComponent[i][j] +
-                    adaptiveRatio  * adaptiveComponent[i][j];
+                    rawRatio      * rawComponent[i][j] +
+                    longTermRatio * longTermComponent[i][j] +
+                    adaptiveRatio * adaptiveComponent[i][j];
             }
-        }
-
-        output = output.map(tokenVec => this.#normalizeToTarget(tokenVec));
-
-        for (let i = 0; i < this.#inputSize; i++) {
-            output[i] = this.#layerNorm(
-                output[i],
-                transformer.layerNormWeights[0].gamma1,
-                transformer.layerNormWeights[0].beta1
-            );
         }
 
         return output;
@@ -1527,15 +1920,28 @@ class HiveMind {
             }
         }
 
+        let finalHidden = x[0];
+        if (this.#numLayers > 0) {
+            const lastLayerIdx = this.#numLayers - 1;
+            finalHidden = this.#layerNorm(
+                x[0],
+                transformer.layerNormWeights[lastLayerIdx].gamma2,
+                transformer.layerNormWeights[lastLayerIdx].beta2
+            );
+        }
+
         let output = Array(1).fill(0);
         for (let i = 0; i < this.#hiddenSize; i++) {
-            output[0] += isValidNumber(x[0][i]) && isValidNumber(transformer.outputWeights[i][0])
-                ? x[0][i] * transformer.outputWeights[i][0]
+            output[0] += isValidNumber(finalHidden[i]) && isValidNumber(transformer.outputWeights[i][0])
+                ? finalHidden[i] * transformer.outputWeights[i][0]
                 : 0;
         }
+
         output[0] = isValidNumber(output[0]) && isValidNumber(transformer.outputBias[0])
             ? output[0] + transformer.outputBias[0]
             : output[0];
+
+        this.#computeAttentionWeights(inputs, output[0]);
 
         if (computeIntermediates) {
             return { output: output[0], layerOutputs, activations, attentionIntermediates };
@@ -1997,10 +2403,10 @@ class HiveMind {
         return actualGini;
     }
 
-    #computeWeightedSum (outputs, weights) {
+    #computeWeightedSum (outputs) {
         return outputs.reduce((sum, out, idx) => {
-            if (isValidNumber(out) && isValidNumber(weights[idx])) {
-                return sum + out * weights[idx];
+            if (isValidNumber(out) && isValidNumber(this.#ensembleWeights[idx])) {
+                return sum + out * this.#ensembleWeights[idx];
             }
             return sum;
         }, 0);
@@ -2144,20 +2550,16 @@ class HiveMind {
 
         if (currentNorm < 1e-6) return;
 
-        let expectedNorm;
+        let expectedNorm = 6.0;
         if (isVector && (Array.isArray(param[0]) ? param.map(row => row[0]) : param).every(v => Math.abs(v - 1) < 1e-6)) {
-            expectedNorm = Math.sqrt(rows) * 1.5;
+            expectedNorm = Math.sqrt(rows) * 2.0;
         } else if (cols === 1 && rows > 1) {
-            expectedNorm = Math.sqrt(2.2) * 2.0;
-        } else if (isVector && currentNorm > 1 && currentNorm < 4) {
-            expectedNorm = 3.0;
-        } else {
-            expectedNorm = 3.0;
+            expectedNorm = Math.sqrt(2.2) * 4.0;
         }
 
         const targetNorm = expectedNorm * boost;
-        const explosionThreshold = targetNorm * 5.0;
-        const scale = Math.max(targetNorm / currentNorm, 0.7);
+        const explosionThreshold = targetNorm * 8.0;
+        const scale = Math.max(targetNorm / currentNorm, 0.6);
         const shouldScale = currentNorm > explosionThreshold;
 
         if (isVector || cols === 1) {
@@ -3120,9 +3522,7 @@ class HiveMind {
 
         const outputs = this.#transformers.map((_, idx) => this.#processTransformer(inputs, idx, false, false));
 
-        this.#computeAttentionWeights(inputs, outputs);
-
-        const finalOutput = this.#computeWeightedSum(outputs, this.#ensembleWeights);
+        const finalOutput = this.#computeWeightedSum(outputs);
 
         return this.#sigmoid(isValidNumber(finalOutput) ? finalOutput : 0);
     }
@@ -3145,9 +3545,7 @@ class HiveMind {
             trainingAttentionIntermediates[idx] = result.attentionIntermediates;
         });
 
-        this.#computeAttentionWeights(inputs, linearOutputs);
-
-        const finalLinearOutput = this.#computeWeightedSum(linearOutputs, this.#ensembleWeights);
+        const finalLinearOutput = this.#computeWeightedSum(linearOutputs);
         const finalProbability = this.#sigmoid(finalLinearOutput);
 
         const dL_d_output = finalProbability - target;
@@ -3165,12 +3563,10 @@ class HiveMind {
         }
 
         this.#updateMetrics(inputs, linearOutputs, target, finalProbability);
-
         this.#accumulateGradients(inputs, trainingLayerOutputs, trainingActivations, trainingAttentionIntermediates, dL_d_output, dL_d_scores);
 
         if (this.#trainingStepCount % this.#gradientResetFrequency === 0) {
             const clonedGrads = this.#applyGradients(true, true, this.#gradientResetFrequency);
-
             this.#gradientAccumulation = structuredClone(clonedGrads);
 
             const freshOutputs = [];
@@ -3186,27 +3582,20 @@ class HiveMind {
                 cleanLayerOutputs[idx] = result.layerOutputs;
             });
 
-            this.#computeAttentionWeights(inputs, freshOutputs);
-            const freshFinalOutput = this.#computeWeightedSum(freshOutputs, this.#ensembleWeights);
+            const freshFinalOutput = this.#computeWeightedSum(freshOutputs);
             const freshProbability = this.#sigmoid(freshFinalOutput);
 
             this.#updateMetrics(inputs, freshOutputs, target, freshProbability);
-
             this.#distillKnowledge(freshOutputs, cleanAttentionIntermediates, cleanActivations, cleanLayerOutputs);
-
             this.#rollbackGradients(clonedGrads);
-
             this.#applyGradients(false, false, 1);
 
             const endOutputs = this.#transformers.map((_, idx) => this.#processTransformer(inputs, idx, false, false));
-            this.#computeAttentionWeights(inputs, endOutputs);
-            const endFinalOutput = this.#computeWeightedSum(endOutputs, this.#ensembleWeights);
+            const endFinalOutput = this.#computeWeightedSum(endOutputs);
             const endProbability = this.#sigmoid(endFinalOutput);
 
             this.#updateMetrics(inputs, endOutputs, target, endProbability);
-
             this.#regularizeWeights();
-
             this.#gradientAccumulation = this.#setGradientStructure();
         }
 
