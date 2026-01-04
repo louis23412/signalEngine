@@ -32,6 +32,7 @@ class HiveMindController {
     #cacheSize;
     #traningCandleSize;
     #trainingStep = 0;
+    #lastSaveStep = 0;
     #openSimulations = 0;
 
     constructor ( dp, cs, es, is ) {
@@ -259,6 +260,19 @@ class HiveMindController {
         return result;
     }
 
+    #dumpState (force = false) {
+        if (this.#lastSaveStep === this.#trainingStep && !force) return;
+
+        const saveStatus = this.#hivemind.dumpState()
+
+        if (!saveStatus.status) {
+            console.log(`Hivemind state save failed! Error: ${saveStatus.error} Trace: ${saveStatus.trace}`)
+        } else {
+            console.log('Hivemind state saved!')
+            this.#lastSaveStep = this.#trainingStep
+        }
+    }
+
     #updateOpenTrades (candles, shouldSave, cutoff, checkpoint) {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
@@ -359,18 +373,11 @@ class HiveMindController {
                     process.stdout.moveCursor(0, -2);
                     process.stdout.clearScreenDown();
 
-                    if (this.#trainingStep === cutoff || this.#trainingStep === checkpoint) { break }
+                    if (this.#trainingStep % checkpoint === 0) this.#dumpState();
+                    if (this.#trainingStep === cutoff ) { break }
                 }
 
-                if (shouldSave || this.#trainingStep === cutoff || this.#trainingStep === checkpoint) {
-                    const saveStatus = this.#hivemind.dumpState()
-
-                    if (!saveStatus.status) {
-                        console.log(`Hivemind state save failed! Error: ${saveStatus.error} Trace: ${saveStatus.trace}`)
-                    } else {
-                        console.log('Hivemind state saved!')
-                    }
-                }
+                if ( shouldSave || this.#trainingStep === cutoff ) this.#dumpState(shouldSave);
 
                 for (const key of keysToDelete) {
                     deleteTradeStmt.run(key);
@@ -382,15 +389,7 @@ class HiveMindController {
             transaction();
         } 
         
-        else if (closedTrades.length === 0 && shouldSave) {
-            const saveStatus = this.#hivemind.dumpState()
-
-            if (!saveStatus.status) {
-                console.log(`Hivemind state save failed! Error: ${saveStatus.error} Trace: ${saveStatus.trace}`)
-            } else {
-                console.log('Hivemind state saved!')
-            }
-        }
+        else if (closedTrades.length === 0 && shouldSave) this.#dumpState(shouldSave);
     }
 
     getSignal (candles, shouldPredict = true, shouldSave = true, cutoff = null, checkpoint = null) {
