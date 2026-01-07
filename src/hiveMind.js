@@ -257,14 +257,12 @@ class HiveMind {
 
             db = new Database(dbPath, { readonly: true });
 
-            // Metadata: trainingStepCount
             const metadataStmt = db.prepare('SELECT key, value FROM metadata WHERE key = ?');
             const trainingStepCount = metadataStmt.get('trainingStepCount');
             if (trainingStepCount && isValidNumber(Number(trainingStepCount.value))) {
                 this.#trainingStepCount = Number(trainingStepCount.value);
             }
 
-            // Simple scalar/vector loads (unchanged from original)
             const ensembleWeightsStmt = db.prepare('SELECT idx, weight FROM ensemble_weights');
             const ensembleWeights = ensembleWeightsStmt.all();
             ensembleWeights.forEach(({ idx, weight }) => {
@@ -378,7 +376,6 @@ class HiveMind {
                 }
             });
 
-            // Updated transformer weights/biases/norms loading (modernized structure)
             const transformerWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM transformers');
             const transformerBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM transformer_biases');
             const transformerLayerNormStmt = db.prepare('SELECT idx, layer, norm_type, row, value FROM transformer_layer_norm');
@@ -429,7 +426,6 @@ class HiveMind {
                 }
             });
 
-            // Updated gradient accumulation loading (modernized structure)
             const gradientAccumulationStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
             const gradientAccumulations = gradientAccumulationStmt.all();
 
@@ -725,13 +721,11 @@ class HiveMind {
                 });
             });
 
-            // --- Transformers (weights) ---
             const insertTransformerWeights = db.prepare('INSERT OR REPLACE INTO transformers (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
             const insertTransformerLayerNorm = db.prepare('INSERT OR REPLACE INTO transformer_layer_norm (idx, layer, norm_type, row, value) VALUES (?, ?, ?, ?, ?)');
             const insertTransformerBiases = db.prepare('INSERT OR REPLACE INTO transformer_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
 
             this.#transformers.forEach((transformer, idx) => {
-                // Attention weights (per layer)
                 transformer.attentionWeights.forEach((layerWeights, layer) => {
                     ['Wq', 'Wk', 'Wv', 'Wo'].forEach(weightType => {
                         const matrix = layerWeights[weightType];
@@ -745,7 +739,6 @@ class HiveMind {
                     });
                 });
 
-                // FFN weights (per layer)
                 transformer.ffnWeights.forEach((layerFFN, layer) => {
                     ['gate_proj', 'up_proj', 'down_proj'].forEach(weightType => {
                         const matrix = layerFFN[weightType];
@@ -759,7 +752,6 @@ class HiveMind {
                     });
                 });
 
-                // LayerNorm gammas (per layer)
                 transformer.layerNormWeights.forEach((layerNorm, layer) => {
                     ['gamma1', 'gamma2'].forEach(normType => {
                         layerNorm[normType].forEach((value, r) => {
@@ -770,7 +762,6 @@ class HiveMind {
                     });
                 });
 
-                // Final output weights (hidden × 1)
                 transformer.outputWeights.forEach((rowArr, r) => {
                     rowArr.forEach((value, c) => {
                         if (isValidNumber(value)) {
@@ -779,7 +770,6 @@ class HiveMind {
                     });
                 });
 
-                // Final output bias (scalar, stored as length-1 vector)
                 transformer.outputBias.forEach((value, r) => {
                     if (isValidNumber(value)) {
                         insertTransformerBiases.run(idx, -1, 'outputBias', r, value);
@@ -787,11 +777,9 @@ class HiveMind {
                 });
             });
 
-            // --- Gradient accumulation ---
             const insertGradientAccumulation = db.prepare('INSERT OR REPLACE INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
 
             this.#gradientAccumulation.forEach((grad, idx) => {
-                // Output weights & bias
                 grad.outputWeights.forEach((rowArr, r) => {
                     rowArr.forEach((value, c) => {
                         if (isValidNumber(value)) {
@@ -805,7 +793,6 @@ class HiveMind {
                     }
                 });
 
-                // Attention weights gradients (per layer)
                 grad.attentionWeights.forEach((layerGrad, layer) => {
                     ['Wq', 'Wk', 'Wv', 'Wo'].forEach(weightType => {
                         const matrix = layerGrad[weightType];
@@ -819,7 +806,6 @@ class HiveMind {
                     });
                 });
 
-                // FFN gradients (per layer)
                 grad.ffnWeights.forEach((layerGrad, layer) => {
                     ['gate_proj', 'up_proj', 'down_proj'].forEach(weightType => {
                         const matrix = layerGrad[weightType];
@@ -833,7 +819,6 @@ class HiveMind {
                     });
                 });
 
-                // LayerNorm gamma gradients (per layer)
                 grad.layerNormWeights.forEach((layerGrad, layer) => {
                     ['gamma1', 'gamma2'].forEach(normType => {
                         layerGrad[normType].forEach((value, r) => {
@@ -844,7 +829,6 @@ class HiveMind {
                     });
                 });
 
-                // Top-level vectors/matrices
                 grad.attentionBias.forEach((value, r) => {
                     if (isValidNumber(value)) {
                         insertGradientAccumulation.run(idx, -1, 'attentionBias', r, 0, value);
@@ -1144,7 +1128,6 @@ class HiveMind {
             }
         }
 
-        // Apply Rotary Positional Embeddings (RoPE) to Q and K
         this.#applyRoPE(Q);
         this.#applyRoPE(K);
 
@@ -1517,7 +1500,6 @@ class HiveMind {
             }
         }
 
-        // Removed initial norm — the first transformer layer's pre-attention RMSNorm will handle it
         return output;
     }
 
@@ -1531,7 +1513,6 @@ class HiveMind {
         const attentionIntermediates = computeIntermediates ? [] : [];
 
         for (let layer = 0; layer < this.#numLayers; layer++) {
-            // Pre-attention RMSNorm
             const normX = x.map(row => this.#rmsNorm(row, transformer.layerNormWeights[layer].gamma1));
 
             const attentionResult = this.#multiHeadAttention(normX, transformer.attentionWeights[layer], idx, training);
@@ -1539,7 +1520,6 @@ class HiveMind {
 
             const attentionResidual = x.map((row, i) => row.map((val, j) => val + attentionOutput[i][j]));
 
-            // Pre-FFN RMSNorm
             const normAttention = attentionResidual.map(row => this.#rmsNorm(row, transformer.layerNormWeights[layer].gamma2));
 
             const ffnOutputs = normAttention.map(row => this.#feedForward(row, transformer.ffnWeights[layer], idx, training));
@@ -1560,7 +1540,6 @@ class HiveMind {
             }
         }
 
-        // Final pooling with RMSNorm on last layer's gamma2 if layers exist
         let finalHidden = Array(this.#hiddenSize).fill(0);
         let validCount = 0;
         for (let pos = 0; pos < this.#inputSize; pos++) {
@@ -2267,18 +2246,15 @@ class HiveMind {
         const vectorNorms = [];
         const specMatrixNorms = [];
 
-        // Output head (treated as small FFN matrix and vector)
         ffnMatrixNorms.push(this.#computeSpectralNorm(this.#gradientAccumulation[idx].outputWeights));
         vectorNorms.push(this.#computeGradientNorm(this.#gradientAccumulation[idx].outputBias, false));
 
         for (let layer = 0; layer < this.#numLayers; layer++) {
-            // Attention matrices
             ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                 const gradMatrix = this.#gradientAccumulation[idx].attentionWeights[layer][key];
                 attentionMatrixNorms.push(this.#computeSpectralNorm(gradMatrix));
             });
 
-            // FFN matrices (gate_proj, up_proj, down_proj)
             ['gate_proj', 'up_proj'].forEach(key => {
                 const gradMatrix = this.#gradientAccumulation[idx].ffnWeights[layer][key];
                 ffnMatrixNorms.push(this.#computeSpectralNorm(gradMatrix));
@@ -2286,16 +2262,13 @@ class HiveMind {
             const downGrad = this.#gradientAccumulation[idx].ffnWeights[layer].down_proj;
             ffnMatrixNorms.push(this.#computeSpectralNorm(downGrad));
 
-            // RMSNorm gammas (vectors)
             vectorNorms.push(this.#computeGradientNorm(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1, false));
             vectorNorms.push(this.#computeGradientNorm(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2, false));
         }
 
-        // Other vectors
         vectorNorms.push(this.#computeGradientNorm(this.#gradientAccumulation[idx].attentionBias, false));
         vectorNorms.push(this.#computeGradientNorm(this.#gradientAccumulation[idx].attentionWeightMatrix, false));
 
-        // Specialization matrix
         specMatrixNorms.push(this.#computeSpectralNorm(this.#gradientAccumulation[idx].specializationWeights));
 
         const sparseThreshold = this.#computeSparseThreshold([...attentionMatrixNorms, ...ffnMatrixNorms, ...vectorNorms, ...specMatrixNorms]);
@@ -2310,29 +2283,23 @@ class HiveMind {
         const vectorThreshold = Math.min(this.#computePercentile(vectorNorms, vectorPercentile), 1.0) * weightFactor;
         const specMatrixThreshold = Math.min(this.#computePercentile(specMatrixNorms, specPercentile), 1.0) * weightFactor;
 
-        // Scale output head
         this.#scaleGradientMatrix(this.#gradientAccumulation[idx].outputWeights, ffnMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         this.#scaleGradientVector(this.#gradientAccumulation[idx].outputBias, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
 
-        // Scale per-layer
         for (let layer = 0; layer < this.#numLayers; layer++) {
-            // Attention
             ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
                 this.#scaleGradientMatrix(this.#gradientAccumulation[idx].attentionWeights[layer][key], attentionMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             });
 
-            // FFN
             ['gate_proj', 'up_proj'].forEach(key => {
                 this.#scaleGradientMatrix(this.#gradientAccumulation[idx].ffnWeights[layer][key], ffnMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             });
             this.#scaleGradientMatrix(this.#gradientAccumulation[idx].ffnWeights[layer].down_proj, ffnMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
 
-            // RMSNorm gammas
             this.#scaleGradientVector(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
             this.#scaleGradientVector(this.#gradientAccumulation[idx].layerNormWeights[layer].gamma2, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         }
 
-        // Other
         this.#scaleGradientVector(this.#gradientAccumulation[idx].attentionBias, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         this.#scaleGradientVector(this.#gradientAccumulation[idx].attentionWeightMatrix, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         this.#scaleGradientMatrix(this.#gradientAccumulation[idx].specializationWeights, specMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
@@ -2341,7 +2308,6 @@ class HiveMind {
     #accumulateGradients (inputs, outputs, target, probability, layerOutputs, activations, attentionIntermediates) {
         const dL_dLogit = probability - target;
 
-        // Compute the ensemble's weighted logit (teacher logit) for agreement signal
         let finalLogit = 0;
         for (let i = 0; i < this.#ensembleSize; i++) {
             if (isValidNumber(outputs[i]) && isValidNumber(this.#ensembleWeights[i])) {
@@ -2352,17 +2318,14 @@ class HiveMind {
         this.#transformers.forEach((transformer, idx) => {
             const lr = this.#adaptiveLearningRate[idx];
 
-            // Correct scaling by current ensemble weight for this member's main backprop
             const memberWeight = isValidNumber(this.#ensembleWeights[idx]) ? this.#ensembleWeights[idx] : 1 / this.#ensembleSize;
             const effective_dL = dL_dLogit * memberWeight;
 
-            // Agreement signal for dynamic ensemble weighting (push member logit toward ensemble logit)
             let agreement_dL = 0;
             if (isValidNumber(outputs[idx])) {
                 agreement_dL = dL_dLogit * memberWeight * (outputs[idx] - finalLogit);
             }
 
-            // Attention weighting gradients (using agreement signal)
             let attWeightGrad = 0;
             if (isValidNumber(agreement_dL)) {
                 attWeightGrad = agreement_dL / Math.sqrt(this.#hiddenSize);
@@ -2383,7 +2346,6 @@ class HiveMind {
                 }
             }
 
-            // Specialization heuristic gradients (kept using full dL_dLogit as in original – it's a separate heuristic signal)
             for (let j = 0; j < this.#hiddenSize; j++) {
                 for (let k = 0; k < this.#hiddenSize; k++) {
                     const inputIdx = (j + k) % this.#inputSize;
@@ -2398,7 +2360,6 @@ class HiveMind {
                 }
             }
 
-            // Final pooling and output head (now correctly scaled by memberWeight via effective_dL)
             const finalX = layerOutputs[idx][this.#numLayers];
             let pooled = Array(this.#hiddenSize).fill(0);
             let validCount = 0;
@@ -2419,7 +2380,6 @@ class HiveMind {
                 pooled = pooled.map(v => v / validCount);
             }
 
-            // Gradient w.r.t. pooled hidden state
             let gradPooled = Array(this.#hiddenSize).fill(0);
             for (let i = 0; i < this.#hiddenSize; i++) {
                 const w = transformer.outputWeights[i][0];
@@ -2430,7 +2390,6 @@ class HiveMind {
             }
             this.#gradientAccumulation[idx].outputBias[0] += effective_dL * lr;
 
-            // Backprop through final RMSNorm if exists
             let grad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
             if (this.#numLayers > 0) {
                 const lastLayer = this.#numLayers - 1;
@@ -2443,13 +2402,11 @@ class HiveMind {
 
                     const incoming = gradPooled.map(g => g / validCount);
 
-                    // d_gamma
                     const d_gamma = incoming.map((g, i) => g * norm_x[i]);
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         this.#gradientAccumulation[idx].layerNormWeights[lastLayer].gamma2[j] += d_gamma[j] * lr;
                     }
 
-                    // d_x
                     const d_norm = incoming.map((g, i) => g * gamma[i]);
                     const dot = d_norm.reduce((s, dn, i) => s + dn * norm_x[i], 0);
                     const d_x = d_norm.map((dn, i) => dn / rms - norm_x[i] * dot / (this.#hiddenSize + 1e-8));
@@ -2461,17 +2418,15 @@ class HiveMind {
                 }
             }
 
-            // Layer-by-layer backpropagation
             for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
                 const act = activations[idx][layer];
                 const inter = attentionIntermediates[idx][layer];
                 const headSize = this.#hiddenSize / this.#numHeads;
 
-                // Correct FFN sublayer backpropagation (proper residual handling)
                 let gradToAttentionResidual = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
-                        gradToAttentionResidual[pos][j] = grad[pos][j]; // full skip connection
+                        gradToAttentionResidual[pos][j] = grad[pos][j];
                     }
                 }
 
@@ -2497,9 +2452,8 @@ class HiveMind {
                     const silu_gate = gate.map(this.#silu);
                     const activated = silu_gate.map((s, j) => s * up[j]);
 
-                    const incoming = grad[pos]; // full gradient to FFN output (branch skip)
+                    const incoming = grad[pos];
 
-                    // down_proj gradients
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         for (let k = 0; k < this.#hiddenSize; k++) {
                             const specWeight = isValidNumber(this.#specializationWeights[idx][k % this.#hiddenSize][j % this.#hiddenSize])
@@ -2509,7 +2463,6 @@ class HiveMind {
                         }
                     }
 
-                    // Gradient to activated
                     const d_activated = Array(this.#feedForwardSize).fill(0);
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         for (let k = 0; k < this.#hiddenSize; k++) {
@@ -2520,12 +2473,10 @@ class HiveMind {
                         }
                     }
 
-                    // Gradients to silu_gate and up
                     const d_silu = d_activated.map((d, j) => d * up[j]);
                     const d_up = d_activated.map((d, j) => d * silu_gate[j]);
                     const d_gate = d_silu.map((d, j) => d * this.#siluDerivative(gate[j]));
 
-                    // gate_proj and up_proj gradients + gradient to normAttention (x)
                     let d_normAttention = Array(this.#hiddenSize).fill(0);
                     for (let i = 0; i < this.#hiddenSize; i++) {
                         for (let j = 0; j < this.#feedForwardSize; j++) {
@@ -2541,7 +2492,6 @@ class HiveMind {
                         }
                     }
 
-                    // Backprop through pre-FFN RMSNorm (gamma2)
                     const gamma2 = transformer.layerNormWeights[layer].gamma2;
                     const sq_sum = x.reduce((s, v) => s + v * v, 0);
                     const rms = Math.sqrt(sq_sum / this.#hiddenSize + 1e-6);
@@ -2556,16 +2506,13 @@ class HiveMind {
                     const dot = d_norm.reduce((s, dn, i) => s + dn * norm_x[i], 0);
                     const d_x_branch = d_norm.map((dn, i) => dn / rms - norm_x[i] * dot / (this.#hiddenSize + 1e-8));
 
-                    // Add branch gradient to total
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         gradToAttentionResidual[pos][j] += d_x_branch[j];
                     }
                 }
 
-                // Total gradient to attention residual (skip + branch)
                 const gradToAttentionOutput = gradToAttentionResidual;
 
-                // Attention backpropagation
                 const d_v = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(headSize).fill(0)));
                 const d_scores = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
                 const d_q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
@@ -2574,7 +2521,6 @@ class HiveMind {
                 for (let queryPos = 0; queryPos < this.#inputSize; queryPos++) {
                     const incoming = gradToAttentionOutput[queryPos];
 
-                    // Wo gradients + grad to preWo
                     for (let outDim = 0; outDim < this.#hiddenSize; outDim++) {
                         for (let preDim = 0; preDim < this.#hiddenSize; preDim++) {
                             const specWeight = isValidNumber(this.#specializationWeights[idx][preDim % this.#hiddenSize][outDim])
@@ -2594,7 +2540,6 @@ class HiveMind {
                         }
                     }
 
-                    // Split to heads and accumulate d_scores and d_v
                     for (let h = 0; h < this.#numHeads; h++) {
                         const offset = h * headSize;
                         for (let dim = 0; dim < headSize; dim++) {
@@ -2612,7 +2557,6 @@ class HiveMind {
                     }
                 }
 
-                // Apply softmax Jacobian
                 for (let h = 0; h < this.#numHeads; h++) {
                     for (let qp = 0; qp < this.#inputSize; qp++) {
                         let weighted = 0;
@@ -2629,7 +2573,6 @@ class HiveMind {
                     }
                 }
 
-                // Q/K backpropagation to scores
                 for (let h = 0; h < this.#numHeads; h++) {
                     for (let queryPos = 0; queryPos < this.#inputSize; queryPos++) {
                         for (let keyPos = 0; keyPos < this.#inputSize; keyPos++) {
@@ -2643,10 +2586,8 @@ class HiveMind {
                     }
                 }
 
-                // Compute gradient to normX (input to Q/K/V projections)
                 let gradToNormX = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
 
-                // Q projection contribution
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     for (let inputDim = 0; inputDim < this.#hiddenSize; inputDim++) {
                         let contrib = 0;
@@ -2660,7 +2601,6 @@ class HiveMind {
                     }
                 }
 
-                // K projection contribution
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     for (let inputDim = 0; inputDim < this.#hiddenSize; inputDim++) {
                         let contrib = 0;
@@ -2674,7 +2614,6 @@ class HiveMind {
                     }
                 }
 
-                // V projection contribution
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     for (let inputDim = 0; inputDim < this.#hiddenSize; inputDim++) {
                         let contrib = 0;
@@ -2691,7 +2630,6 @@ class HiveMind {
                     }
                 }
 
-                // Attention linear projection gradients (Wq, Wk, Wv)
                 for (let inputDim = 0; inputDim < this.#hiddenSize; inputDim++) {
                     for (let outputDim = 0; outputDim < this.#hiddenSize; outputDim++) {
                         let wqUpdate = 0;
@@ -2717,7 +2655,6 @@ class HiveMind {
                     }
                 }
 
-                // Backprop through pre-attention RMSNorm (gamma1)
                 const gamma1 = transformer.layerNormWeights[layer].gamma1;
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     const x = act.normX[pos];
@@ -2736,14 +2673,11 @@ class HiveMind {
                     const dot = d_norm.reduce((s, dn, i) => s + dn * norm_x[i], 0);
                     const d_x = d_norm.map((dn, i) => dn / rms - norm_x[i] * dot / (this.#hiddenSize + 1e-8));
 
-                    // Total grad to layer input: attention residual skip + branch
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         grad[pos][j] = gradToAttentionOutput[pos][j] + d_x[j];
                     }
                 }
             }
-
-            // Remaining grad from contextAwareAttention is discarded
         });
     }
 
@@ -2754,7 +2688,6 @@ class HiveMind {
         this.#transformers.forEach((transformer, idx) => {
             if (shouldScale) this.#scaleGradients(idx);
 
-            // Attention bias and matrix
             for (let k = 0; k < this.#hiddenSize; k++) {
                 const biasAcc = this.#gradientAccumulation[idx].attentionBias[k];
                 if (isValidNumber(biasAcc)) {
@@ -2771,7 +2704,6 @@ class HiveMind {
                 }
             }
 
-            // Specialization weights
             for (let j = 0; j < this.#hiddenSize; j++) {
                 for (let k = 0; k < this.#hiddenSize; k++) {
                     const specAcc = this.#gradientAccumulation[idx].specializationWeights[j][k];
@@ -2783,7 +2715,6 @@ class HiveMind {
                 }
             }
 
-            // Output head
             for (let i = 0; i < this.#hiddenSize; i++) {
                 const outWeightAcc = this.#gradientAccumulation[idx].outputWeights[i][0];
                 if (isValidNumber(outWeightAcc)) {
@@ -2799,9 +2730,7 @@ class HiveMind {
                 if (shouldClone) gradClone[idx].outputBias[0] = finalOutBiasAcc;
             }
 
-            // Per-layer weights
             for (let layer = 0; layer < this.#numLayers; layer++) {
-                // Attention weights
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
@@ -2815,7 +2744,6 @@ class HiveMind {
                     }
                 }
 
-                // FFN weights (SwiGLU: gate_proj, up_proj, down_proj — no biases)
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         const gateAcc = this.#gradientAccumulation[idx].ffnWeights[layer].gate_proj[i][j];
@@ -2843,7 +2771,6 @@ class HiveMind {
                     }
                 }
 
-                // RMSNorm weights (only gamma1 and gamma2 — no betas)
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     const gamma1Acc = this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[i];
                     if (isValidNumber(gamma1Acc)) {
@@ -2866,7 +2793,6 @@ class HiveMind {
 
     #rollbackGradients (gradClone) {
         this.#transformers.forEach((transformer, idx) => {
-            // Attention bias and matrix
             for (let k = 0; k < this.#hiddenSize; k++) {
                 const attBias = gradClone[idx].attentionBias[k];
                 if (isValidNumber(attBias)) this.#attentionBias[idx][k] += attBias;
@@ -2875,7 +2801,6 @@ class HiveMind {
                 if (isValidNumber(attMatrix)) this.#attentionWeightMatrix[idx][k] += attMatrix;
             }
 
-            // Specialization weights
             for (let j = 0; j < this.#hiddenSize; j++) {
                 for (let k = 0; k < this.#hiddenSize; k++) {
                     const specWeight = gradClone[idx].specializationWeights[j][k];
@@ -2883,7 +2808,6 @@ class HiveMind {
                 }
             }
 
-            // Output head
             for (let i = 0; i < this.#hiddenSize; i++) {
                 const outputWeight = gradClone[idx].outputWeights[i][0];
                 if (isValidNumber(outputWeight)) transformer.outputWeights[i][0] += outputWeight;
@@ -2891,9 +2815,7 @@ class HiveMind {
             const outputBias = gradClone[idx].outputBias[0];
             if (isValidNumber(outputBias)) transformer.outputBias[0] += outputBias;
 
-            // Per-layer weights
             for (let layer = 0; layer < this.#numLayers; layer++) {
-                // Attention weights
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         ['Wq', 'Wk', 'Wv', 'Wo'].forEach(key => {
@@ -2903,7 +2825,6 @@ class HiveMind {
                     }
                 }
 
-                // FFN weights
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         const gateWeight = gradClone[idx].ffnWeights[layer].gate_proj[i][j];
@@ -2919,7 +2840,6 @@ class HiveMind {
                     }
                 }
 
-                // RMSNorm gammas
                 for (let i = 0; i < this.#hiddenSize; i++) {
                     const gamma1Weight = gradClone[idx].layerNormWeights[layer].gamma1[i];
                     if (isValidNumber(gamma1Weight)) transformer.layerNormWeights[layer].gamma1[i] += gamma1Weight;
@@ -2991,7 +2911,6 @@ class HiveMind {
 
             const adjustedLearningRate = this.#adaptiveLearningRate[idx];
 
-            // Recompute pooled hidden state (matches forward/accumulate exactly)
             const finalX = layerOutputsAll[idx][this.#numLayers];
             let pooled = Array(this.#hiddenSize).fill(0);
             let validCount = 0;
@@ -3012,7 +2931,6 @@ class HiveMind {
                 pooled = pooled.map(v => v / validCount);
             }
 
-            // Logit-level distillation (slight adjustment to output head – applied to all non-top)
             const kd_dL = baseGrad * outputKdScale;
             for (let i = 0; i < this.#hiddenSize; i++) {
                 if (isValidNumber(pooled[i])) {
@@ -3022,10 +2940,8 @@ class HiveMind {
             }
             this.#gradientAccumulation[idx].outputBias[0] += (1 - momentum) * kd_dL * adjustedLearningRate;
 
-            // Deep proper backpropagation only for bottom-tier (feature-level distillation)
             if (!isBottomTier) return;
 
-            // Start deep KD backprop from the same kd_dL used for the head
             let gradPooled = Array(this.#hiddenSize).fill(0);
             for (let i = 0; i < this.#hiddenSize; i++) {
                 if (isValidNumber(transformer.outputWeights[i][0])) {
@@ -3033,7 +2949,6 @@ class HiveMind {
                 }
             }
 
-            // Gradient to each position's final hidden state + backprop through final RMSNorm (if any)
             let grad = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
             if (this.#numLayers > 0) {
                 const lastLayerIdx = this.#numLayers - 1;
@@ -3046,7 +2961,6 @@ class HiveMind {
 
                     const incoming = gradPooled.map(g => g / validCount);
 
-                    // Light gamma update
                     const d_gamma = incoming.map((g, i) => g * norm_x[i]);
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         if (isValidNumber(d_gamma[j])) {
@@ -3055,7 +2969,6 @@ class HiveMind {
                         }
                     }
 
-                    // Grad to pre-norm x
                     const d_norm = incoming.map((g, i) => g * gamma[i]);
                     const dot = d_norm.reduce((s, dn, i) => s + dn * norm_x[i], 0);
                     const d_x = d_norm.map((dn, i) => dn / rms - norm_x[i] * dot / (this.#hiddenSize + 1e-8));
@@ -3067,19 +2980,16 @@ class HiveMind {
                 }
             }
 
-            // Layer-by-layer proper backprop (mirroring accumulateGradients but only KD signal)
             for (let layer = this.#numLayers - 1; layer >= 0; layer--) {
                 const act = activationsAll[idx][layer];
                 const inter = attentionIntermediatesAll[idx][layer];
                 const headSize = this.#hiddenSize / this.#numHeads;
 
-                // FFN sublayer backprop
-                let gradToAttentionResidual = grad.map(row => row.slice()); // copy for skip + branch
+                let gradToAttentionResidual = grad.map(row => row.slice());
 
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     const x = act.normAttention[pos];
 
-                    // Recompute SwiGLU forward
                     const gate = Array(this.#feedForwardSize).fill(0);
                     const up = Array(this.#feedForwardSize).fill(0);
                     for (let i = 0; i < this.#hiddenSize; i++) {
@@ -3100,7 +3010,6 @@ class HiveMind {
 
                     const incoming = grad[pos];
 
-                    // down_proj
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         for (let k = 0; k < this.#hiddenSize; k++) {
                             const specWeight = isValidNumber(this.#specializationWeights[idx][k % this.#hiddenSize][j % this.#hiddenSize])
@@ -3113,7 +3022,6 @@ class HiveMind {
                         }
                     }
 
-                    // Back to activated → gate/up
                     const d_activated = Array(this.#feedForwardSize).fill(0);
                     for (let j = 0; j < this.#feedForwardSize; j++) {
                         for (let k = 0; k < this.#hiddenSize; k++) {
@@ -3127,7 +3035,6 @@ class HiveMind {
                     const d_up = d_activated.map((d, j) => d * silu_gate[j]);
                     const d_gate = d_silu.map((d, j) => d * this.#siluDerivative(gate[j]));
 
-                    // gate_proj / up_proj
                     for (let i = 0; i < this.#hiddenSize; i++) {
                         for (let j = 0; j < this.#feedForwardSize; j++) {
                             const specWeight = isValidNumber(this.#specializationWeights[idx][i % this.#hiddenSize][j % this.#hiddenSize])
@@ -3144,7 +3051,6 @@ class HiveMind {
                         }
                     }
 
-                    // Grad to pre-FFN norm input
                     let d_normAttention = Array(this.#hiddenSize).fill(0);
                     for (let i = 0; i < this.#hiddenSize; i++) {
                         for (let j = 0; j < this.#feedForwardSize; j++) {
@@ -3156,7 +3062,6 @@ class HiveMind {
                         }
                     }
 
-                    // Pre-FFN RMSNorm light gamma update + grad branch
                     const gamma2 = transformer.layerNormWeights[layer].gamma2;
                     const sq_sum2 = x.reduce((s, v) => s + v * v, 0);
                     const rms2 = Math.sqrt(sq_sum2 / this.#hiddenSize + 1e-6);
@@ -3177,10 +3082,8 @@ class HiveMind {
                     }
                 }
 
-                // Attention sublayer backprop
                 const gradAttentionOutput = gradToAttentionResidual;
 
-                // Wo + d_preWo
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     for (let outDim = 0; outDim < this.#hiddenSize; outDim++) {
                         for (let preDim = 0; preDim < this.#hiddenSize; preDim++) {
@@ -3207,7 +3110,6 @@ class HiveMind {
                     }
                 }
 
-                // Head-wise d_scores and d_v
                 const d_v = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(headSize).fill(0)));
                 const d_scores = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
                 for (let pos = 0; pos < this.#inputSize; pos++) {
@@ -3225,7 +3127,6 @@ class HiveMind {
                     }
                 }
 
-                // Softmax Jacobian (critical for correct/slight Q/K grads)
                 for (let h = 0; h < this.#numHeads; h++) {
                     for (let pos = 0; pos < this.#inputSize; pos++) {
                         let weighted = 0;
@@ -3238,7 +3139,6 @@ class HiveMind {
                     }
                 }
 
-                // d_q and d_k
                 const d_q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
                 const d_k = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
                 for (let h = 0; h < this.#numHeads; h++) {
@@ -3255,7 +3155,6 @@ class HiveMind {
                     }
                 }
 
-                // Grad to normX (pre-attention)
                 let gradNormX = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     for (let inDim = 0; inDim < this.#hiddenSize; inDim++) {
@@ -3272,7 +3171,6 @@ class HiveMind {
                     }
                 }
 
-                // Attention projection updates
                 for (let inDim = 0; inDim < this.#hiddenSize; inDim++) {
                     for (let outDim = 0; outDim < this.#hiddenSize; outDim++) {
                         let wqUpdate = 0, wkUpdate = 0, wvUpdate = 0;
@@ -3292,7 +3190,6 @@ class HiveMind {
                     }
                 }
 
-                // Pre-attention RMSNorm light gamma update + final grad to layer input
                 const gamma1 = transformer.layerNormWeights[layer].gamma1;
                 for (let pos = 0; pos < this.#inputSize; pos++) {
                     const x = act.normX[pos];
@@ -3304,7 +3201,7 @@ class HiveMind {
                     const d_gamma = incoming.map((g, i) => g * norm_x[i]);
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         if (isValidNumber(d_gamma[j])) {
-                            const update = d_gamma[j] * adjustedLearningRate * 0.2; // lighter
+                            const update = d_gamma[j] * adjustedLearningRate * 0.2;
                             this.#gradientAccumulation[idx].layerNormWeights[layer].gamma1[j] += (1 - momentum) * update;
                         }
                     }
@@ -3313,13 +3210,11 @@ class HiveMind {
                     const dot = d_norm.reduce((s, dn, i) => s + dn * norm_x[i], 0);
                     const d_pre = d_norm.map((dn, i) => dn / rms - norm_x[i] * dot / (this.#hiddenSize + 1e-8));
 
-                    // Total to next (skip from attention + branch from norm)
                     for (let j = 0; j < this.#hiddenSize; j++) {
                         grad[pos][j] = gradToAttentionResidual[pos][j] + d_pre[j];
                     }
                 }
             }
-            // Grad remaining at contextAwareAttention output is ignored (matches main backprop)
         });
     }
 
@@ -3335,42 +3230,31 @@ class HiveMind {
 
         this.#trainingStepCount++;
 
-        // Main transformers training update 
         const trainingResults = this.#updateHiveState(inputs, target, true, true, true, true);
 
-        // Main accumulation per step
         this.#accumulateGradients(
             inputs, trainingResults.outputs, target, trainingResults.probability, 
             trainingResults.layerOutputs, trainingResults.activations, trainingResults.attentionIntermediates
         );
 
-        // Only apply gradients and KD every N steps
         if (this.#trainingStepCount % this.#gradientResetFrequency === 0) {
-            // Apply main gradients, returns clone with EXACT values applied
             const clonedGrads = this.#applyGradients(true, true, this.#gradientResetFrequency);
 
-            // Set gradients to exact values
             this.#gradientAccumulation = structuredClone(clonedGrads);
 
-            // Update transformers with applied gradients
             const freshResults = this.#updateHiveState(inputs, target , true, false, true, true);
 
-            // Slightly adjust gradients with KD
             this.#distillKnowledge(
                 freshResults.outputs, freshResults.attentionIntermediates, 
                 freshResults.activations, freshResults.layerOutputs
             );
 
-            // Remove exactly the gradients applied
             this.#rollbackGradients(clonedGrads);
 
-            // Apply newly KD adjusted gradients
             this.#applyGradients(false, false, 1);
 
-            //Udate all transformers with the latest adjusted gradients
             this.#updateHiveState(inputs, target, false, false, true, false);
 
-            // Reset gradients for next cycle
             this.#gradientAccumulation = this.#setGradientStructure();
         }
 
