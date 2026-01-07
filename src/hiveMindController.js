@@ -267,6 +267,7 @@ class HiveMindController {
 
         if (!saveStatus.status) {
             console.log(`Hivemind state save failed! Error: ${saveStatus.error} Trace: ${saveStatus.trace}`)
+            process.exit();
         } else {
             console.log('Hivemind state saved!')
             this.#lastSaveStep = this.#trainingStep
