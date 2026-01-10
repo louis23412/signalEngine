@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
+import { performance } from 'node:perf_hooks';
 
 import HiveMind from './hiveMind.js';
 import IndicatorProcessor from './indicatorProcessor.js';
@@ -277,6 +278,11 @@ class HiveMindController {
     #updateOpenTrades (candles, shouldSave, cutoff, checkpoint) {
         if (!Array.isArray(candles) || candles.length === 0) return;
 
+        const G = '\x1b[32m';
+        const R = '\x1b[31m';
+        const Y = '\x1b[33m';
+        const X = '\x1b[0m';
+
         const tradesStmt = this.#db.prepare(`
             SELECT timestamp, sellPrice, stopLoss, entryPrice, features, confidence
             FROM open_trades
@@ -319,15 +325,21 @@ class HiveMindController {
                 let tradeWins = 0;
                 let tradeLosses = 0;
                 let skippedTraining = 0;
+                let lastTrainingTime = 0;
+                let allTrainingTimes = [];
+
                 for (const trade of closedTrades) {
                     tradeCounter++;
 
-                    const G = '\x1b[32m';
-                    const R = '\x1b[31m';
-                    const Y = '\x1b[33m';
-                    const X = '\x1b[0m';
+                    let printedLines = 2;
                     console.log(`Training in progress for closed trade ${Y}${tradeCounter}${X} / ${Y}${closedTrades.length}${X} => ${trade.outcome === 1 ? `${G}win${X}` : `${R}loss${X}`} | Training step #${Y}${this.#trainingStep + 1}${X}`);
                     console.log(`Training steps completed : ${Y}${completedTraining}${X} | Skipped (duplicate endcoding) : ${Y}${skippedTraining}${X} | Wins : ${Y}${tradeWins}${X} | Losses : ${Y}${tradeLosses}${X}`);
+
+                    if (completedTraining > 0) {
+                        const avgTime = Number((allTrainingTimes.reduce((a, x) => a += x , 0) / allTrainingTimes.length).toPrecision(3))
+                        console.log(`Previous training step took : ${Y}${lastTrainingTime}${X} seconds | Average training time : ${Y}${avgTime}${X} seconds`)
+                        printedLines = 3;
+                    }
 
                     trade.outcome === 1 ? tradeWins++ : tradeLosses++
 
@@ -360,22 +372,34 @@ class HiveMindController {
                     if (existingEncoding) {
                         keysToDelete.add(trade.timestamp);
                         skippedTraining++;
-                        process.stdout.moveCursor(0, -2);
+                        process.stdout.moveCursor(0, -printedLines);
                         process.stdout.clearScreenDown();
                         continue;
                     }
 
-                    this.#trainingStep = this.#hivemind.train(flatFeatures, trade.outcome)
+                    const start = performance.now();
+                    this.#trainingStep = this.#hivemind.train(flatFeatures, trade.outcome);
+                    const duration = performance.now() - start;
+
+                    lastTrainingTime = Number((duration / 1000).toPrecision(3));
+                    allTrainingTimes.push(lastTrainingTime);
+
                     completedTraining++;
 
                     insertEncodingStmt.run(encodingHash);
                     keysToDelete.add(trade.timestamp);
 
-                    process.stdout.moveCursor(0, -2);
+                    process.stdout.moveCursor(0, -printedLines);
                     process.stdout.clearScreenDown();
 
                     if (this.#trainingStep % checkpoint === 0) this.#dumpState();
                     if (this.#trainingStep === cutoff ) { break }
+                }
+
+                if (completedTraining > 0) {
+                    const finalAvg = Number((allTrainingTimes.reduce((a, x) => a += x , 0) / allTrainingTimes.length).toPrecision(3));
+                    console.log(`\nAll training complete. Final step took: ${Y}${lastTrainingTime}${X} seconds | Final average: ${Y}${finalAvg}${X} seconds`);
+                    console.log(`Total completed: ${Y}${completedTraining}${X} | Skipped: ${Y}${skippedTraining}${X} | Wins: ${Y}${tradeWins}${X} | Losses: ${Y}${tradeLosses}${X}\n`);
                 }
 
                 if ( shouldSave || this.#trainingStep === cutoff ) this.#dumpState(shouldSave);
