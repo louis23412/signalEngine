@@ -19,7 +19,6 @@ class HiveMind {
     #maxPerformanceHistory;
     #learningRate;
     #learningRateDecay;
-    #dropoutRate;
     #swarmIntelligenceFactor;
     #gradientResetFrequency;
     #trainingStepCount = 0;
@@ -38,7 +37,7 @@ class HiveMind {
     #transformers = [];
     #gradientAccumulation = [];
 
-    constructor(dp, es, is) {
+    constructor (dp, es, is) {
         this.#scaleAndSetDimensions(dp, es, is);
 
         const loadStatus = this.#loadState();
@@ -48,10 +47,6 @@ class HiveMind {
             process.exit();
         }
     }
-
-    // ---------------------------------------------------------------
-
-    // State persistance
 
     #loadState () {
         const dbPath = path.join(this.#directoryPath, 'hivemind_state.db');
@@ -671,58 +666,45 @@ class HiveMind {
             if (db) db.close();
         }
     }
-
-    // ---------------------------------------------------------------
-
-    // Initialization
     
     #scaleAndSetDimensions (dp, es, is) {
         this.#directoryPath = dp;
-        this.#ensembleSize = es;
+        this.#ensembleSize = Math.max(1, es);
         this.#inputSize = is;
 
-        const layerDecay = Math.min(7.0, 2.5 * Math.log10(this.#ensembleSize || 1));
-        this.#numLayers = Math.max(1, Math.min(8, Math.round(8 - layerDecay)));
+        const logEs = Math.log10(this.#ensembleSize);
+        const normalized = Math.min(1.0, logEs / 3.0);
+        const sqrtEs = Math.sqrt(this.#ensembleSize);
+        const log2SqrtEs = Math.log2(sqrtEs);
 
-        const headDecay = Math.min(6.0, 2.0 * Math.log10(this.#ensembleSize || 1));
-        this.#numHeads = Math.max(2, Math.min(8, Math.round(8 - headDecay)));
+        const numLayersRaw = 6.0 - 4.0 * normalized;
+        this.#numLayers = Math.max(2, Math.round(numLayersRaw));
 
-        const complexity = this.#ensembleSize * this.#numLayers * this.#numHeads;
-        const safeComplexity = Math.max(1, complexity);
-        const logComplexity = Number((Math.log10(safeComplexity)).toPrecision(6));
+        const numHeadsRaw = 8.0 - 6.0 * normalized;
+        this.#numHeads = Math.max(2, Math.round(numHeadsRaw));
 
-        const hsExponent = Math.max(2, Math.min(4, 4 - Math.log2(Math.sqrt(this.#ensembleSize || 1))));
+        const hsExponent = Math.max(2, Math.min(4, 4 - log2SqrtEs));
         const hs = Math.pow(2, Math.floor(hsExponent));
         this.#headDim = hs * Math.ceil(this.#numHeads / 4);
         this.#hiddenSize = this.#numHeads * this.#headDim;
 
-        const ffnDecay = Math.min(2.0, Math.log10(this.#ensembleSize || 1));
-        const ffnMultiplier = 4.0 - ffnDecay;
-        this.#feedForwardSize = Math.round(this.#hiddenSize * Math.max(2, Math.min(4, ffnMultiplier)));
+        const ffnMultiplier = 8.0 - 4.0 * normalized;
+        this.#feedForwardSize = Math.round(this.#hiddenSize * ffnMultiplier);
 
-        const memoryFactor = 1 + 0.5 * Math.log10(this.#ensembleSize || 1);
+        const memoryFactor = 1 + 0.5 * logEs;
         this.#contextWindow = Math.round(this.#hiddenSize * 2 * memoryFactor);
         this.#adaptiveWindow = Math.max(1, Math.round(this.#contextWindow * 0.25));
         this.#maxTrustHistory = Math.round(this.#contextWindow * 2);
         this.#maxPerformanceHistory = Math.round(this.#contextWindow * 4);
 
-        const baseLrUnscaled = 0.012 / Math.max(this.#inputSize, 1);
+        const baseLrUnscaled = 0.12 / Math.max(this.#inputSize, 1);
         const sizeScale = Math.pow(this.#hiddenSize, -0.18);
         this.#learningRate = Number(Math.min(0.0025, baseLrUnscaled * sizeScale).toPrecision(6));
-
         this.#learningRateDecay = Number((this.#learningRate / 10).toPrecision(6));
 
-        const rawDropout = 0.05 * logComplexity;
-        this.#dropoutRate = Number(Math.max(0.05, Math.min(0.3, rawDropout)).toFixed(6));
+        this.#swarmIntelligenceFactor = Number((0.05 + 0.90 * normalized).toFixed(6));
 
-        const baseGrf = 50 + 12 * logComplexity;
-        this.#gradientResetFrequency = Math.max(50, Math.min(600, Math.round(baseGrf)));
-
-        const ensembleFactor = this.#ensembleSize > 1 
-            ? Math.min(2.0, Math.log10(this.#ensembleSize))
-            : 1;
-        const rawSwarm = 0.4 + 0.4 * (ensembleFactor / 2.0);
-        this.#swarmIntelligenceFactor = Number(rawSwarm.toFixed(6));
+        this.#gradientResetFrequency = Math.min(100, 10 + Math.ceil((this.#ensembleSize - 1) / 10));
 
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
         this.#agreementScores = Array(this.#ensembleSize).fill(0);
@@ -833,10 +815,6 @@ class HiveMind {
         }));
     }
 
-    // ---------------------------------------------------------------
-
-    // Basic Activations & Utilities
-
     #silu (x) {
         if (!isValidNumber(x)) return 0;
         const sig = 1 / (1 + Math.exp(-x));
@@ -875,36 +853,20 @@ class HiveMind {
         return x.map((val, i) => val * gamma[i] / rms);
     }
 
-    #dropout (x, rate, training = true) {
-        if (
-            !Array.isArray(x) || 
-            !x.every(isValidNumber) || 
-            !isValidNumber(rate) || 
-            rate < 0 || 
-            rate >= 1 ||
-            !training
-        ) {
-            return x.slice();
-        }
-
-        return x.map(val => {
-            if (!isValidNumber(val)) return 0;
-            return Math.random() >= rate ? val / (1 - rate) : 0;
-        });
-    }
-
-    #applyRoPE (matrix) {
-        if (!Array.isArray(matrix) || matrix.length !== this.#inputSize || !matrix[0] || matrix[0].length !== this.#hiddenSize) return;
+    #applyRoPE (matrix, startPos = 0) {
+        if (!Array.isArray(matrix) || matrix.length === 0 || !matrix[0] || matrix[0].length !== this.#hiddenSize) return;
         const head_dim = this.#hiddenSize / this.#numHeads;
         if (head_dim % 2 !== 0) return;
         const base = 10000.0;
+        const seqLen = matrix.length;
 
-        for (let pos = 0; pos < this.#inputSize; pos++) {
+        for (let pos = 0; pos < seqLen; pos++) {
+            const absPos = startPos + pos;
             for (let h = 0; h < this.#numHeads; h++) {
                 const offset = h * head_dim;
                 for (let i = 0; i < head_dim / 2; i++) {
                     const exp = -2.0 * i / head_dim;
-                    const theta = pos * Math.pow(base, exp);
+                    const theta = absPos * Math.pow(base, exp);
                     const cos = Math.cos(theta);
                     const sin = Math.sin(theta);
                     const idx1 = offset + 2 * i;
@@ -919,9 +881,38 @@ class HiveMind {
         }
     }
 
-    // ---------------------------------------------------------------
+    #weightedMean (protos) {
+        if (!Array.isArray(protos) || protos.length === 0) {
+            return Array(this.#hiddenSize).fill(0);
+        }
+        let totalSize = 0;
+        for (const p of protos) {
+            totalSize += p.size || 0;
+        }
+        if (totalSize === 0) {
+            return Array(this.#hiddenSize).fill(0);
+        }
+        const rep = Array(this.#hiddenSize).fill(0);
+        for (const p of protos) {
+            const weight = p.size / totalSize;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                rep[j] += (p.mean[j] || 0) * weight;
+            }
+        }
+        return rep;
+    }
 
-    // Memory Management Helpers
+    #maxPairwiseKernel (protosA, protosB, gamma = 4.0) {
+        if (protosA.length === 0 || protosB.length === 0) return 0;
+        let maxSim = 0;
+        for (const a of protosA) {
+            for (const b of protosB) {
+                const sim = this.#kernelSimilarity(a, b, gamma);
+                if (sim > maxSim) maxSim = sim;
+            }
+        }
+        return maxSim;
+    }
 
     #cosineSimilarity (a, b) {
         let dot = 0, normA = 0, normB = 0;
@@ -950,46 +941,123 @@ class HiveMind {
         return totalMass > 0 ? entropy / totalMass : 0;
     }
 
-    #poolMultiPrototype (entry) {
-        const mean = Array(this.#hiddenSize).fill(0);
-        const variance = Array(this.#hiddenSize).fill(0);
-        const max = Array(this.#hiddenSize).fill(-Infinity);
-        let count = 0;
-        for (let p = 0; p < entry.length; p++) {
-            for (let j = 0; j < entry[p].length; j++) {
-                const val = entry[p][j];
-                if (isValidNumber(val)) {
-                    mean[j] += val;
-                    if (val > max[j]) max[j] = val;
-                    count++;
+    #poolMultiPrototype (entry, maxAdditionalProtos = 8, thresholdFactor = 4.0) {
+        if (
+            !Array.isArray(entry) ||
+            entry.length === 0 ||
+            !entry[0] ||
+            !Array.isArray(entry[0]) ||
+            entry[0].length !== this.#hiddenSize
+        ) {
+            return [];
+        }
+        const seqLen = entry.length;
+        const hiddenSize = this.#hiddenSize;
+
+        const globalMean = new Array(hiddenSize).fill(0);
+        for (let i = 0; i < seqLen; i++) {
+            const row = entry[i];
+            for (let j = 0; j < hiddenSize; j++) {
+                globalMean[j] += row[j];
+            }
+        }
+        for (let j = 0; j < hiddenSize; j++) globalMean[j] /= seqLen;
+        const globalVariance = new Array(hiddenSize).fill(0);
+        for (let i = 0; i < seqLen; i++) {
+            const row = entry[i];
+            for (let j = 0; j < hiddenSize; j++) {
+                const diff = row[j] - globalMean[j];
+                globalVariance[j] += diff * diff;
+            }
+        }
+        for (let j = 0; j < hiddenSize; j++) globalVariance[j] /= seqLen;
+        let protos = [{
+            mean: globalMean.slice(),
+            variance: globalVariance.map(v => Math.max(v, 1e-6)),
+            size: seqLen
+        }];
+        if (seqLen <= 1) return protos;
+
+        const avgVar = globalVariance.reduce((a, b) => a + b, 0) / hiddenSize;
+        const thresholdSq = avgVar * hiddenSize * thresholdFactor;
+
+        for (let i = 0; i < seqLen; i++) {
+            const point = entry[i];
+            let minDistSq = Infinity;
+            let bestProtoIdx = 0;
+            for (let c = 0; c < protos.length; c++) {
+                let d = 0;
+                for (let j = 0; j < hiddenSize; j++) {
+                    const diff = point[j] - protos[c].mean[j];
+                    d += diff * diff;
+                }
+                if (d < minDistSq) {
+                    minDistSq = d;
+                    bestProtoIdx = c;
+                }
+            }
+
+            if (protos.length <= maxAdditionalProtos && minDistSq > thresholdSq) {
+                protos.push({
+                    mean: point.slice(),
+                    variance: new Array(hiddenSize).fill(1e-6),
+                    size: 1
+                });
+            } else {
+                const proto = protos[bestProtoIdx];
+                const oldMean = proto.mean.slice();
+                proto.size++;
+                for (let j = 0; j < hiddenSize; j++) {
+                    const delta = point[j] - oldMean[j];
+                    proto.mean[j] += delta / proto.size;
+                    const newDiff = point[j] - proto.mean[j];
+                    proto.variance[j] += delta * newDiff;
                 }
             }
         }
-        if (count > 0) {
-            for (let j = 0; j < this.#hiddenSize; j++) mean[j] /= count;
-        }
-        for (let p = 0; p < entry.length; p++) {
-            for (let j = 0; j < entry[p].length; j++) {
-                const val = entry[p][j];
-                if (isValidNumber(val)) {
-                    const diff = val - mean[j];
-                    variance[j] += diff * diff;
+
+        for (const proto of protos) {
+            if (proto.size > 1) {
+                for (let j = 0; j < hiddenSize; j++) {
+                    proto.variance[j] /= (proto.size - 1);
+                    proto.variance[j] = Math.max(proto.variance[j], 1e-6);
                 }
             }
         }
-        if (count > 0) {
-            for (let j = 0; j < this.#hiddenSize; j++) variance[j] /= count;
-        }
-        for (let j = 0; j < this.#hiddenSize; j++) if (max[j] === -Infinity) max[j] = 0;
-        return { mean, variance, max };
+        return protos;
     }
 
-    #kernelSimilarity (protoA, protoB, gamma = 2.0) {
-        const cosMean = this.#cosineSimilarity(protoA.mean, protoB.mean);
-        const varMatch = this.#cosineSimilarity(protoA.variance, protoB.variance);
-        const maxMatch = this.#cosineSimilarity(protoA.max, protoB.max);
-        const combinedDist = 1 - (0.6 * cosMean + 0.3 * varMatch + 0.1 * maxMatch);
-        return Math.exp(-gamma * combinedDist * combinedDist);
+    #kernelSimilarity (protoA, protoB, gamma = 4.0) {
+        let dist = 0;
+        const eps = 1e-6;
+        for (let j = 0; j < this.#hiddenSize; j++) {
+            const diff = protoA.mean[j] - protoB.mean[j];
+            const pooledVar = protoA.variance[j] + protoB.variance[j] + eps;
+            dist += diff * diff / pooledVar;
+        }
+        dist /= this.#hiddenSize;
+        return Math.exp(-gamma * dist);
+    }
+
+    #selectTopKRelevantEntries (transformerIdx, currentProtos, K = 12) {
+        const memory = this.#attentionMemory[transformerIdx];
+        const adaptive = this.#adaptiveContext[transformerIdx];
+        const pastEntries = [...memory, ...adaptive];
+
+        if (pastEntries.length <= K) {
+            return pastEntries;
+        }
+
+        const scores = pastEntries.map(entry => {
+            const entryProtos = this.#poolMultiPrototype(entry);
+            return this.#maxPairwiseKernel(currentProtos, entryProtos, 4.0);
+        });
+
+        const indexedScores = scores.map((score, index) => ({ score, index }));
+        indexedScores.sort((a, b) => b.score - a.score);
+
+        const topKIndices = indexedScores.slice(0, K).map(item => item.index);
+        return topKIndices.map(idx => pastEntries[idx]);
     }
 
     #computeMemoryScore (memoryEntry, attentionScores, transformerIdx, entryIndex, ignoreRecency = false) {
@@ -1054,43 +1122,98 @@ class HiveMind {
         let perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
         const confidenceBoost = 0.25 * perf * specScore;
 
+        const entryProtos = this.#poolMultiPrototype(memoryEntry);
+
         let uniqueness = 1.0;
         if (!ignoreRecency && this.#attentionMemory[transformerIdx].length > 1) {
-            const proto = this.#poolMultiPrototype(memoryEntry);
-            const centroid = Array(this.#hiddenSize).fill(0);
-            let memCount = 0;
-            for (const mem of this.#attentionMemory[transformerIdx]) {
-                const mProto = this.#poolMultiPrototype(mem);
-                for (let j = 0; j < this.#hiddenSize; j++) centroid[j] += mProto.mean[j];
-                memCount++;
+            if (entryProtos.length > 0) {
+                const entryRep = this.#weightedMean(entryProtos);
+
+                let centroidRep = Array(this.#hiddenSize).fill(0);
+                let totalSize = 0;
+
+                const pastMemory = this.#attentionMemory[transformerIdx];
+                const maxSampled = this.#adaptiveWindow;
+
+                let indicesToUse = [];
+                if (pastMemory.length > maxSampled) {
+                    for (let i = 0; i < maxSampled; i++) {
+                        indicesToUse.push(Math.floor(i * pastMemory.length / maxSampled));
+                    }
+                } else {
+                    for (let i = 0; i < pastMemory.length; i++) {
+                        indicesToUse.push(i);
+                    }
+                }
+
+                indicesToUse = indicesToUse.filter(idx => idx !== entryIndex);
+
+                for (const idx of indicesToUse) {
+                    const mem = pastMemory[idx];
+                    const mProtos = this.#poolMultiPrototype(mem);
+                    for (const pr of mProtos) {
+                        for (let j = 0; j < this.#hiddenSize; j++) {
+                            centroidRep[j] += pr.mean[j] * pr.size;
+                        }
+                        totalSize += pr.size;
+                    }
+                }
+
+                if (totalSize > 0) {
+                    for (let j = 0; j < this.#hiddenSize; j++) centroidRep[j] /= totalSize;
+                    uniqueness = 1 - this.#cosineSimilarity(entryRep, centroidRep);
+                    uniqueness = Math.max(0, uniqueness);
+                } else {
+                    uniqueness = 1.0;
+                }
             }
-            if (memCount > 0) for (let j = 0; j < this.#hiddenSize; j++) centroid[j] /= memCount;
-            uniqueness = 1 - this.#cosineSimilarity(proto.mean, centroid);
         }
 
-        let baseScore = 
+        let clusterDiversityScore = 0;
+        if (entryProtos.length > 1) {
+            let clusterEntropy = 0;
+            const totalMass = entryProtos.reduce((s, p) => s + p.size, 0);
+            if (totalMass > 0) {
+                for (const p of entryProtos) {
+                    const prob = p.size / totalMass;
+                    if (prob > 1e-6) {
+                        clusterEntropy -= prob * Math.log(prob);
+                    }
+                }
+            }
+            const maxEnt = Math.log(entryProtos.length);
+            clusterDiversityScore = maxEnt > 0 ? clusterEntropy / maxEnt : 0;
+        }
+
+        let baseScore =
             0.2 * varianceScore +
             0.15 * skewScore +
             0.15 * kurtosisScore +
             0.1 * entropyScore +
             0.1 * sparsityScore +
             0.15 * magnitudeScore +
-            0.15 * attentionSharpness;
+            0.15 * attentionSharpness +
+            0.1 * clusterDiversityScore;
 
         baseScore = baseScore * (1 + confidenceBoost) * Math.pow(uniqueness + 0.5, 1.5);
 
         let diversityFactor = 1.0;
         if (!ignoreRecency && this.#attentionMemory[transformerIdx].length > 5) {
             const memoryLength = this.#attentionMemory[transformerIdx].length;
-            const recentCount = Math.max(8, Math.floor(memoryLength * 0.3));
+            const recentCount = Math.max(4, Math.floor(memoryLength * 0.2));
 
-            const entryProto = this.#poolMultiPrototype(memoryEntry);
-            let simSum = 0;
+            let distSum = 0;
             for (let r = 1; r <= recentCount; r++) {
-                const recentProto = this.#poolMultiPrototype(this.#attentionMemory[transformerIdx][memoryLength - r]);
-                simSum += 1 - this.#kernelSimilarity(entryProto, recentProto);
+                const recentIndex = memoryLength - r;
+                if (recentIndex < 0) break;
+                if (recentIndex === entryIndex) continue;
+
+                const recentEntry = this.#attentionMemory[transformerIdx][recentIndex];
+                const recentProtos = this.#poolMultiPrototype(recentEntry);
+                const overlapSim = this.#maxPairwiseKernel(entryProtos, recentProtos);
+                distSum += 1 - overlapSim;
             }
-            diversityFactor = 1 + 0.6 * (simSum / recentCount);
+            diversityFactor = 1 + 1.0 * (distSum / recentCount);
         }
 
         const age = ignoreRecency ? 0 : this.#attentionMemory[transformerIdx].length - 1 - entryIndex;
@@ -1108,7 +1231,7 @@ class HiveMind {
         const candidates = memory.map((entry, index) => ({
             index,
             entry,
-            proto: this.#poolMultiPrototype(entry),
+            protos: this.#poolMultiPrototype(entry),
             score: this.#computeMemoryScore(
                 entry,
                 index === memory.length - 1 ? latestScores : null,
@@ -1117,30 +1240,46 @@ class HiveMind {
             )
         }));
 
-        candidates.sort((a, b) => b.score - a.score);
+        let selected = [];
 
-        const selected = [];
-        selected.push(candidates[0]);
-
-        for (let i = 1; i < candidates.length && selected.length < numToKeep; i++) {
-            let maxMinDist = 0;
-            const candProto = candidates[i].proto;
-
-            for (const sel of selected) {
-                const dist = this.#kernelSimilarity(candProto, sel.proto);
-                if (1 - dist > maxMinDist) maxMinDist = 1 - dist;
-            }
-
-            const effectiveDist = maxMinDist * (1 + 0.5 * (candidates[i].score / selected[0].score));
-
-            if (effectiveDist > 0.3 || selected.length < 10) {
-                selected.push(candidates[i]);
+        const numForcedRecent = Math.min(20, Math.floor(numToKeep * 0.5));
+        for (let r = 0; r < numForcedRecent; r++) {
+            const candIdx = candidates.length - 1 - r;
+            if (candIdx >= 0) {
+                selected.push(candidates[candIdx]);
             }
         }
 
-        if (selected.length < numToKeep) {
+        while (selected.length < numToKeep) {
+            let bestCand = null;
+            let bestMarginal = -Infinity;
+
             for (const cand of candidates) {
-                if (!selected.includes(cand)) {
+                if (selected.some(s => s.index === cand.index)) continue;
+
+                let maxOverlap = 0;
+                for (const sel of selected) {
+                    const overlap = this.#maxPairwiseKernel(cand.protos, sel.protos);
+                    if (overlap > maxOverlap) maxOverlap = overlap;
+                }
+
+                const dist = 1 - maxOverlap;
+                const marginal = cand.score * (1 + 2.0 * dist);
+
+                if (marginal > bestMarginal) {
+                    bestMarginal = marginal;
+                    bestCand = cand;
+                }
+            }
+
+            if (bestCand === null) break;
+            selected.push(bestCand);
+        }
+
+        if (selected.length < numToKeep) {
+            candidates.sort((a, b) => b.score - a.score);
+            for (const cand of candidates) {
+                if (!selected.some(s => s.index === cand.index)) {
                     selected.push(cand);
                     if (selected.length >= numToKeep) break;
                 }
@@ -1150,10 +1289,6 @@ class HiveMind {
         selected.sort((a, b) => a.index - b.index);
         this.#attentionMemory[transformerIdx] = selected.map(s => s.entry);
     }
-
-    // ---------------------------------------------------------------
-
-    // Core Transformer Layers
 
     #multiHeadAttention (x, layer, transformerIdx, training = true) {
         if (
@@ -1238,7 +1373,6 @@ class HiveMind {
                         : 0;
                 }
                 attentionProbs[h][i] = this.#softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
-                attentionProbs[h][i] = this.#dropout(attentionProbs[h][i], this.#dropoutRate, training);
             }
         }
 
@@ -1268,7 +1402,6 @@ class HiveMind {
                         : 0;
                 }
             }
-            finalOutput[i] = this.#dropout(finalOutput[i], this.#dropoutRate, training);
         }
 
         let outputToAdaptive = finalOutput;
@@ -1313,7 +1446,7 @@ class HiveMind {
         };
     }
 
-    #feedForward (x, layer, transformerIdx, training = true) {
+    #feedForward (x, layer, transformerIdx) {
         if (
             !Array.isArray(x) || x.length !== this.#hiddenSize ||
             !x.every(isValidNumber) ||
@@ -1350,8 +1483,6 @@ class HiveMind {
             activated[j] = this.#silu(gate[j]) * up[j];
         }
 
-        activated = this.#dropout(activated, this.#dropoutRate, training);
-
         const output = Array(this.#hiddenSize).fill(0);
         for (let j = 0; j < this.#hiddenSize; j++) {
             for (let i = 0; i < this.#feedForwardSize; i++) {
@@ -1364,7 +1495,7 @@ class HiveMind {
             }
         }
 
-        return this.#dropout(output, this.#dropoutRate, training);
+        return output;
     }
 
     #contextAwareAttention (inputs, transformerIdx) {
@@ -1393,174 +1524,205 @@ class HiveMind {
             }
         }
 
-        let rawComponent = inputProjection;
+        const rawComponent = inputProjection.map(row => row.slice());
 
-        let queryVec = Array(this.#hiddenSize).fill(0);
-        let posCount = 0;
-        for (let i = 0; i < this.#inputSize; i++) {
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                queryVec[j] += rawComponent[i][j];
-            }
-            posCount++;
-        }
-        if (posCount > 0) {
-            queryVec = queryVec.map(v => v / posCount);
+        const currentProtos = this.#poolMultiPrototype(rawComponent, 8, 2);
+        if (currentProtos.length === 0) {
+            return rawComponent;
         }
 
-        let longTermComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-        const memory = this.#attentionMemory[transformerIdx];
-        let longTermQuality = 0;
+        const longTermMemoryLength = this.#attentionMemory[transformerIdx].length;
+        const shortTermMemoryLength = this.#adaptiveContext[transformerIdx].length;
+        const fillFactor = (longTermMemoryLength / this.#contextWindow + shortTermMemoryLength / this.#adaptiveWindow) / 2;
 
-        if (memory.length > 0) {
-            const protos = memory.map(entry => this.#poolMultiPrototype(entry));
+        const dynamicEntrySelection = Math.max(12, Math.floor(this.#adaptiveWindow / 2));
+        const selectedPast = this.#selectTopKRelevantEntries(transformerIdx, currentProtos, dynamicEntrySelection);
 
-            const relevanceKernels = protos.map(proto => this.#kernelSimilarity(proto, this.#poolMultiPrototype(rawComponent)));
+        if (selectedPast.length === 0) {
+            return rawComponent;
+        }
 
-            const importanceScores = memory.map((e, i) => this.#computeMemoryScore(e, null, transformerIdx, i, true));
-            const maxImp = Math.max(...importanceScores, 1);
-            const normalizedImp = importanceScores.map(s => s / maxImp);
+        const tokenPastLen = selectedPast.length * this.#inputSize;
 
-            const centroidProto = { mean: Array(this.#hiddenSize).fill(0), variance: Array(this.#hiddenSize).fill(0), max: Array(this.#hiddenSize).fill(0) };
-            for (const proto of protos) {
+        const pastStates = Array(tokenPastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
+        let pOffset = 0;
+        for (const entry of selectedPast) {
+            for (let pos = 0; pos < this.#inputSize; pos++) {
+                const targetRow = pastStates[pOffset + pos];
+                const sourceRow = entry[pos];
                 for (let j = 0; j < this.#hiddenSize; j++) {
-                    centroidProto.mean[j] += proto.mean[j];
-                    centroidProto.variance[j] += proto.variance[j];
-                    centroidProto.max[j] += proto.max[j];
+                    targetRow[j] = isValidNumber(sourceRow[j]) ? sourceRow[j] : 0;
                 }
             }
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                centroidProto.mean[j] /= memory.length;
-                centroidProto.variance[j] /= memory.length;
-                centroidProto.max[j] /= memory.length;
+            pOffset += this.#inputSize;
+        }
+
+        const transformer = this.#transformers[transformerIdx];
+        const numLayers = this.#numLayers;
+        if (numLayers === 0) return rawComponent;
+
+        const avgWq = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const avgWk = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const avgWv = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const avgWo = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+        const scale = 1.0 / numLayers;
+        for (let l = 0; l < numLayers; l++) {
+            const att = transformer.attentionWeights[l];
+            for (let ii = 0; ii < this.#hiddenSize; ii++) {
+                for (let jj = 0; jj < this.#hiddenSize; jj++) {
+                    avgWq[ii][jj] += att.Wq[ii][jj] * scale;
+                    avgWk[ii][jj] += att.Wk[ii][jj] * scale;
+                    avgWv[ii][jj] += att.Wv[ii][jj] * scale;
+                    avgWo[ii][jj] += att.Wo[ii][jj] * scale;
+                }
             }
-            let globalDiversity = 0;
-            for (const proto of protos) globalDiversity += 1 - this.#kernelSimilarity(proto, centroidProto);
-            globalDiversity /= memory.length;
-            const longDiversity = Math.tanh(globalDiversity * 5);
+        }
 
-            let logits = memory.map((_, i) => {
-                const age = memory.length - 1 - i;
-                const recency = Math.exp(-0.04 * age);
-                return Math.log(recency + 1e-8) + 
-                       6.0 * relevanceKernels[i] +
-                       4.0 * normalizedImp[i] +
-                       2.0 * longDiversity;
-            });
+        const headSize = this.#hiddenSize / this.#numHeads;
 
-            const weights = this.#softmax(logits);
+        const K = Array(tokenPastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const V = Array(tokenPastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+        for (let seqi = 0; seqi < tokenPastLen; seqi++) {
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                let sumK = 0;
+                let sumV = 0;
+                for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                    const specW = isValidNumber(this.#specializationWeights[transformerIdx][kk][j])
+                        ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5)
+                        : 1;
+                    sumK += pastStates[seqi][kk] * avgWk[kk][j] * specW || 0;
+                    sumV += pastStates[seqi][kk] * avgWv[kk][j] * specW || 0;
+                }
+                K[seqi][j] = sumK;
+                V[seqi][j] = sumV;
+            }
+        }
+
+        this.#applyRoPE(K, 0);
+
+        let globalDiversity = 0;
+        if (tokenPastLen > this.#inputSize) {
+            const numSamples = Math.min(16, tokenPastLen);
+            const sampleIndices = [];
+            for (let s = 0; s < numSamples; s++) {
+                sampleIndices.push(Math.floor(Math.random() * tokenPastLen));
+            }
+            const centroid = Array(this.#hiddenSize).fill(0);
+            for (const si of sampleIndices) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    centroid[j] += pastStates[si][j];
+                }
+            }
+            for (let j = 0; j < this.#hiddenSize; j++) centroid[j] /= numSamples;
+
+            for (const si of sampleIndices) {
+                globalDiversity += 1 - this.#cosineSimilarity(pastStates[si], centroid);
+            }
+            globalDiversity /= numSamples;
+        }
+        const diversityScore = Math.tanh(globalDiversity * 6);
+
+        let augmented = rawComponent.map(row => row.slice());
+        const maxHops = selectedPast.length;
+
+        for (let hop = 0; hop < maxHops; hop++) {
+            const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+            for (let seqi = 0; seqi < this.#inputSize; seqi++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    let sum = 0;
+                    for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                        const specW = isValidNumber(this.#specializationWeights[transformerIdx][kk][j])
+                            ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5)
+                            : 1;
+                        sum += augmented[seqi][kk] * avgWq[kk][j] * specW || 0;
+                    }
+                    Q[seqi][j] = sum;
+                }
+            }
+
+            this.#applyRoPE(Q, tokenPastLen);
+
+            let totalEntropy = 0;
+            let queryCount = 0;
+
+            const preWoOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+            for (let h = 0; h < this.#numHeads; h++) {
+                const offset = h * headSize;
+                for (let i = 0; i < this.#inputSize; i++) {
+                    let maxScore = -Infinity;
+                    const scores = Array(tokenPastLen).fill(0);
+                    for (let jj = 0; jj < tokenPastLen; jj++) {
+                        let sum = 0;
+                        for (let kk = 0; kk < headSize; kk++) {
+                            sum += Q[i][offset + kk] * K[jj][offset + kk] || 0;
+                        }
+                        scores[jj] = sum / Math.sqrt(headSize);
+                        if (scores[jj] > maxScore) maxScore = scores[jj];
+                    }
+
+                    const expScores = scores.map(s => Math.exp(s - maxScore));
+                    const sumExp = expScores.reduce((a, b) => a + b, 0) || 1;
+
+                    let headEntropy = 0;
+                    let sumP = 0;
+                    for (let jj = 0; jj < tokenPastLen; jj++) {
+                        const p = expScores[jj] / sumExp;
+                        if (p > 1e-6) {
+                            headEntropy -= p * Math.log(p);
+                            sumP += p;
+                        }
+                        if (p > 0) {
+                            for (let kk = 0; kk < headSize; kk++) {
+                                preWoOutput[i][offset + kk] += p * V[jj][offset + kk];
+                            }
+                        }
+                    }
+
+                    if (sumP > 0.1) {
+                        totalEntropy += headEntropy;
+                        queryCount++;
+                    }
+                }
+            }
+
+            const logPast = Math.log(tokenPastLen + 1);
+            const avgEntropy = queryCount > 0 ? totalEntropy / queryCount : logPast;
+            const attentionSharpness = Math.exp(-avgEntropy / logPast);
+
+            const gate = 4.0 * attentionSharpness + 2.5 * fillFactor + 2.0 * perf + 2.0 * diversityScore;
+            let retrievedRatio = 1 / (1 + Math.exp(-gate));
+
+            const retrieved = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+            for (let i = 0; i < this.#inputSize; i++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    let sum = 0;
+                    for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                        const specW = isValidNumber(this.#specializationWeights[transformerIdx][kk][j])
+                            ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5)
+                            : 1;
+                        sum += preWoOutput[i][kk] * avgWo[kk][j] * specW || 0;
+                    }
+                    retrieved[i][j] = sum;
+                }
+            }
 
             for (let i = 0; i < this.#inputSize; i++) {
-                const token = Array(this.#hiddenSize).fill(0);
-                for (let m = 0; m < memory.length; m++) {
-                    const w = weights[m];
-                    if (w < 1e-8) continue;
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        token[j] += memory[m][i][j] * w;
-                    }
-                }
-                longTermComponent[i] = token;
-            }
-
-            let relVar = relevanceKernels.reduce((s, v) => s + v * v, 0) / memory.length;
-            relVar -= Math.pow(relevanceKernels.reduce((s, v) => s + v, 0) / memory.length, 2);
-            longTermQuality = (relevanceKernels.reduce((s, v) => s + v, 0) / memory.length + 
-                               normalizedImp.reduce((s, v) => s + v, 0) / memory.length + 
-                               longDiversity + Math.tanh(relVar) + 0.5) / 4.5;
-        }
-
-        let adaptiveComponent = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-        const adaptive = this.#adaptiveContext[transformerIdx];
-        let adaptiveQuality = 0;
-        let adaptiveDiversity = 1.0;
-
-        if (adaptive.length > 0) {
-            const protos = adaptive.map(entry => this.#poolMultiPrototype(entry));
-            const relevanceKernels = protos.map(proto => this.#kernelSimilarity(proto, this.#poolMultiPrototype(rawComponent)));
-
-            if (adaptive.length > 3) {
-                const centroidProto = { mean: Array(this.#hiddenSize).fill(0), variance: Array(this.#hiddenSize).fill(0), max: Array(this.#hiddenSize).fill(0) };
-                for (const proto of protos) {
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        centroidProto.mean[j] += proto.mean[j];
-                        centroidProto.variance[j] += proto.variance[j];
-                        centroidProto.max[j] += proto.max[j];
-                    }
-                }
                 for (let j = 0; j < this.#hiddenSize; j++) {
-                    centroidProto.mean[j] /= adaptive.length;
-                    centroidProto.variance[j] /= adaptive.length;
-                    centroidProto.max[j] /= adaptive.length;
+                    augmented[i][j] = augmented[i][j] * (1 - retrievedRatio) + retrieved[i][j] * retrievedRatio;
                 }
-                let distSum = 0;
-                for (const proto of protos) distSum += 1 - this.#kernelSimilarity(proto, centroidProto);
-                adaptiveDiversity = Math.tanh(distSum / adaptive.length * 4);
             }
 
-            let logits = adaptive.map((_, i) => {
-                const recency = adaptive.length - i;
-                return 3.0 * recency + 
-                       4.0 * relevanceKernels[i] +
-                       1.5 * adaptiveDiversity;
-            });
-
-            const weights = this.#softmax(logits);
-
-            for (let i = 0; i < this.#inputSize; i++) {
-                const token = Array(this.#hiddenSize).fill(0);
-                for (let m = 0; m < adaptive.length; m++) {
-                    const w = weights[m];
-                    if (w < 1e-8) continue;
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        token[j] += adaptive[m][i][j] * w;
-                    }
-                }
-                adaptiveComponent[i] = token;
-            }
-
-            adaptiveQuality = (relevanceKernels.reduce((s, v) => s + v, 0) / adaptive.length + 
-                               adaptiveDiversity + 1.2) / 3.2;
-        }
-
-        const fillFactor = (memory.length / this.#contextWindow + adaptive.length / this.#adaptiveWindow) / 2;
-        const perfFactor = perf * (0.8 + 0.2 * fillFactor);
-
-        const features = [
-            longTermQuality,
-            adaptiveQuality,
-            adaptiveDiversity,
-            fillFactor,
-            perfFactor
-        ];
-
-        const longGate = features.reduce((s, f, i) => s + f * [0.4, -0.3, -0.2, 0.3, 0.5][i], 0);
-        const adaptiveGate = features.reduce((s, f, i) => s + f * [-0.3, 0.4, 0.5, -0.2, 0.3][i], 0);
-
-        let longTermRatio = 1 / (1 + Math.exp(-longGate));
-        let adaptiveRatio = 1 / (1 + Math.exp(-adaptiveGate));
-        const sumRatio = longTermRatio + adaptiveRatio + 1e-8;
-        longTermRatio /= sumRatio;
-        adaptiveRatio /= sumRatio;
-
-        const rawRatio = 1 - (longTermRatio + adaptiveRatio);
-        longTermRatio += 0.5 * rawRatio;
-        adaptiveRatio += 0.5 * rawRatio;
-
-        let output = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-        for (let i = 0; i < this.#inputSize; i++) {
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                output[i][j] =
-                    rawComponent[i][j] * (1 - longTermRatio - adaptiveRatio) +
-                    longTermComponent[i][j] * longTermRatio +
-                    adaptiveComponent[i][j] * adaptiveRatio;
+            if (hop >= 1 && retrievedRatio < 0.01) {
+                break;
             }
         }
 
-        return output;
+        return augmented;
     }
-
-    // ---------------------------------------------------------------
-
-    // Forward & Ensemble Processing
 
     #processTransformer (inputs, idx, computeIntermediates = false, training = true, isLast = false) {
         const transformer = this.#transformers[idx];
@@ -1581,7 +1743,7 @@ class HiveMind {
 
             const normAttention = attentionResidual.map(row => this.#rmsNorm(row, transformer.layerNormWeights[layer].gamma2));
 
-            const ffnOutputs = normAttention.map(row => this.#feedForward(row, transformer.ffnWeights[layer], idx, training));
+            const ffnOutputs = normAttention.map(row => this.#feedForward(row, transformer.ffnWeights[layer], idx));
 
             x = attentionResidual.map((row, i) => row.map((val, j) => val + ffnOutputs[i][j]));
 
@@ -1773,10 +1935,6 @@ class HiveMind {
         this.#ensembleWeights = finalWeights.map(w => (isValidNumber(w) && w >= 0 ? w / sum : 1 / this.#ensembleSize));
         this.#normalizeEnsembleWeights();
     }
-
-    // ---------------------------------------------------------------
-
-    // Scoring & Adaptation
 
     #computeSpecializationScores (inputs, outputs) {
         if (
@@ -1971,10 +2129,6 @@ class HiveMind {
         this.#updateEnsembleWeights();
         this.#updateAdaptiveLearningRates();
     }
-
-    // ---------------------------------------------------------------
-
-    // Gradient Scaling & Utilities
 
     #computeSpectralNorm (matrix) {
         if (!Array.isArray(matrix)) {
@@ -2371,10 +2525,6 @@ class HiveMind {
         this.#scaleGradientVector(this.#gradientAccumulation[idx].attentionWeightMatrix, vectorThreshold, minScaleFactor, alpha, decay, sparseThreshold);
         this.#scaleGradientMatrix(this.#gradientAccumulation[idx].specializationWeights, specMatrixThreshold, minScaleFactor, alpha, decay, sparseThreshold);
     }
-
-    // ---------------------------------------------------------------
-
-    // Backpropagation & Training Steps:
 
     #accumulateGradients (inputs, outputs, target, probability, layerOutputs, activations, attentionIntermediates) {
         const dL_dLogit = probability - target;
@@ -3288,10 +3438,6 @@ class HiveMind {
             }
         });
     }
-
-    // ---------------------------------------------------------------
-
-    // Public API:
 
     predict (inputs) {
         if ( !Array.isArray(inputs) || inputs.length !== this.#inputSize || !inputs.every(isValidNumber) ) { return 0 }
