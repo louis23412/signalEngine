@@ -31,17 +31,19 @@ class HiveMindController {
     }
 
     #cacheSize;
-    #traningCandleSize;
+    #inputSize;
+    #trainingCandleSize;
+    #trainingIndicators;
     #trainingStep = 0;
     #lastSaveStep = 0;
     #openSimulations = 0;
 
-    constructor ( dp, cs, es, is ) {
+    constructor ( dp, cs, es ) {
         fs.mkdirSync(dp, { recursive: true });
         this.#cacheSize = cs;
-        this.#traningCandleSize = is;
+        this.#chooseDimension(es);
 
-        this.#hivemind = new HiveMind(dp, es, this.#traningCandleSize * 10);
+        this.#hivemind = new HiveMind(dp, es, this.#inputSize);
         this.#indicators = new IndicatorProcessor();
         this.#db = new Database(path.join(dp, 'hivemind_controller.db'), { fileMustExist: false });
 
@@ -229,36 +231,110 @@ class HiveMindController {
         
         return valuesToNormalize.map(value => {
             const normalized = (value - min) / (max - min);
-            return truncateToDecimals(Math.min(1, Math.max(0, normalized)), 2);
+            return truncateToDecimals(Math.min(1, Math.max(0, normalized)), 4);
         });
     }
 
-    #extractFeatures (data, candleCount) {
-        const normalizedRsi = this.#robustNormalize(data.rsi, candleCount);
-        const normalizedMacdDiff = this.#robustNormalize(data.macdDiff, candleCount);
-        const normalizedAtr = this.#robustNormalize(data.atr, candleCount);
-        const normalizedEma100 = this.#robustNormalize(data.ema100, candleCount);
-        const normalizedStochasticDiff = this.#robustNormalize(data.stochasticDiff, candleCount);
-        const normalizedBollingerPercentB = this.#robustNormalize(data.bollingerPercentB, candleCount);
-        const normalizedObv = this.#robustNormalize(data.obv, candleCount);
-        const normalizedAdx = this.#robustNormalize(data.adx, candleCount);
-        const normalizedCci = this.#robustNormalize(data.cci, candleCount);
-        const normalizedWilliamsR = this.#robustNormalize(data.williamsR, candleCount);
+    #extractFeatures(data, candleCount, indicatorCount) {
+        const indicators = [
+            'rsi',
+            'macdDiff',
+            'atr',
+            'ema100',
+            'stochasticDiff',
+            'bollingerPercentB',
+            'obv',
+            'adx',
+            'cci',
+            'williamsR'
+        ];
 
-        const result = Array.from({ length: candleCount }, (_, i) => [
-            normalizedRsi[i],
-            normalizedMacdDiff[i],
-            normalizedAtr[i],
-            normalizedEma100[i],
-            normalizedStochasticDiff[i],
-            normalizedBollingerPercentB[i],
-            normalizedObv[i],
-            normalizedAdx[i],
-            normalizedCci[i],
-            normalizedWilliamsR[i]
-        ]);
+        const count = Math.max(0, Math.min(indicatorCount, indicators.length));
+
+        const normalized = [];
+        for (let i = 0; i < count; i++) {
+            const key = indicators[i];
+            normalized.push(this.#robustNormalize(data[key], candleCount));
+        }
+
+        const result = Array.from({ length: candleCount }, (_, i) => {
+            const row = [];
+            for (let j = 0; j < count; j++) {
+                row.push(normalized[j][i]);
+            }
+            return row;
+        });
 
         return result;
+    }
+
+    #chooseDimension(es) {
+        const MIN_SIZE = 10;
+        const MAX_SIZE = 100;
+        let desiredSize = Math.max(MIN_SIZE, MAX_SIZE - Math.floor((es - 1) / 10));
+
+        const searchRange = 1;
+
+        const getBestFactoring = (size) => {
+            let bestMinv = 1;
+            let bestInd = 1;
+            let bestCand = size;
+            for (let i = 2; i <= 10; i++) {
+                if (size % i === 0) {
+                    const cand = size / i;
+                    const minv = Math.min(i, cand);
+                    if (minv > bestMinv || (minv === bestMinv && i > bestInd)) {
+                        bestMinv = minv;
+                        bestInd = i;
+                        bestCand = cand;
+                    }
+                }
+            }
+            return { minv: bestMinv, ind: bestInd, cand: bestCand };
+        };
+
+        let bestMinv = -1;
+        let bestDiff = Infinity;
+        let bestTarget = desiredSize;
+        let bestInd = 1;
+        let bestCand = desiredSize;
+
+        for (let offset = -searchRange; offset <= searchRange; offset++) {
+            const candidate = desiredSize + offset;
+            if (candidate < MIN_SIZE || candidate > MAX_SIZE) continue;
+
+            const current = getBestFactoring(candidate);
+            const currentDiff = Math.abs(offset);
+
+            let update = false;
+            if (current.minv > bestMinv) {
+                update = true;
+            } else if (current.minv === bestMinv) {
+                if (currentDiff < bestDiff) {
+                    update = true;
+                } else if (currentDiff === bestDiff) {
+                    if (current.ind > bestInd) {
+                        update = true;
+                    } else if (current.ind === bestInd) {
+                        if (current.cand > bestCand) {
+                            update = true;
+                        }
+                    }
+                }
+            }
+
+            if (update) {
+                bestMinv = current.minv;
+                bestDiff = currentDiff;
+                bestTarget = candidate;
+                bestInd = current.ind;
+                bestCand = current.cand;
+            }
+        }
+
+        this.#inputSize = bestTarget;
+        this.#trainingCandleSize = bestCand;
+        this.#trainingIndicators = bestInd;
     }
 
     #dumpState (force = false) {
@@ -428,7 +504,7 @@ class HiveMindController {
 
         if (indicators.error) return { error: 'Indicators error' };
 
-        const features = this.#extractFeatures(indicators, this.#traningCandleSize);
+        const features = this.#extractFeatures(indicators, this.#trainingCandleSize, this.#trainingIndicators);
 
         let confidence = 'disabled';
         let multiplier = 'disabled';

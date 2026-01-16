@@ -5,15 +5,14 @@ import HiveMindController from '../src/hiveMindController.js';
 
 const trainingCutoff = null;
 const checkPointSave = null;
-const shouldPredict = true;
+const shouldPredict = false;
 const cacheSize = 1000;
-const ensembleSize = 6;
-const candlesUsed = 10;
+const ensembleSize = 32;
 const directoryPath = path.join(import.meta.dirname, '..', 'state');
 const trainingFile = path.join(import.meta.dirname, 'candles.jsonl');
 
 const scriptStartTime = process.hrtime.bigint();
-const controller = new HiveMindController(directoryPath, cacheSize, ensembleSize, candlesUsed);
+const controller = new HiveMindController(directoryPath, cacheSize, ensembleSize);
 
 let currentStep = -1;
 let candlesSinceStepIncrease = 0;
