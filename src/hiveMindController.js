@@ -39,7 +39,15 @@ class HiveMindController {
     #openSimulations = 0;
 
     constructor ( dp, cs, es ) {
-        fs.mkdirSync(dp, { recursive: true });
+        this.#validateInputs(dp, cs, es);
+
+        try {
+            fs.mkdirSync(dp, { recursive: true });
+        } catch (err) {
+            console.log(`Unable to create directory path "${dp}". ${err.message}`);
+            process.exit(1);
+        }
+
         this.#cacheSize = cs;
         this.#chooseDimension(es);
 
@@ -49,6 +57,34 @@ class HiveMindController {
 
         this.#initDatabase();
         this.#loadGlobalAccuracy();
+    }
+
+    #validateInputs (dp, cs, es) {
+        let dpIsValid = true;
+        if (typeof dp !== 'string') {
+            console.log(`Invalid directory path. Must be a string - Got: ${typeof dp} (${dp})`);
+            dpIsValid = false;
+        } else {
+            dp = dp.trim();
+            if (dp === '') {
+                console.log(`Invalid directory path. Must be a non-empty string - Got: empty`);
+                dpIsValid = false;
+            }
+        }
+
+        let csIsValid = true;
+        if (!isValidNumber(cs) || cs < 100) {
+            console.log(`Invalid cache size. Must be a number & at least 100 - Got: ${cs}`);
+            csIsValid = false;
+        }
+
+        let esIsValid = true;
+        if (!isValidNumber(es) || es < 1) {
+            console.log(`Invalid ensemble size. Must be a number & at least 1 - Got: ${es}`);
+            esIsValid = false;
+        }
+
+        if (!dpIsValid || !csIsValid || !esIsValid) process.exit(1);
     }
 
     #initDatabase () {
@@ -235,7 +271,7 @@ class HiveMindController {
         });
     }
 
-    #extractFeatures(data, candleCount, indicatorCount) {
+    #extractFeatures (data, candleCount, indicatorCount) {
         const indicators = [
             'rsi',
             'macdDiff',
@@ -268,7 +304,7 @@ class HiveMindController {
         return result;
     }
 
-    #chooseDimension(es) {
+    #chooseDimension (es) {
         const MIN_SIZE = 10;
         const MAX_SIZE = 100;
         let desiredSize = Math.max(MIN_SIZE, MAX_SIZE - Math.floor((es - 1) / 10));

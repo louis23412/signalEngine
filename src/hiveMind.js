@@ -5,298 +5,490 @@ import Database from 'better-sqlite3';
 import { isValidNumber } from './utils.js';
 
 class HiveMind {
-    #directoryPath;
-    #ensembleSize;
-    #inputSize;
-    #numLayers;
-    #numHeads;
-    #headDim;
-    #hiddenSize;
-    #feedForwardSize;
-    #contextWindow;
-    #adaptiveWindow;
-    #maxTrustHistory;
-    #maxPerformanceHistory;
-    #learningRate;
-    #learningRateDecay;
-    #swarmIntelligenceFactor;
-    #gradientResetFrequency;
+    #directoryPath; #fileName; 
+    #ensembleSize; #inputSize;
+    #numLayers; #numHeads; #headDim; #hiddenSize; #feedForwardSize; 
+    #contextWindow; #adaptiveWindow; #semanticMaxProtos;
+    #maxTrustHistory; #maxPerformanceHistory;
+    #learningRate; #learningRateDecay;
+    #swarmIntelligenceFactor; ;#gradientResetFrequency;
+    #adaptiveLearningRate; #ensembleWeights; #agreementScores;
+    #performanceScores; #historicalPerformance; #trustScoresHistory;
+    #specializationScores; #specializationWeights;
+    #attentionWeightMatrix; #attentionBias;
+    #transformers; #gradientAccumulation;
+    #attentionMemory; #adaptiveContext; #semanticProtos;
+    #semanticLR; #semanticBoost; #effectiveSemanticMax;
+    #longTermMaxProtos; #shortTermMaxProtos; #rawMaxProtos;
+    #lowDim; #numProjections; #projectionMatrices;
+    #semanticUpdateEvery; #semanticStepCounters; 
+    #semanticMergeEvery; #semanticMergeCounters;
+    #maxRetrievedProtos; #numRetrievalCandidates;
+    #maxEpisodicConsider; #replayEvery; #replaySamples;
+    #coreMaxProtos; #coreEpisodicMaxEntries; #coreEpisodic;
+    #lshNumTables; #lshHashBits;
+    #numLshSets; #lshHyperplanes; #semanticLSHBuckets;
+    #priorityMax; #priorityIndices;
+    #protoCapacityFactor; #baseProtoCapacity; #memoryFactor; #maxVariancePerDim;
+    #tempOverloadFactor; #mergeTrimFactor;
     #trainingStepCount = 0;
-    #adaptiveLearningRate = [];
-    #performanceScores = [];
-    #agreementScores = [];
-    #specializationScores = [];
-    #historicalPerformance = [];
-    #trustScoresHistory = [];
-    #ensembleWeights = [];
-    #attentionWeightMatrix = [];
-    #attentionBias = [];
-    #attentionMemory = [];
-    #adaptiveContext = [];
-    #specializationWeights = [];
-    #transformers = [];
-    #gradientAccumulation = [];
 
     constructor (dp, es, is) {
-        this.#scaleAndSetDimensions(dp, es, is);
+        this.#directoryPath = dp;
+        this.#fileName = `hivemind_state-es=${es}-is=${is}.db`;
 
-        const loadStatus = this.#loadState();
+        const loadStatus = this.#loadState(es, is);
 
-        if (!loadStatus.status && loadStatus.error) {
+        if (!loadStatus.status) {
             console.log(`Load state failed! Error: ${loadStatus.error}. Trace: ${loadStatus.trace}`);
             process.exit();
         }
+
+        console.log(loadStatus.message);
     }
 
-    #loadState () {
-        const dbPath = path.join(this.#directoryPath, 'hivemind_state.db');
+    #loadState(ensembleSize, inputSize) {
+        const dbPath = path.join(this.#directoryPath, this.#fileName);
         let db;
 
         try {
             if (!fs.existsSync(dbPath)) {
-                return {
-                    status : false
-                };
+                this.#scaleAndSetDimensions(ensembleSize, inputSize);
+                return { status : true , message : 'Started with new state!'};
             }
 
             db = new Database(dbPath, { readonly: true });
 
-            const metadataStmt = db.prepare('SELECT key, value FROM metadata WHERE key = ?');
-            const trainingStepCount = metadataStmt.get('trainingStepCount');
-            if (trainingStepCount && isValidNumber(Number(trainingStepCount.value))) {
-                this.#trainingStepCount = Number(trainingStepCount.value);
+            const getMetadata = db.prepare('SELECT value FROM metadata WHERE key = ?');
+
+            const scalarKeys = [
+                'ensembleSize', 'inputSize', 'numLayers', 'numHeads', 'headDim', 'hiddenSize',
+                'feedForwardSize', 'contextWindow', 'adaptiveWindow', 'semanticMaxProtos',
+                'maxTrustHistory', 'maxPerformanceHistory', 'learningRate', 'learningRateDecay',
+                'swarmIntelligenceFactor', 'gradientResetFrequency', 'semanticLR', 'semanticBoost',
+                'effectiveSemanticMax', 'longTermMaxProtos', 'shortTermMaxProtos', 'rawMaxProtos',
+                'lowDim', 'numProjections', 'semanticUpdateEvery', 'semanticMergeEvery',
+                'maxRetrievedProtos', 'numRetrievalCandidates', 'maxEpisodicConsider',
+                'replayEvery', 'replaySamples', 'coreMaxProtos', 'coreEpisodicMaxEntries',
+                'lshNumTables', 'lshHashBits', 'numLshSets', 'priorityMax', 'trainingStepCount',
+                'protoCapacityFactor', 'baseProtoCapacity', 'memoryFactor', 'maxVariancePerDim',
+                'tempOverloadFactor', 'mergeTrimFactor'
+            ];
+
+            scalarKeys.forEach(key => {
+                const row = getMetadata.get(key);
+                if (row && isValidNumber(Number(row.value))) {
+                    this[`#${key}`] = Number(row.value);
+                }
+            });
+
+            this.#semanticStepCounters = Array(this.#ensembleSize).fill(0);
+            this.#semanticMergeCounters = Array(this.#ensembleSize).fill(0);
+            for (let idx = 0; idx < this.#ensembleSize; idx++) {
+                const stepRow = getMetadata.get(`semanticStepCounter_${idx}`);
+                if (stepRow && Number.isInteger(Number(stepRow.value))) {
+                    this.#semanticStepCounters[idx] = Number(stepRow.value);
+                }
+                const mergeRow = getMetadata.get(`semanticMergeCounter_${idx}`);
+                if (mergeRow && Number.isInteger(Number(mergeRow.value))) {
+                    this.#semanticMergeCounters[idx] = Number(mergeRow.value);
+                }
             }
 
-            const ensembleWeightsStmt = db.prepare('SELECT idx, weight FROM ensemble_weights');
-            const ensembleWeights = ensembleWeightsStmt.all();
-            ensembleWeights.forEach(({ idx, weight }) => {
-                if (isValidNumber(weight) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#ensembleWeights[idx] = weight;
+            const hidden = this.#hiddenSize;
+            const low = this.#lowDim;
+            const projCount = this.#numProjections;
+            const es = this.#ensembleSize;
+            const layers = this.#numLayers;
+            const ff = this.#feedForwardSize;
+
+            this.#projectionMatrices = Array.from({ length: projCount }, () => {
+                const mat = new Array(hidden);
+                for (let r = 0; r < hidden; r++) {
+                    mat[r] = new Float32Array(low).fill(0);
                 }
+                return mat;
             });
 
-            const performanceScoresStmt = db.prepare('SELECT idx, score FROM performance_scores');
-            const performanceScores = performanceScoresStmt.all();
-            performanceScores.forEach(({ idx, score }) => {
-                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#performanceScores[idx] = score;
-                }
-            });
+            this.#lshHyperplanes = Array.from({ length: this.#numLshSets }, () =>
+                Array.from({ length: this.#lshNumTables }, () =>
+                    Array.from({ length: this.#lshHashBits }, () => new Float32Array(low).fill(0))
+                )
+            );
 
-            const agreementScoresStmt = db.prepare('SELECT idx, score FROM agreement_scores');
-            const agreementScores = agreementScoresStmt.all();
-            agreementScores.forEach(({ idx, score }) => {
-                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#agreementScores[idx] = score;
-                }
-            });
+            this.#attentionMemory = Array(es).fill().map(() => []);
+            this.#adaptiveContext = Array(es).fill().map(() => []);
+            this.#semanticProtos = Array(es).fill().map(() => []);
+            this.#coreEpisodic = Array(es).fill().map(() => []);
+            this.#priorityIndices = Array(es).fill().map(() => []);
+            this.#semanticLSHBuckets = Array(es).fill().map(() =>
+                Array(this.#numLshSets).fill().map(() =>
+                    Array(this.#lshNumTables).fill().map(() => new Map())
+                )
+            );
 
-            const specializationScoresStmt = db.prepare('SELECT idx, score FROM specialization_scores');
-            const specializationScores = specializationScoresStmt.all();
-            specializationScores.forEach(({ idx, score }) => {
-                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#specializationScores[idx] = score;
-                }
-            });
+            this.#ensembleWeights = Array(es).fill(0);
+            this.#performanceScores = Array(es).fill(0);
+            this.#agreementScores = Array(es).fill(0);
+            this.#specializationScores = Array(es).fill(0);
+            this.#adaptiveLearningRate = Array(es).fill(0);
+            this.#attentionWeightMatrix = Array(es).fill().map(() => Array(hidden).fill(0));
+            this.#attentionBias = Array(es).fill().map(() => Array(hidden).fill(0));
+            this.#specializationWeights = Array(es).fill().map(() =>
+                Array(hidden).fill().map(() => Array(hidden).fill(0))
+            );
+            this.#historicalPerformance = Array(es).fill().map(() => []);
+            this.#trustScoresHistory = Array(es).fill().map(() => []);
 
-            const historicalPerformanceStmt = db.prepare('SELECT idx, step, score FROM historical_performance ORDER BY idx, step');
-            const historicalPerformance = historicalPerformanceStmt.all();
-            historicalPerformance.forEach(({ idx, step, score }) => {
-                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize && Number.isInteger(step)) {
-                    this.#historicalPerformance[idx][step] = score;
-                }
-            });
+            const zeroMatrix = (rows, cols) => Array(rows).fill().map(() => Array(cols).fill(0));
+            const zeroVector = length => Array(length).fill(0);
 
-            const trustScoresHistoryStmt = db.prepare('SELECT idx, step, score FROM trust_scores_history ORDER BY idx, step');
-            const trustScoresHistory = trustScoresHistoryStmt.all();
-            trustScoresHistory.forEach(({ idx, step, score }) => {
-                if (isValidNumber(score) && idx >= 0 && idx < this.#ensembleSize && Number.isInteger(step)) {
-                    this.#trustScoresHistory[idx][step] = score;
-                }
-            });
+            this.#transformers = Array(es).fill().map(() => ({
+                attentionWeights: Array(layers).fill().map(() => ({
+                    Wq: zeroMatrix(hidden, hidden),
+                    Wk: zeroMatrix(hidden, hidden),
+                    Wv: zeroMatrix(hidden, hidden),
+                    Wo: zeroMatrix(hidden, hidden)
+                })),
+                ffnWeights: Array(layers).fill().map(() => ({
+                    gate_proj: zeroMatrix(hidden, ff),
+                    up_proj: zeroMatrix(hidden, ff),
+                    down_proj: zeroMatrix(ff, hidden)
+                })),
+                layerNormWeights: Array(layers).fill().map(() => ({
+                    gamma1: zeroVector(hidden),
+                    gamma2: zeroVector(hidden)
+                })),
+                outputWeights: zeroMatrix(hidden, 1),
+                outputBias: [0]
+            }));
 
-            const adaptiveLearningRateStmt = db.prepare('SELECT idx, rate FROM adaptive_learning_rate');
-            const adaptiveLearningRates = adaptiveLearningRateStmt.all();
-            adaptiveLearningRates.forEach(({ idx, rate }) => {
-                if (isValidNumber(rate) && idx >= 0 && idx < this.#ensembleSize) {
-                    this.#adaptiveLearningRate[idx] = rate;
-                }
-            });
+            this.#gradientAccumulation = Array(es).fill().map(() => ({
+                outputWeights: zeroMatrix(hidden, 1),
+                outputBias: [0],
+                attentionWeights: Array(layers).fill().map(() => ({
+                    Wq: zeroMatrix(hidden, hidden),
+                    Wk: zeroMatrix(hidden, hidden),
+                    Wv: zeroMatrix(hidden, hidden),
+                    Wo: zeroMatrix(hidden, hidden)
+                })),
+                ffnWeights: Array(layers).fill().map(() => ({
+                    gate_proj: zeroMatrix(hidden, ff),
+                    up_proj: zeroMatrix(hidden, ff),
+                    down_proj: zeroMatrix(ff, hidden)
+                })),
+                layerNormWeights: Array(layers).fill().map(() => ({
+                    gamma1: zeroVector(hidden),
+                    gamma2: zeroVector(hidden)
+                })),
+                attentionBias: zeroVector(hidden),
+                attentionWeightMatrix: zeroVector(hidden),
+                specializationWeights: zeroMatrix(hidden, hidden)
+            }));
 
-            const attentionWeightMatrixStmt = db.prepare('SELECT idx, row, value FROM attention_weight_matrix');
-            const attentionWeightMatrix = attentionWeightMatrixStmt.all();
-            attentionWeightMatrix.forEach(({ idx, row, value }) => {
-                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize && row >= 0 && row < this.#hiddenSize) {
-                    this.#attentionWeightMatrix[idx][row] = value;
-                }
-            });
 
-            const attentionBiasStmt = db.prepare('SELECT idx, row, value FROM attention_bias');
-            const attentionBias = attentionBiasStmt.all();
-            attentionBias.forEach(({ idx, row, value }) => {
-                if (isValidNumber(value) && idx >= 0 && idx < this.#ensembleSize && row >= 0 && row < this.#hiddenSize) {
-                    this.#attentionBias[idx][row] = value;
-                }
-            });
-
-            const specializationWeightsStmt = db.prepare('SELECT idx, row, col, value FROM specialization_weights');
-            const specializationWeights = specializationWeightsStmt.all();
-            specializationWeights.forEach(({ idx, row, col, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    row >= 0 && row < this.#hiddenSize &&
-                    col >= 0 && col < this.#hiddenSize
-                ) {
-                    this.#specializationWeights[idx][row][col] = value;
-                }
-            });
-
-            const attentionMemoryStmt = db.prepare('SELECT idx, window, seq, dim, value FROM attention_memory');
-            const attentionMemory = attentionMemoryStmt.all();
-            attentionMemory.forEach(({ idx, window, seq, dim, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    window >= 0 && window < this.#contextWindow &&
-                    seq >= 0 && seq < this.#inputSize &&
-                    dim >= 0 && dim < this.#hiddenSize
-                ) {
-                    this.#attentionMemory[idx][window][seq][dim] = value;
-                }
-            });
-
-            const adaptiveContextStmt = db.prepare('SELECT idx, window, seq, dim, value FROM adaptive_context');
-            const adaptiveContext = adaptiveContextStmt.all();
-            adaptiveContext.forEach(({ idx, window, seq, dim, value }) => {
-                if (
-                    isValidNumber(value) &&
-                    idx >= 0 && idx < this.#ensembleSize &&
-                    window >= 0 && window < this.#adaptiveWindow &&
-                    seq >= 0 && seq < this.#inputSize &&
-                    dim >= 0 && dim < this.#hiddenSize
-                ) {
-                    this.#adaptiveContext[idx][window][seq][dim] = value;
-                }
-            });
-
-            const transformerWeightsStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM transformers');
-            const transformerBiasesStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM transformer_biases');
-            const transformerLayerNormStmt = db.prepare('SELECT idx, layer, norm_type, row, value FROM transformer_layer_norm');
-
-            const transformerWeights = transformerWeightsStmt.all();
-            const transformerBiases = transformerBiasesStmt.all();
-            const transformerLayerNorm = transformerLayerNormStmt.all();
-
-            transformerWeights.forEach(({ idx, layer, weight_type, row, col, value }) => {
-                if (!isValidNumber(value) || idx < 0 || idx >= this.#ensembleSize) return;
-
-                if (weight_type === 'outputWeights' && layer === -1) {
-                    if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < 1) {
-                        this.#transformers[idx].outputWeights[row][col] = value;
+            const loadVector = (table, target) => {
+                const stmt = db.prepare(`SELECT idx, value FROM ${table} ORDER BY idx`);
+                const rows = stmt.all();
+                rows.forEach(({ idx, value }) => {
+                    if (idx >= 0 && idx < es && isValidNumber(value)) {
+                        target[idx] = value;
                     }
-                } else if (layer >= 0 && layer < this.#numLayers) {
-                    if (['Wq', 'Wk', 'Wv', 'Wo'].includes(weight_type)) {
-                        if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < this.#hiddenSize) {
-                            this.#transformers[idx].attentionWeights[layer][weight_type][row][col] = value;
-                        }
-                    } else if (['gate_proj', 'up_proj'].includes(weight_type)) {
-                        if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < this.#feedForwardSize) {
-                            this.#transformers[idx].ffnWeights[layer][weight_type][row][col] = value;
-                        }
-                    } else if (weight_type === 'down_proj') {
-                        if (row >= 0 && row < this.#feedForwardSize && col >= 0 && col < this.#hiddenSize) {
-                            this.#transformers[idx].ffnWeights[layer].down_proj[row][col] = value;
-                        }
-                    }
-                }
-            });
-
-            transformerBiases.forEach(({ idx, layer, bias_type, row, value }) => {
-                if (!isValidNumber(value) || idx < 0 || idx >= this.#ensembleSize) return;
-
-                if (bias_type === 'outputBias' && layer === -1 && row >= 0 && row < 1) {
-                    this.#transformers[idx].outputBias[row] = value;
-                }
-            });
-
-            transformerLayerNorm.forEach(({ idx, layer, norm_type, row, value }) => {
-                if (!isValidNumber(value) || idx < 0 || idx >= this.#ensembleSize || layer < 0 || layer >= this.#numLayers || row < 0 || row >= this.#hiddenSize) return;
-
-                if (norm_type === 'gamma1') {
-                    this.#transformers[idx].layerNormWeights[layer].gamma1[row] = value;
-                } else if (norm_type === 'gamma2') {
-                    this.#transformers[idx].layerNormWeights[layer].gamma2[row] = value;
-                }
-            });
-
-            const gradientAccumulationStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
-            const gradientAccumulations = gradientAccumulationStmt.all();
-
-            gradientAccumulations.forEach(({ idx, layer, weight_type, row, col, value }) => {
-                if (!isValidNumber(value) || idx < 0 || idx >= this.#ensembleSize) return;
-
-                const grad = this.#gradientAccumulation[idx];
-
-                if (layer === -1) {
-                    if (weight_type === 'outputWeights') {
-                        if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < 1) {
-                            grad.outputWeights[row][col] = value;
-                        }
-                    } else if (weight_type === 'outputBias') {
-                        if (row >= 0 && row < 1) {
-                            grad.outputBias[row] = value;
-                        }
-                    } else if (weight_type === 'attentionBias') {
-                        if (row >= 0 && row < this.#hiddenSize) {
-                            grad.attentionBias[row] = value;
-                        }
-                    } else if (weight_type === 'attentionWeightMatrix') {
-                        if (row >= 0 && row < this.#hiddenSize) {
-                            grad.attentionWeightMatrix[row] = value;
-                        }
-                    } else if (weight_type === 'specializationWeights') {
-                        if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < this.#hiddenSize) {
-                            grad.specializationWeights[row][col] = value;
-                        }
-                    }
-                } else if (layer >= 0 && layer < this.#numLayers) {
-                    if (['Wq', 'Wk', 'Wv', 'Wo'].includes(weight_type)) {
-                        if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < this.#hiddenSize) {
-                            grad.attentionWeights[layer][weight_type][row][col] = value;
-                        }
-                    } else if (['gate_proj', 'up_proj'].includes(weight_type)) {
-                        if (row >= 0 && row < this.#hiddenSize && col >= 0 && col < this.#feedForwardSize) {
-                            grad.ffnWeights[layer][weight_type][row][col] = value;
-                        }
-                    } else if (weight_type === 'down_proj') {
-                        if (row >= 0 && row < this.#feedForwardSize && col >= 0 && col < this.#hiddenSize) {
-                            grad.ffnWeights[layer].down_proj[row][col] = value;
-                        }
-                    } else if (['gamma1', 'gamma2'].includes(weight_type)) {
-                        if (row >= 0 && row < this.#hiddenSize) {
-                            grad.layerNormWeights[layer][weight_type][row] = value;
-                        }
-                    }
-                }
-            });
-
-            return { status: true };
-        } catch (error) {
-            return {
-                status: false,
-                error: error.message,
-                trace: error.stack
+                });
             };
+
+            loadVector('ensemble_weights', this.#ensembleWeights);
+            loadVector('performance_scores', this.#performanceScores);
+            loadVector('agreement_scores', this.#agreementScores);
+            loadVector('specialization_scores', this.#specializationScores);
+            loadVector('adaptive_learning_rate', this.#adaptiveLearningRate);
+
+            const load1DPerIdx = (table, target) => {
+                const stmt = db.prepare(`SELECT idx, row, value FROM ${table}`);
+                const rows = stmt.all();
+                rows.forEach(({ idx, row, value }) => {
+                    if (idx >= 0 && idx < es && row >= 0 && row < hidden && isValidNumber(value)) {
+                        target[idx][row] = value;
+                    }
+                });
+            };
+
+            load1DPerIdx('attention_weight_matrix', this.#attentionWeightMatrix);
+            load1DPerIdx('attention_bias', this.#attentionBias);
+
+            const load3D = (table, target) => {
+                const stmt = db.prepare(`SELECT idx, row, col, value FROM ${table}`);
+                const rows = stmt.all();
+                rows.forEach(({ idx, row, col, value }) => {
+                    if (idx >= 0 && idx < es && row >= 0 && row < hidden && col >= 0 && col < hidden && isValidNumber(value)) {
+                        target[idx][row][col] = value;
+                    }
+                });
+            };
+
+            load3D('specialization_weights', this.#specializationWeights);
+
+            const loadHistory = (table, target) => {
+                const stmt = db.prepare(`SELECT idx, step, score FROM ${table} ORDER BY idx, step`);
+                const rows = stmt.all();
+                rows.forEach(({ idx, step, score }) => {
+                    if (idx >= 0 && idx < es && Number.isInteger(step) && step >= 0 && isValidNumber(score)) {
+                        while (target[idx].length <= step) target[idx].push(0);
+                        target[idx][step] = score;
+                    }
+                });
+            };
+
+            loadHistory('historical_performance', this.#historicalPerformance);
+            loadHistory('trust_scores_history', this.#trustScoresHistory);
+
+            const projStmt = db.prepare('SELECT proj_idx, row, col, value FROM projection_matrices');
+            projStmt.all().forEach(({ proj_idx, row, col, value }) => {
+                if (proj_idx >= 0 && proj_idx < projCount && row >= 0 && row < hidden && col >= 0 && col < low && isValidNumber(value)) {
+                    this.#projectionMatrices[proj_idx][row][col] = value;
+                }
+            });
+
+            const lshStmt = db.prepare('SELECT set_idx, table_idx, bit_idx, dim, value FROM lsh_hyperplanes');
+            lshStmt.all().forEach(({ set_idx, table_idx, bit_idx, dim, value }) => {
+                if (set_idx >= 0 && set_idx < this.#numLshSets &&
+                    table_idx >= 0 && table_idx < this.#lshNumTables &&
+                    bit_idx >= 0 && bit_idx < this.#lshHashBits &&
+                    dim >= 0 && dim < low && isValidNumber(value)) {
+                    this.#lshHyperplanes[set_idx][table_idx][bit_idx][dim] = value;
+                }
+            });
+
+            const loadPrototypeMemory = (type) => {
+                const isAttention = type === 'attention';
+                const isAdaptive = type === 'adaptive';
+                const isSemantic = type === 'semantic';
+                const isCore = type === 'core';
+
+                const hasWindow = isAttention || isAdaptive;
+                const hasEntry = isCore;
+                const hasRep = !isSemantic;
+
+                const prefix = isAttention ? 'attention_memory' :
+                               isAdaptive ? 'adaptive_context' :
+                               isSemantic ? 'semantic' :
+                               'core_episodic';
+
+                const protoStmt = db.prepare(`
+                    SELECT idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, proto_idx, proto_size, access_count, is_core, importance
+                    FROM ${prefix}_protos
+                    ORDER BY idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, proto_idx
+                `);
+                const meanStmt = db.prepare(`SELECT idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, proto_idx, dim, value FROM ${prefix}_means`);
+                const varStmt = db.prepare(`SELECT idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, proto_idx, dim, value FROM ${prefix}_variances`);
+
+                const protoMeta = protoStmt.all();
+                const means = meanStmt.all();
+                const variances = varStmt.all();
+
+                const groups = {};
+                protoMeta.forEach(meta => {
+                    const w = hasWindow ? meta.window : (hasEntry ? meta.entry_idx : 0);
+                    const key = `${meta.idx}_${w}`;
+                    if (!groups[key]) groups[key] = { meta: [], idx: meta.idx, pos: w };
+                    groups[key].meta.push(meta);
+                });
+
+                Object.values(groups).forEach(group => {
+                    const { meta, idx, pos } = group;
+                    const filteredMeans = means.filter(r => `${r.idx}_${hasWindow ? r.window : (hasEntry ? r.entry_idx : 0)}` === `${idx}_${pos}`);
+                    const filteredVars = variances.filter(r => `${r.idx}_${hasWindow ? r.window : (hasEntry ? r.entry_idx : 0)}` === `${idx}_${pos}`);
+
+                    const protoList = [];
+                    const meanMap = {};
+                    filteredMeans.forEach(r => {
+                        if (!meanMap[r.proto_idx]) meanMap[r.proto_idx] = new Float32Array(hidden).fill(0);
+                        meanMap[r.proto_idx][r.dim] = r.value;
+                    });
+                    const varMap = {};
+                    filteredVars.forEach(r => {
+                        if (!varMap[r.proto_idx]) varMap[r.proto_idx] = new Float32Array(hidden).fill(1e-6);
+                        varMap[r.proto_idx][r.dim] = r.value;
+                    });
+
+                    meta.forEach(m => {
+                        const mean = meanMap[m.proto_idx] || new Float32Array(hidden).fill(0);
+                        const variance = varMap[m.proto_idx] || new Float32Array(hidden).fill(1e-6);
+                        protoList[m.proto_idx] = {
+                            mean,
+                            variance,
+                            size: m.proto_size || 0,
+                            accessCount: m.access_count || 0,
+                            isCore: !!m.is_core,
+                            importance: m.importance || 0,
+                            projNorms: Array(projCount).fill().map(() => new Float32Array(low).fill(0))
+                        };
+                    });
+
+                    const denseProtos = protoList.filter(p => p !== undefined);
+
+                    const entry = { protos: denseProtos };
+                    if (hasRep) {
+                        entry.repMean = new Float32Array(hidden).fill(0);
+                        entry.repProj = Array(projCount).fill().map(() => new Float32Array(low).fill(0));
+                    }
+
+                    let memoryArray;
+                    if (isAttention) memoryArray = this.#attentionMemory[idx];
+                    else if (isAdaptive) memoryArray = this.#adaptiveContext[idx];
+                    else if (isSemantic) memoryArray = this.#semanticProtos[idx];
+                    else if (isCore) memoryArray = this.#coreEpisodic[idx];
+
+                    if (isSemantic) {
+                        memoryArray = denseProtos;
+                    } else {
+                        while (memoryArray.length <= pos) memoryArray.push(null);
+                        memoryArray[pos] = entry;
+                    }
+                });
+
+                if (hasRep) {
+                    const repMeanStmt = db.prepare(`SELECT idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, dim, value FROM ${prefix}_rep_mean`);
+                    repMeanStmt.all().forEach(r => {
+                        const pos = hasWindow ? r.window : (hasEntry ? r.entry_idx : 0);
+                        const mem = isAttention ? this.#attentionMemory[r.idx] :
+                                    isAdaptive ? this.#adaptiveContext[r.idx] :
+                                    this.#coreEpisodic[r.idx];
+                        if (mem && mem[pos] && mem[pos].repMean) {
+                            mem[pos].repMean[r.dim] = r.value;
+                        }
+                    });
+
+                    const repProjStmt = db.prepare(`SELECT idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, proj_idx, dim, value FROM ${prefix}_rep_proj`);
+                    repProjStmt.all().forEach(r => {
+                        const pos = hasWindow ? r.window : (hasEntry ? r.entry_idx : 0);
+                        const mem = isAttention ? this.#attentionMemory[r.idx] :
+                                    isAdaptive ? this.#adaptiveContext[r.idx] :
+                                    this.#coreEpisodic[r.idx];
+                        if (mem && mem[pos] && mem[pos].repProj) {
+                            mem[pos].repProj[r.proj_idx][r.dim] = r.value;
+                        }
+                    });
+                }
+
+                const projNormStmt = db.prepare(`SELECT idx ${hasWindow ? ', window' : ''} ${hasEntry ? ', entry_idx' : ''}, proto_idx, proj_idx, dim, value FROM ${prefix}_projnorms`);
+                projNormStmt.all().forEach(r => {
+                    const pos = hasWindow ? r.window : (hasEntry ? r.entry_idx : 0);
+                    const mem = isAttention ? this.#attentionMemory[r.idx] :
+                                isAdaptive ? this.#adaptiveContext[r.idx] :
+                                isSemantic ? this.#semanticProtos[r.idx] :
+                                this.#coreEpisodic[r.idx];
+                    const protos = isSemantic ? mem : (mem[pos] ? mem[pos].protos : null);
+                    if (protos && protos[r.proto_idx]) {
+                        protos[r.proto_idx].projNorms[r.proj_idx][r.dim] = r.value;
+                    }
+                });
+
+                if (isAttention || isAdaptive) {
+                    for (let i = 0; i < es; i++) {
+                        const mem = isAttention ? this.#attentionMemory[i] : this.#adaptiveContext[i];
+                        while (mem.length > 0 && (!mem[mem.length - 1] || mem[mem.length - 1].protos.length === 0)) {
+                            mem.pop();
+                        }
+                    }
+                }
+            };
+
+            loadPrototypeMemory('attention');
+            loadPrototypeMemory('adaptive');
+            loadPrototypeMemory('semantic');
+            loadPrototypeMemory('core');
+
+            const transWeightStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM transformers');
+            transWeightStmt.all().forEach(({ idx, layer, weight_type, row, col, value }) => {
+                if (idx < 0 || idx >= es || !isValidNumber(value)) return;
+                const trans = this.#transformers[idx];
+                if (layer === -1 && weight_type === 'outputWeights') {
+                    if (row < hidden && col === 0) trans.outputWeights[row][0] = value;
+                } else if (layer >= 0 && layer < layers) {
+                    const att = trans.attentionWeights[layer];
+                    const ffn = trans.ffnWeights[layer];
+                    if (['Wq', 'Wk', 'Wv', 'Wo'].includes(weight_type)) {
+                        att[weight_type][row][col] = value;
+                    } else if (['gate_proj', 'up_proj'].includes(weight_type)) {
+                        ffn[weight_type][row][col] = value;
+                    } else if (weight_type === 'down_proj') {
+                        ffn.down_proj[row][col] = value;
+                    }
+                }
+            });
+
+            const transBiasStmt = db.prepare('SELECT idx, layer, bias_type, row, value FROM transformer_biases');
+            transBiasStmt.all().forEach(({ idx, layer, bias_type, row, value }) => {
+                if (idx < 0 || idx >= es || !isValidNumber(value)) return;
+                if (bias_type === 'outputBias' && layer === -1 && row === 0) {
+                    this.#transformers[idx].outputBias[0] = value;
+                }
+            });
+
+            const transNormStmt = db.prepare('SELECT idx, layer, norm_type, row, value FROM transformer_layer_norm');
+            transNormStmt.all().forEach(({ idx, layer, norm_type, row, value }) => {
+                if (idx < 0 || idx >= es || layer < 0 || layer >= layers || row < 0 || row >= hidden || !isValidNumber(value)) return;
+                this.#transformers[idx].layerNormWeights[layer][norm_type][row] = value;
+            });
+
+            const gradStmt = db.prepare('SELECT idx, layer, weight_type, row, col, value FROM gradient_accumulation');
+            gradStmt.all().forEach(({ idx, layer, weight_type, row, col, value }) => {
+                if (idx < 0 || idx >= es || !isValidNumber(value)) return;
+                const grad = this.#gradientAccumulation[idx];
+                if (layer === -1) {
+                    if (weight_type === 'outputWeights') grad.outputWeights[row][col] = value;
+                    else if (weight_type === 'outputBias') grad.outputBias[row] = value;
+                    else if (weight_type === 'attentionBias') grad.attentionBias[row] = value;
+                    else if (weight_type === 'attentionWeightMatrix') grad.attentionWeightMatrix[row] = value;
+                    else if (weight_type === 'specializationWeights') grad.specializationWeights[row][col] = value;
+                } else if (layer >= 0 && layer < layers) {
+                    if (['Wq', 'Wk', 'Wv', 'Wo'].includes(weight_type)) {
+                        grad.attentionWeights[layer][weight_type][row][col] = value;
+                    } else if (['gate_proj', 'up_proj'].includes(weight_type)) {
+                        grad.ffnWeights[layer][weight_type][row][col] = value;
+                    } else if (weight_type === 'down_proj') {
+                        grad.ffnWeights[layer].down_proj[row][col] = value;
+                    } else if (['gamma1', 'gamma2'].includes(weight_type)) {
+                        grad.layerNormWeights[layer][weight_type][row] = value;
+                    }
+                }
+            });
+
+            const priorityStmt = db.prepare('SELECT transformer_idx, rank, proto_idx FROM priority_indices ORDER BY transformer_idx, rank');
+            let currentTransformer = -1;
+            priorityStmt.all().forEach(({ transformer_idx, proto_idx }) => {
+                if (transformer_idx !== currentTransformer) {
+                    currentTransformer = transformer_idx;
+                    this.#priorityIndices[currentTransformer] = [];
+                }
+                this.#priorityIndices[currentTransformer].push(proto_idx);
+            });
+
+            const bucketStmt = db.prepare('SELECT transformer_idx, set_idx, table_idx, hash_value, proto_idx FROM semantic_lsh_buckets');
+            bucketStmt.all().forEach(({ transformer_idx, set_idx, table_idx, hash_value, proto_idx }) => {
+                const map = this.#semanticLSHBuckets[transformer_idx][set_idx][table_idx];
+                const key = BigInt(hash_value);
+                let set = map.get(key);
+                if (!set) {
+                    set = new Set();
+                    map.set(key, set);
+                }
+                set.add(proto_idx);
+            });
+
+            this.#normalizeEnsembleWeights();
+
+            return { status: true, message : 'State loaded successfully!' };
+        } catch (error) {
+            return { status: false, error: error.message, trace: error.stack };
         } finally {
-            if (db) {
-                db.close();
-            }
+            if (db) db.close();
         }
     }
 
     #saveState () {
-        const dbPath = path.join(this.#directoryPath, 'hivemind_state.db');
+        const dbPath = path.join(this.#directoryPath, this.#fileName);
         let db;
 
         try {
@@ -307,78 +499,309 @@ class HiveMind {
             db.exec('BEGIN TRANSACTION');
 
             db.exec(`
-                CREATE TABLE IF NOT EXISTS metadata (
+                DROP TABLE IF EXISTS metadata;
+                DROP TABLE IF EXISTS ensemble_weights;
+                DROP TABLE IF EXISTS performance_scores;
+                DROP TABLE IF EXISTS agreement_scores;
+                DROP TABLE IF EXISTS specialization_scores;
+                DROP TABLE IF EXISTS historical_performance;
+                DROP TABLE IF EXISTS trust_scores_history;
+                DROP TABLE IF EXISTS adaptive_learning_rate;
+                DROP TABLE IF EXISTS attention_weight_matrix;
+                DROP TABLE IF EXISTS attention_bias;
+                DROP TABLE IF EXISTS specialization_weights;
+                DROP TABLE IF EXISTS attention_memory_protos;
+                DROP TABLE IF EXISTS attention_memory_means;
+                DROP TABLE IF EXISTS attention_memory_variances;
+                DROP TABLE IF EXISTS attention_memory_rep_mean;
+                DROP TABLE IF EXISTS attention_memory_projnorms;
+                DROP TABLE IF EXISTS attention_memory_rep_proj;
+                DROP TABLE IF EXISTS adaptive_context_protos;
+                DROP TABLE IF EXISTS adaptive_context_means;
+                DROP TABLE IF EXISTS adaptive_context_variances;
+                DROP TABLE IF EXISTS adaptive_context_rep_mean;
+                DROP TABLE IF EXISTS adaptive_context_projnorms;
+                DROP TABLE IF EXISTS adaptive_context_rep_proj;
+                DROP TABLE IF EXISTS semantic_protos;
+                DROP TABLE IF EXISTS semantic_means;
+                DROP TABLE IF EXISTS semantic_variances;
+                DROP TABLE IF EXISTS semantic_projnorms;
+                DROP TABLE IF EXISTS core_episodic_protos;
+                DROP TABLE IF EXISTS core_episodic_means;
+                DROP TABLE IF EXISTS core_episodic_variances;
+                DROP TABLE IF EXISTS core_episodic_rep_mean;
+                DROP TABLE IF EXISTS core_episodic_projnorms;
+                DROP TABLE IF EXISTS core_episodic_rep_proj;
+                DROP TABLE IF EXISTS projection_matrices;
+                DROP TABLE IF EXISTS lsh_hyperplanes;
+                DROP TABLE IF EXISTS transformers;
+                DROP TABLE IF EXISTS transformer_biases;
+                DROP TABLE IF EXISTS transformer_layer_norm;
+                DROP TABLE IF EXISTS gradient_accumulation;
+                DROP TABLE IF EXISTS priority_indices;
+                DROP TABLE IF EXISTS semantic_lsh_buckets;
+            `);
+
+            db.exec(`
+                CREATE TABLE metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
-                CREATE TABLE IF NOT EXISTS ensemble_weights (
+                CREATE TABLE ensemble_weights (
                     idx INTEGER PRIMARY KEY,
                     weight REAL
                 );
-                CREATE TABLE IF NOT EXISTS performance_scores (
+                CREATE TABLE performance_scores (
                     idx INTEGER PRIMARY KEY,
                     score REAL
                 );
-                CREATE TABLE IF NOT EXISTS agreement_scores (
+                CREATE TABLE agreement_scores (
                     idx INTEGER PRIMARY KEY,
                     score REAL
                 );
-                CREATE TABLE IF NOT EXISTS specialization_scores (
+                CREATE TABLE specialization_scores (
                     idx INTEGER PRIMARY KEY,
                     score REAL
                 );
-                CREATE TABLE IF NOT EXISTS historical_performance (
+                CREATE TABLE historical_performance (
                     idx INTEGER,
                     step INTEGER,
                     score REAL,
                     PRIMARY KEY (idx, step)
                 );
-                CREATE TABLE IF NOT EXISTS trust_scores_history (
+                CREATE TABLE trust_scores_history (
                     idx INTEGER,
                     step INTEGER,
                     score REAL,
                     PRIMARY KEY (idx, step)
                 );
-                CREATE TABLE IF NOT EXISTS adaptive_learning_rate (
+                CREATE TABLE adaptive_learning_rate (
                     idx INTEGER PRIMARY KEY,
                     rate REAL
                 );
-                CREATE TABLE IF NOT EXISTS attention_weight_matrix (
+                CREATE TABLE attention_weight_matrix (
                     idx INTEGER,
                     row INTEGER,
                     value REAL,
                     PRIMARY KEY (idx, row)
                 );
-                CREATE TABLE IF NOT EXISTS attention_bias (
+                CREATE TABLE attention_bias (
                     idx INTEGER,
                     row INTEGER,
                     value REAL,
                     PRIMARY KEY (idx, row)
                 );
-                CREATE TABLE IF NOT EXISTS specialization_weights (
+                CREATE TABLE specialization_weights (
                     idx INTEGER,
                     row INTEGER,
                     col INTEGER,
                     value REAL,
                     PRIMARY KEY (idx, row, col)
                 );
-                CREATE TABLE IF NOT EXISTS attention_memory (
+
+                CREATE TABLE attention_memory_protos (
                     idx INTEGER,
                     window INTEGER,
-                    seq INTEGER,
-                    dim INTEGER,
-                    value REAL,
-                    PRIMARY KEY (idx, window, seq, dim)
+                    proto_idx INTEGER,
+                    proto_size REAL,
+                    access_count REAL,
+                    is_core INTEGER DEFAULT 0,
+                    importance REAL DEFAULT 0,
+                    PRIMARY KEY (idx, window, proto_idx)
                 );
-                CREATE TABLE IF NOT EXISTS adaptive_context (
+                CREATE TABLE attention_memory_means (
                     idx INTEGER,
                     window INTEGER,
-                    seq INTEGER,
+                    proto_idx INTEGER,
                     dim INTEGER,
                     value REAL,
-                    PRIMARY KEY (idx, window, seq, dim)
+                    PRIMARY KEY (idx, window, proto_idx, dim)
                 );
-                CREATE TABLE IF NOT EXISTS transformers (
+                CREATE TABLE attention_memory_variances (
+                    idx INTEGER,
+                    window INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proto_idx, dim)
+                );
+                CREATE TABLE attention_memory_rep_mean (
+                    idx INTEGER,
+                    window INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, dim)
+                );
+                CREATE TABLE attention_memory_projnorms (
+                    idx INTEGER,
+                    window INTEGER,
+                    proto_idx INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proto_idx, proj_idx, dim)
+                );
+                CREATE TABLE attention_memory_rep_proj (
+                    idx INTEGER,
+                    window INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proj_idx, dim)
+                );
+
+                CREATE TABLE adaptive_context_protos (
+                    idx INTEGER,
+                    window INTEGER,
+                    proto_idx INTEGER,
+                    proto_size REAL,
+                    access_count REAL,
+                    is_core INTEGER DEFAULT 0,
+                    importance REAL DEFAULT 0,
+                    PRIMARY KEY (idx, window, proto_idx)
+                );
+                CREATE TABLE adaptive_context_means (
+                    idx INTEGER,
+                    window INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proto_idx, dim)
+                );
+                CREATE TABLE adaptive_context_variances (
+                    idx INTEGER,
+                    window INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proto_idx, dim)
+                );
+                CREATE TABLE adaptive_context_rep_mean (
+                    idx INTEGER,
+                    window INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, dim)
+                );
+                CREATE TABLE adaptive_context_projnorms (
+                    idx INTEGER,
+                    window INTEGER,
+                    proto_idx INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proto_idx, proj_idx, dim)
+                );
+                CREATE TABLE adaptive_context_rep_proj (
+                    idx INTEGER,
+                    window INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, window, proj_idx, dim)
+                );
+
+                CREATE TABLE semantic_protos (
+                    idx INTEGER,
+                    proto_idx INTEGER,
+                    proto_size REAL,
+                    access_count REAL,
+                    is_core INTEGER DEFAULT 0,
+                    importance REAL DEFAULT 0,
+                    PRIMARY KEY (idx, proto_idx)
+                );
+                CREATE TABLE semantic_means (
+                    idx INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, proto_idx, dim)
+                );
+                CREATE TABLE semantic_variances (
+                    idx INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, proto_idx, dim)
+                );
+                CREATE TABLE semantic_projnorms (
+                    idx INTEGER,
+                    proto_idx INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, proto_idx, proj_idx, dim)
+                );
+
+                CREATE TABLE core_episodic_protos (
+                    idx INTEGER,
+                    entry_idx INTEGER,
+                    proto_idx INTEGER,
+                    proto_size REAL,
+                    access_count REAL,
+                    is_core INTEGER DEFAULT 0,
+                    importance REAL DEFAULT 0,
+                    PRIMARY KEY (idx, entry_idx, proto_idx)
+                );
+                CREATE TABLE core_episodic_means (
+                    idx INTEGER,
+                    entry_idx INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, entry_idx, proto_idx, dim)
+                );
+                CREATE TABLE core_episodic_variances (
+                    idx INTEGER,
+                    entry_idx INTEGER,
+                    proto_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, entry_idx, proto_idx, dim)
+                );
+                CREATE TABLE core_episodic_rep_mean (
+                    idx INTEGER,
+                    entry_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, entry_idx, dim)
+                );
+                CREATE TABLE core_episodic_projnorms (
+                    idx INTEGER,
+                    entry_idx INTEGER,
+                    proto_idx INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, entry_idx, proto_idx, proj_idx, dim)
+                );
+                CREATE TABLE core_episodic_rep_proj (
+                    idx INTEGER,
+                    entry_idx INTEGER,
+                    proj_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (idx, entry_idx, proj_idx, dim)
+                );
+
+                CREATE TABLE projection_matrices (
+                    proj_idx INTEGER,
+                    row INTEGER,
+                    col INTEGER,
+                    value REAL,
+                    PRIMARY KEY (proj_idx, row, col)
+                );
+
+                CREATE TABLE lsh_hyperplanes (
+                    set_idx INTEGER,
+                    table_idx INTEGER,
+                    bit_idx INTEGER,
+                    dim INTEGER,
+                    value REAL,
+                    PRIMARY KEY (set_idx, table_idx, bit_idx, dim)
+                );
+
+                CREATE TABLE transformers (
                     idx INTEGER,
                     layer INTEGER,
                     weight_type TEXT,
@@ -387,7 +810,7 @@ class HiveMind {
                     value REAL,
                     PRIMARY KEY (idx, layer, weight_type, row, col)
                 );
-                CREATE TABLE IF NOT EXISTS transformer_biases (
+                CREATE TABLE transformer_biases (
                     idx INTEGER,
                     layer INTEGER,
                     bias_type TEXT,
@@ -395,7 +818,7 @@ class HiveMind {
                     value REAL,
                     PRIMARY KEY (idx, layer, bias_type, row)
                 );
-                CREATE TABLE IF NOT EXISTS transformer_layer_norm (
+                CREATE TABLE transformer_layer_norm (
                     idx INTEGER,
                     layer INTEGER,
                     norm_type TEXT,
@@ -403,7 +826,7 @@ class HiveMind {
                     value REAL,
                     PRIMARY KEY (idx, layer, norm_type, row)
                 );
-                CREATE TABLE IF NOT EXISTS gradient_accumulation (
+                CREATE TABLE gradient_accumulation (
                     idx INTEGER,
                     layer INTEGER,
                     weight_type TEXT,
@@ -412,122 +835,375 @@ class HiveMind {
                     value REAL,
                     PRIMARY KEY (idx, layer, weight_type, row, col)
                 );
+
+                CREATE TABLE priority_indices (
+                    transformer_idx INTEGER,
+                    rank INTEGER,
+                    proto_idx INTEGER,
+                    PRIMARY KEY (transformer_idx, rank)
+                );
+
+                CREATE TABLE semantic_lsh_buckets (
+                    transformer_idx INTEGER,
+                    set_idx INTEGER,
+                    table_idx INTEGER,
+                    hash_value TEXT,
+                    proto_idx INTEGER,
+                    PRIMARY KEY (transformer_idx, set_idx, table_idx, hash_value, proto_idx)
+                );
             `);
 
-            const insertMetadata = db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)');
-            insertMetadata.run('trainingStepCount', (this.#trainingStepCount ?? 0).toString());
+            const insertMetadata = db.prepare('INSERT INTO metadata (key, value) VALUES (?, ?)');
 
-            const insertEnsembleWeights = db.prepare('INSERT OR REPLACE INTO ensemble_weights (idx, weight) VALUES (?, ?)');
+            const scalarFields = {
+                ensembleSize: this.#ensembleSize,
+                inputSize: this.#inputSize,
+                numLayers: this.#numLayers,
+                numHeads: this.#numHeads,
+                headDim: this.#headDim,
+                hiddenSize: this.#hiddenSize,
+                feedForwardSize: this.#feedForwardSize,
+                contextWindow: this.#contextWindow,
+                adaptiveWindow: this.#adaptiveWindow,
+                semanticMaxProtos: this.#semanticMaxProtos,
+                maxTrustHistory: this.#maxTrustHistory,
+                maxPerformanceHistory: this.#maxPerformanceHistory,
+                learningRate: this.#learningRate,
+                learningRateDecay: this.#learningRateDecay,
+                swarmIntelligenceFactor: this.#swarmIntelligenceFactor,
+                gradientResetFrequency: this.#gradientResetFrequency,
+                semanticLR: this.#semanticLR,
+                semanticBoost: this.#semanticBoost,
+                effectiveSemanticMax: this.#effectiveSemanticMax,
+                longTermMaxProtos: this.#longTermMaxProtos,
+                shortTermMaxProtos: this.#shortTermMaxProtos,
+                rawMaxProtos: this.#rawMaxProtos,
+                lowDim: this.#lowDim,
+                numProjections: this.#numProjections,
+                semanticUpdateEvery: this.#semanticUpdateEvery,
+                semanticMergeEvery: this.#semanticMergeEvery,
+                maxRetrievedProtos: this.#maxRetrievedProtos,
+                numRetrievalCandidates: this.#numRetrievalCandidates,
+                maxEpisodicConsider: this.#maxEpisodicConsider,
+                replayEvery: this.#replayEvery,
+                replaySamples: this.#replaySamples,
+                coreMaxProtos: this.#coreMaxProtos,
+                coreEpisodicMaxEntries: this.#coreEpisodicMaxEntries,
+                lshNumTables: this.#lshNumTables,
+                lshHashBits: this.#lshHashBits,
+                numLshSets: this.#numLshSets,
+                priorityMax: this.#priorityMax,
+                protocapacityFactor: this.#protoCapacityFactor,
+                baseProtoCapacity: this.#baseProtoCapacity,
+                memoryFactor: this.#memoryFactor,
+                maxVariancePerDim: this.#maxVariancePerDim,
+                tempOverloadFactor: this.#tempOverloadFactor,
+                mergeTrimFactor : this.#mergeTrimFactor,
+                trainingStepCount: this.#trainingStepCount ?? 0
+            };
+
+            for (const [key, value] of Object.entries(scalarFields)) {
+                const strValue = (typeof value === 'string') ? value : value.toString();
+                insertMetadata.run(key, strValue);
+            }
+
+            this.#semanticStepCounters.forEach((counter, idx) => {
+                insertMetadata.run(`semanticStepCounter_${idx}`, counter.toString());
+            });
+            this.#semanticMergeCounters.forEach((counter, idx) => {
+                insertMetadata.run(`semanticMergeCounter_${idx}`, counter.toString());
+            });
+
+            const insertEnsembleWeights = db.prepare('INSERT INTO ensemble_weights (idx, weight) VALUES (?, ?)');
             this.#ensembleWeights.forEach((weight, idx) => {
-                if (isValidNumber(weight)) {
-                    insertEnsembleWeights.run(idx, weight);
-                }
+                if (isValidNumber(weight)) insertEnsembleWeights.run(idx, weight);
             });
 
-            const insertPerformanceScores = db.prepare('INSERT OR REPLACE INTO performance_scores (idx, score) VALUES (?, ?)');
+            const insertPerformanceScores = db.prepare('INSERT INTO performance_scores (idx, score) VALUES (?, ?)');
             this.#performanceScores.forEach((score, idx) => {
-                if (isValidNumber(score)) {
-                    insertPerformanceScores.run(idx, score);
-                }
+                if (isValidNumber(score)) insertPerformanceScores.run(idx, score);
             });
 
-            const insertAgreementScores = db.prepare('INSERT OR REPLACE INTO agreement_scores (idx, score) VALUES (?, ?)');
+            const insertAgreementScores = db.prepare('INSERT INTO agreement_scores (idx, score) VALUES (?, ?)');
             this.#agreementScores.forEach((score, idx) => {
-                if (isValidNumber(score)) {
-                    insertAgreementScores.run(idx, score);
-                }
+                if (isValidNumber(score)) insertAgreementScores.run(idx, score);
             });
 
-            const insertSpecializationScores = db.prepare('INSERT OR REPLACE INTO specialization_scores (idx, score) VALUES (?, ?)');
+            const insertSpecializationScores = db.prepare('INSERT INTO specialization_scores (idx, score) VALUES (?, ?)');
             this.#specializationScores.forEach((score, idx) => {
-                if (isValidNumber(score)) {
-                    insertSpecializationScores.run(idx, score);
-                }
+                if (isValidNumber(score)) insertSpecializationScores.run(idx, score);
             });
 
-            const insertHistoricalPerformance = db.prepare('INSERT OR REPLACE INTO historical_performance (idx, step, score) VALUES (?, ?, ?)');
+            const insertHistoricalPerformance = db.prepare('INSERT INTO historical_performance (idx, step, score) VALUES (?, ?, ?)');
             this.#historicalPerformance.forEach((history, idx) => {
                 history.forEach((score, step) => {
-                    if (isValidNumber(score)) {
-                        insertHistoricalPerformance.run(idx, step, score);
-                    }
+                    if (isValidNumber(score)) insertHistoricalPerformance.run(idx, step, score);
                 });
             });
 
-            const insertTrustScoresHistory = db.prepare('INSERT OR REPLACE INTO trust_scores_history (idx, step, score) VALUES (?, ?, ?)');
+            const insertTrustScoresHistory = db.prepare('INSERT INTO trust_scores_history (idx, step, score) VALUES (?, ?, ?)');
             this.#trustScoresHistory.forEach((history, idx) => {
                 history.forEach((score, step) => {
-                    if (isValidNumber(score)) {
-                        insertTrustScoresHistory.run(idx, step, score);
-                    }
+                    if (isValidNumber(score)) insertTrustScoresHistory.run(idx, step, score);
                 });
             });
 
-            const insertAdaptiveLearningRate = db.prepare('INSERT OR REPLACE INTO adaptive_learning_rate (idx, rate) VALUES (?, ?)');
+            const insertAdaptiveLearningRate = db.prepare('INSERT INTO adaptive_learning_rate (idx, rate) VALUES (?, ?)');
             this.#adaptiveLearningRate.forEach((rate, idx) => {
-                if (isValidNumber(rate)) {
-                    insertAdaptiveLearningRate.run(idx, rate);
-                }
+                if (isValidNumber(rate)) insertAdaptiveLearningRate.run(idx, rate);
             });
 
-            const insertAttentionWeightMatrix = db.prepare('INSERT OR REPLACE INTO attention_weight_matrix (idx, row, value) VALUES (?, ?, ?)');
+            const insertAttentionWeightMatrix = db.prepare('INSERT INTO attention_weight_matrix (idx, row, value) VALUES (?, ?, ?)');
             this.#attentionWeightMatrix.forEach((weights, idx) => {
                 weights.forEach((value, row) => {
-                    if (isValidNumber(value)) {
-                        insertAttentionWeightMatrix.run(idx, row, value);
-                    }
+                    if (isValidNumber(value)) insertAttentionWeightMatrix.run(idx, row, value);
                 });
             });
 
-            const insertAttentionBias = db.prepare('INSERT OR REPLACE INTO attention_bias (idx, row, value) VALUES (?, ?, ?)');
+            const insertAttentionBias = db.prepare('INSERT INTO attention_bias (idx, row, value) VALUES (?, ?, ?)');
             this.#attentionBias.forEach((biases, idx) => {
                 biases.forEach((value, row) => {
-                    if (isValidNumber(value)) {
-                        insertAttentionBias.run(idx, row, value);
-                    }
+                    if (isValidNumber(value)) insertAttentionBias.run(idx, row, value);
                 });
             });
 
-            const insertSpecializationWeights = db.prepare('INSERT OR REPLACE INTO specialization_weights (idx, row, col, value) VALUES (?, ?, ?, ?)');
+            const insertSpecializationWeights = db.prepare('INSERT INTO specialization_weights (idx, row, col, value) VALUES (?, ?, ?, ?)');
             this.#specializationWeights.forEach((matrix, idx) => {
                 matrix.forEach((rowArr, r) => {
                     rowArr.forEach((value, c) => {
-                        if (isValidNumber(value)) {
-                            insertSpecializationWeights.run(idx, r, c, value);
+                        if (isValidNumber(value)) insertSpecializationWeights.run(idx, r, c, value);
+                    });
+                });
+            });
+
+            const insertProjection = db.prepare('INSERT INTO projection_matrices (proj_idx, row, col, value) VALUES (?, ?, ?, ?)');
+            this.#projectionMatrices.forEach((matrix, proj_idx) => {
+                matrix.forEach((rowArr, r) => {
+                    rowArr.forEach((value, c) => {
+                        if (isValidNumber(value)) insertProjection.run(proj_idx, r, c, value);
+                    });
+                });
+            });
+
+            const insertLsh = db.prepare('INSERT INTO lsh_hyperplanes (set_idx, table_idx, bit_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            this.#lshHyperplanes.forEach((setArr, set_idx) => {
+                setArr.forEach((tableArr, table_idx) => {
+                    tableArr.forEach((vec, bit_idx) => {
+                        vec.forEach((value, dim) => {
+                            if (isValidNumber(value)) insertLsh.run(set_idx, table_idx, bit_idx, dim, value);
+                        });
+                    });
+                });
+            });
+
+            const insertAttentionProto = db.prepare('INSERT INTO attention_memory_protos (idx, window, proto_idx, proto_size, access_count, is_core, importance) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            const insertAttentionMean = db.prepare('INSERT INTO attention_memory_means (idx, window, proto_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            const insertAttentionVariance = db.prepare('INSERT INTO attention_memory_variances (idx, window, proto_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            const insertAttentionRepMean = db.prepare('INSERT INTO attention_memory_rep_mean (idx, window, dim, value) VALUES (?, ?, ?, ?)');
+            const insertAttentionProjNorm = db.prepare('INSERT INTO attention_memory_projnorms (idx, window, proto_idx, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertAttentionRepProj = db.prepare('INSERT INTO attention_memory_rep_proj (idx, window, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+
+            this.#attentionMemory.forEach((memoryWindows, idx) => {
+                memoryWindows.forEach((entry, window) => {
+                    if (entry.repMean) {
+                        entry.repMean.forEach((value, dim) => {
+                            if (isValidNumber(value)) insertAttentionRepMean.run(idx, window, dim, value);
+                        });
+                    }
+                    if (entry.repProj && Array.isArray(entry.repProj)) {
+                        entry.repProj.forEach((projVec, proj_idx) => {
+                            if (projVec && projVec.forEach) {
+                                projVec.forEach((value, dim) => {
+                                    if (isValidNumber(value)) insertAttentionRepProj.run(idx, window, proj_idx, dim, value);
+                                });
+                            }
+                        });
+                    }
+
+                    entry.protos.forEach((proto, proto_idx) => {
+                        insertAttentionProto.run(
+                            idx, window, proto_idx,
+                            proto.size ?? 0,
+                            proto.accessCount ?? 0,
+                            proto.isCore ? 1 : 0,
+                            proto.importance ?? 0
+                        );
+
+                        if (proto.mean && proto.mean.forEach) {
+                            proto.mean.forEach((value, dim) => {
+                                if (isValidNumber(value)) insertAttentionMean.run(idx, window, proto_idx, dim, value);
+                            });
+                        }
+                        if (proto.variance && proto.variance.forEach) {
+                            proto.variance.forEach((value, dim) => {
+                                if (isValidNumber(value)) insertAttentionVariance.run(idx, window, proto_idx, dim, value);
+                            });
+                        }
+                        if (proto.projNorms && Array.isArray(proto.projNorms)) {
+                            proto.projNorms.forEach((projVec, proj_idx) => {
+                                if (projVec && projVec.forEach) {
+                                    projVec.forEach((value, dim) => {
+                                        if (isValidNumber(value)) insertAttentionProjNorm.run(idx, window, proto_idx, proj_idx, dim, value);
+                                    });
+                                }
+                            });
                         }
                     });
                 });
             });
 
-            const insertAttentionMemory = db.prepare('INSERT OR REPLACE INTO attention_memory (idx, window, seq, dim, value) VALUES (?, ?, ?, ?, ?)');
-            this.#attentionMemory.forEach((memory, idx) => {
-                memory.forEach((window, w) => {
-                    window.forEach((seq, s) => {
-                        seq.forEach((value, d) => {
-                            if (isValidNumber(value)) {
-                                insertAttentionMemory.run(idx, w, s, d, value);
+            const insertAdaptiveProto = db.prepare('INSERT INTO adaptive_context_protos (idx, window, proto_idx, proto_size, access_count, is_core, importance) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            const insertAdaptiveMean = db.prepare('INSERT INTO adaptive_context_means (idx, window, proto_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            const insertAdaptiveVariance = db.prepare('INSERT INTO adaptive_context_variances (idx, window, proto_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            const insertAdaptiveRepMean = db.prepare('INSERT INTO adaptive_context_rep_mean (idx, window, dim, value) VALUES (?, ?, ?, ?)');
+            const insertAdaptiveProjNorm = db.prepare('INSERT INTO adaptive_context_projnorms (idx, window, proto_idx, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertAdaptiveRepProj = db.prepare('INSERT INTO adaptive_context_rep_proj (idx, window, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+
+            this.#adaptiveContext.forEach((memoryWindows, idx) => {
+                memoryWindows.forEach((entry, window) => {
+                    if (entry.repMean) {
+                        entry.repMean.forEach((value, dim) => {
+                            if (isValidNumber(value)) insertAdaptiveRepMean.run(idx, window, dim, value);
+                        });
+                    }
+                    if (entry.repProj && Array.isArray(entry.repProj)) {
+                        entry.repProj.forEach((projVec, proj_idx) => {
+                            if (projVec && projVec.forEach) {
+                                projVec.forEach((value, dim) => {
+                                    if (isValidNumber(value)) insertAdaptiveRepProj.run(idx, window, proj_idx, dim, value);
+                                });
                             }
                         });
+                    }
+
+                    entry.protos.forEach((proto, proto_idx) => {
+                        insertAdaptiveProto.run(
+                            idx, window, proto_idx,
+                            proto.size ?? 0,
+                            proto.accessCount ?? 0,
+                            proto.isCore ? 1 : 0,
+                            proto.importance ?? 0
+                        );
+
+                        if (proto.mean && proto.mean.forEach) {
+                            proto.mean.forEach((value, dim) => {
+                                if (isValidNumber(value)) insertAdaptiveMean.run(idx, window, proto_idx, dim, value);
+                            });
+                        }
+                        if (proto.variance && proto.variance.forEach) {
+                            proto.variance.forEach((value, dim) => {
+                                if (isValidNumber(value)) insertAdaptiveVariance.run(idx, window, proto_idx, dim, value);
+                            });
+                        }
+                        if (proto.projNorms && Array.isArray(proto.projNorms)) {
+                            proto.projNorms.forEach((projVec, proj_idx) => {
+                                if (projVec && projVec.forEach) {
+                                    projVec.forEach((value, dim) => {
+                                        if (isValidNumber(value)) insertAdaptiveProjNorm.run(idx, window, proto_idx, proj_idx, dim, value);
+                                    });
+                                }
+                            });
+                        }
                     });
                 });
             });
 
-            const insertAdaptiveContext = db.prepare('INSERT OR REPLACE INTO adaptive_context (idx, window, seq, dim, value) VALUES (?, ?, ?, ?, ?)');
-            this.#adaptiveContext.forEach((memory, idx) => {
-                memory.forEach((window, w) => {
-                    window.forEach((seq, s) => {
-                        seq.forEach((value, d) => {
-                            if (isValidNumber(value)) {
-                                insertAdaptiveContext.run(idx, w, s, d, value);
+            const insertSemanticProto = db.prepare('INSERT INTO semantic_protos (idx, proto_idx, proto_size, access_count, is_core, importance) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertSemanticMean = db.prepare('INSERT INTO semantic_means (idx, proto_idx, dim, value) VALUES (?, ?, ?, ?)');
+            const insertSemanticVariance = db.prepare('INSERT INTO semantic_variances (idx, proto_idx, dim, value) VALUES (?, ?, ?, ?)');
+            const insertSemanticProjNorm = db.prepare('INSERT INTO semantic_projnorms (idx, proto_idx, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+
+            this.#semanticProtos.forEach((protos, idx) => {
+                protos.forEach((proto, proto_idx) => {
+                    insertSemanticProto.run(
+                        idx, proto_idx,
+                        proto.size ?? 0,
+                        proto.accessCount ?? 0,
+                        proto.isCore ? 1 : 0,
+                        proto.importance ?? 0
+                    );
+
+                    if (proto.mean && proto.mean.forEach) {
+                        proto.mean.forEach((value, dim) => {
+                            if (isValidNumber(value)) insertSemanticMean.run(idx, proto_idx, dim, value);
+                        });
+                    }
+                    if (proto.variance && proto.variance.forEach) {
+                        proto.variance.forEach((value, dim) => {
+                            if (isValidNumber(value)) insertSemanticVariance.run(idx, proto_idx, dim, value);
+                        });
+                    }
+                    if (proto.projNorms && Array.isArray(proto.projNorms)) {
+                        proto.projNorms.forEach((projVec, proj_idx) => {
+                            if (projVec && projVec.forEach) {
+                                projVec.forEach((value, dim) => {
+                                    if (isValidNumber(value)) insertSemanticProjNorm.run(idx, proto_idx, proj_idx, dim, value);
+                                });
                             }
                         });
+                    }
+                });
+            });
+
+            const insertCoreProto = db.prepare('INSERT INTO core_episodic_protos (idx, entry_idx, proto_idx, proto_size, access_count, is_core, importance) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            const insertCoreMean = db.prepare('INSERT INTO core_episodic_means (idx, entry_idx, proto_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            const insertCoreVariance = db.prepare('INSERT INTO core_episodic_variances (idx, entry_idx, proto_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+            const insertCoreRepMean = db.prepare('INSERT INTO core_episodic_rep_mean (idx, entry_idx, dim, value) VALUES (?, ?, ?, ?)');
+            const insertCoreProjNorm = db.prepare('INSERT INTO core_episodic_projnorms (idx, entry_idx, proto_idx, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertCoreRepProj = db.prepare('INSERT INTO core_episodic_rep_proj (idx, entry_idx, proj_idx, dim, value) VALUES (?, ?, ?, ?, ?)');
+
+            this.#coreEpisodic.forEach((entries, idx) => {
+                entries.forEach((entry, entry_idx) => {
+                    if (entry.repMean) {
+                        entry.repMean.forEach((value, dim) => {
+                            if (isValidNumber(value)) insertCoreRepMean.run(idx, entry_idx, dim, value);
+                        });
+                    }
+                    if (entry.repProj && Array.isArray(entry.repProj)) {
+                        entry.repProj.forEach((projVec, proj_idx) => {
+                            if (projVec && projVec.forEach) {
+                                projVec.forEach((value, dim) => {
+                                    if (isValidNumber(value)) insertCoreRepProj.run(idx, entry_idx, proj_idx, dim, value);
+                                });
+                            }
+                        });
+                    }
+
+                    entry.protos.forEach((proto, proto_idx) => {
+                        insertCoreProto.run(
+                            idx, entry_idx, proto_idx,
+                            proto.size ?? 0,
+                            proto.accessCount ?? 0,
+                            proto.isCore ? 1 : 0,
+                            proto.importance ?? 0
+                        );
+
+                        if (proto.mean && proto.mean.forEach) {
+                            proto.mean.forEach((value, dim) => {
+                                if (isValidNumber(value)) insertCoreMean.run(idx, entry_idx, proto_idx, dim, value);
+                            });
+                        }
+                        if (proto.variance && proto.variance.forEach) {
+                            proto.variance.forEach((value, dim) => {
+                                if (isValidNumber(value)) insertCoreVariance.run(idx, entry_idx, proto_idx, dim, value);
+                            });
+                        }
+                        if (proto.projNorms && Array.isArray(proto.projNorms)) {
+                            proto.projNorms.forEach((projVec, proj_idx) => {
+                                if (projVec && projVec.forEach) {
+                                    projVec.forEach((value, dim) => {
+                                        if (isValidNumber(value)) insertCoreProjNorm.run(idx, entry_idx, proto_idx, proj_idx, dim, value);
+                                    });
+                                }
+                            });
+                        }
                     });
                 });
             });
 
-            const insertTransformerWeights = db.prepare('INSERT OR REPLACE INTO transformers (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
-            const insertTransformerLayerNorm = db.prepare('INSERT OR REPLACE INTO transformer_layer_norm (idx, layer, norm_type, row, value) VALUES (?, ?, ?, ?, ?)');
-            const insertTransformerBiases = db.prepare('INSERT OR REPLACE INTO transformer_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
+            const insertTransformerWeights = db.prepare('INSERT INTO transformers (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertTransformerLayerNorm = db.prepare('INSERT INTO transformer_layer_norm (idx, layer, norm_type, row, value) VALUES (?, ?, ?, ?, ?)');
+            const insertTransformerBiases = db.prepare('INSERT INTO transformer_biases (idx, layer, bias_type, row, value) VALUES (?, ?, ?, ?, ?)');
 
             this.#transformers.forEach((transformer, idx) => {
                 transformer.attentionWeights.forEach((layerWeights, layer) => {
@@ -581,7 +1257,7 @@ class HiveMind {
                 });
             });
 
-            const insertGradientAccumulation = db.prepare('INSERT OR REPLACE INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
+            const insertGradientAccumulation = db.prepare('INSERT INTO gradient_accumulation (idx, layer, weight_type, row, col, value) VALUES (?, ?, ?, ?, ?, ?)');
 
             this.#gradientAccumulation.forEach((grad, idx) => {
                 grad.outputWeights.forEach((rowArr, r) => {
@@ -652,6 +1328,31 @@ class HiveMind {
                 });
             });
 
+            const insertPriority = db.prepare('INSERT INTO priority_indices (transformer_idx, rank, proto_idx) VALUES (?, ?, ?)');
+            this.#priorityIndices.forEach((indices, transformer_idx) => {
+                indices.forEach((proto_idx, rank) => {
+                    if (Number.isInteger(proto_idx)) {
+                        insertPriority.run(transformer_idx, rank, proto_idx);
+                    }
+                });
+            });
+
+            const insertLshBucket = db.prepare('INSERT INTO semantic_lsh_buckets (transformer_idx, set_idx, table_idx, hash_value, proto_idx) VALUES (?, ?, ?, ?, ?)');
+            this.#semanticLSHBuckets.forEach((sets, transformer_idx) => {
+                sets.forEach((tables, set_idx) => {
+                    tables.forEach((bucketMap, table_idx) => {
+                        bucketMap.forEach((protoSet, hashKey) => {
+                            const hashStr = hashKey.toString();
+                            protoSet.forEach(proto_idx => {
+                                if (Number.isInteger(proto_idx)) {
+                                    insertLshBucket.run(transformer_idx, set_idx, table_idx, hashStr, proto_idx);
+                                }
+                            });
+                        });
+                    });
+                });
+            });
+
             db.exec('COMMIT');
 
             return { status: true };
@@ -666,10 +1367,9 @@ class HiveMind {
             if (db) db.close();
         }
     }
-    
-    #scaleAndSetDimensions (dp, es, is) {
-        this.#directoryPath = dp;
-        this.#ensembleSize = Math.max(1, es);
+
+    #scaleAndSetDimensions (es, is) {
+        this.#ensembleSize = es;
         this.#inputSize = is;
 
         const logEs = Math.log10(this.#ensembleSize);
@@ -691,11 +1391,50 @@ class HiveMind {
         const ffnMultiplier = 8.0 - 4.0 * normalized;
         this.#feedForwardSize = Math.round(this.#hiddenSize * ffnMultiplier);
 
-        const memoryFactor = 1 + 0.5 * logEs;
-        this.#contextWindow = Math.round(this.#hiddenSize * 2 * memoryFactor);
+        this.#protoCapacityFactor = 1 - 0.5 * normalized;
+        this.#memoryFactor = 1 + 1.5 * normalized;
+
+        const rawBase = Math.round(this.#hiddenSize * 0.188 * this.#protoCapacityFactor);
+        const minBase = Math.max(4, Math.round(this.#hiddenSize / 32));
+        this.#baseProtoCapacity = Math.max(minBase, rawBase);
+
+        this.#maxVariancePerDim = Number((8 + 25 * this.#protoCapacityFactor + 0.05 * this.#hiddenSize).toFixed(4));
+
+        this.#semanticLR = Number((0.02 + 0.04 * this.#protoCapacityFactor).toFixed(4));
+        this.#semanticBoost = Math.round(5 + 15 * this.#protoCapacityFactor);
+
+        const longTermMultiplier = 0.4 + 0.6 * this.#protoCapacityFactor;
+        const shortTermMultiplier = 0.8 + 0.7 * this.#protoCapacityFactor;
+        const rawMultiplier = 0.6 + 0.8 * this.#protoCapacityFactor;
+        const coreMultiplier = 1.0 + 1.5 * this.#protoCapacityFactor;
+        const semanticMultiplier = 2.0 + 4.0 * this.#protoCapacityFactor;
+        const coreEpisodicMultiplier = 0.8 + 1.2 * this.#protoCapacityFactor;
+        const retrievalMultiplier = semanticMultiplier;
+        const candidatesMultiplier = 2 * semanticMultiplier;
+
+        this.#longTermMaxProtos = Math.round(this.#baseProtoCapacity * longTermMultiplier);
+        this.#shortTermMaxProtos = Math.round(this.#baseProtoCapacity * shortTermMultiplier);
+        this.#rawMaxProtos = Math.round(this.#baseProtoCapacity * rawMultiplier);
+        this.#semanticMaxProtos = Math.round(this.#baseProtoCapacity * semanticMultiplier);
+        this.#effectiveSemanticMax = Math.round(this.#semanticMaxProtos * (1.1 + 0.15 * this.#protoCapacityFactor));
+
+        this.#coreMaxProtos = Math.round(this.#baseProtoCapacity * coreMultiplier);
+        this.#coreEpisodicMaxEntries = Math.round(this.#baseProtoCapacity * coreEpisodicMultiplier);
+
+        this.#contextWindow = Math.round(this.#hiddenSize * 2.5 * this.#memoryFactor);
         this.#adaptiveWindow = Math.max(1, Math.round(this.#contextWindow * 0.25));
+        
         this.#maxTrustHistory = Math.round(this.#contextWindow * 2);
         this.#maxPerformanceHistory = Math.round(this.#contextWindow * 4);
+
+        const targetProportion = 0.35 + 0.3 * this.#protoCapacityFactor;
+        const minLowDim = Math.max(4, Math.round(this.#hiddenSize * 0.18));
+        const maxLowDim = Math.round(this.#hiddenSize * 0.78);
+        const candidate = Math.round(this.#hiddenSize * targetProportion);
+        this.#lowDim = Math.max(minLowDim, Math.min(maxLowDim, candidate));
+
+        const numProjectionsRaw = 16.0 - 10.0 * normalized;
+        this.#numProjections = Math.max(6, Math.round(numProjectionsRaw));
 
         const baseLrUnscaled = 0.12 / Math.max(this.#inputSize, 1);
         const sizeScale = Math.pow(this.#hiddenSize, -0.18);
@@ -704,7 +1443,44 @@ class HiveMind {
 
         this.#swarmIntelligenceFactor = Number((0.05 + 0.90 * normalized).toFixed(6));
 
-        this.#gradientResetFrequency = Math.min(100, 10 + Math.ceil((this.#ensembleSize - 1) / 10));
+        const baseFreq = 10 + Math.ceil(this.#ensembleSize / 8);
+        this.#gradientResetFrequency = baseFreq + Math.round(50 * this.#swarmIntelligenceFactor);
+
+        this.#maxRetrievedProtos = Math.round(this.#baseProtoCapacity * retrievalMultiplier);
+        this.#numRetrievalCandidates = Math.round(this.#baseProtoCapacity * candidatesMultiplier);
+        
+        this.#semanticUpdateEvery = Math.round(2 + 8 * this.#protoCapacityFactor);
+        this.#semanticMergeEvery  = Math.round(8 + 24 * this.#protoCapacityFactor);
+
+        this.#maxEpisodicConsider = Math.round(this.#contextWindow * (0.4 + 0.2 * this.#memoryFactor));
+        this.#replayEvery = Math.round(15 + 40 * this.#protoCapacityFactor);
+        this.#replaySamples = Math.round(this.#baseProtoCapacity * (0.5 + 0.5 * this.#protoCapacityFactor));
+
+        this.#priorityMax = this.#maxRetrievedProtos;
+
+        this.#numLshSets = Math.max(1, Math.floor(this.#numProjections / 3));
+
+        const dimScale = Math.max(1, Math.log2(this.#lowDim / 4));
+        const capacityScale = Math.max(0.5, this.#protoCapacityFactor);
+        const dimFactor = Math.max(1, Math.log2(this.#lowDim / 8));
+        const rawTables = Math.round((16 + 48 * this.#protoCapacityFactor) * dimScale);
+        const rawBits = Math.round((24 + 72 * this.#protoCapacityFactor) * dimScale);
+
+        this.#lshNumTables = Math.max(Math.round(4 * capacityScale * dimFactor), Math.min(Math.round(768 * capacityScale), rawTables));
+        this.#lshHashBits = Math.max(Math.round(12 * capacityScale * dimFactor), Math.min(Math.round(384 * capacityScale), rawBits));
+
+        this.#tempOverloadFactor = 2.0 + 1.0 * (1 - this.#protoCapacityFactor);
+        this.#mergeTrimFactor = 1.5 + 0.5 * (1 - this.#protoCapacityFactor);
+
+        this.#projectionMatrices = Array.from({length: this.#numProjections}, () => this.#generateProjectionMatrix());
+
+        this.#lshHyperplanes = Array.from({length: this.#numLshSets}, () => this.#generateLshHyperplanesLow());
+
+        this.#semanticLSHBuckets = Array(this.#ensembleSize).fill().map(() => 
+            Array(this.#numLshSets).fill().map(() => 
+                Array(this.#lshNumTables).fill().map(() => new Map())
+            )
+        );
 
         this.#performanceScores = Array(this.#ensembleSize).fill(0);
         this.#agreementScores = Array(this.#ensembleSize).fill(0);
@@ -718,13 +1494,14 @@ class HiveMind {
         );
         this.#normalizeEnsembleWeights();
 
-        this.#attentionMemory = Array(this.#ensembleSize).fill().map(() =>
-            Array(this.#contextWindow).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)))
-        );
+        this.#attentionMemory = Array(this.#ensembleSize).fill().map(() => []);
+        this.#adaptiveContext = Array(this.#ensembleSize).fill().map(() => []);
+        this.#semanticProtos = Array(this.#ensembleSize).fill().map(() => []);
+        this.#coreEpisodic = Array(this.#ensembleSize).fill().map(() => []);
+        this.#priorityIndices = Array(this.#ensembleSize).fill().map(() => []);
 
-        this.#adaptiveContext = Array(this.#ensembleSize).fill().map(() =>
-            Array(this.#adaptiveWindow).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)))
-        );
+        this.#semanticStepCounters = Array(this.#ensembleSize).fill(0);
+        this.#semanticMergeCounters = Array(this.#ensembleSize).fill(0);
 
         this.#attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() =>
             this.#dynamicInit(this.#hiddenSize, 1, 0, 1).map(row => row[0])
@@ -738,7 +1515,7 @@ class HiveMind {
             Array(this.#hiddenSize).fill().map((_, j) =>
                 Array(this.#hiddenSize).fill().map((_, k) => {
                     const baseWeights = this.#dynamicInit(this.#hiddenSize, this.#hiddenSize, 0, 1);
-                    const scale = 1 + 0.1 * (j + k / this.#hiddenSize);
+                    const scale = 1 + 0.1 * (j / this.#hiddenSize + k / this.#hiddenSize);
                     return baseWeights[j][k] * scale;
                 })
             )
@@ -839,24 +1616,124 @@ class HiveMind {
         return exp.map(x => x / sum);
     }
 
+    #randomNormal(mean = 0, stdDev = 1) {
+        let sum = 0;
+        for (let i = 0; i < 12; i += 1) {
+            sum += Math.random();
+        }
+        return mean + stdDev * (sum - 6);
+    }
+
+    #generateProjectionMatrix() {
+        const invSqrtLow = 1 / Math.sqrt(this.#lowDim);
+        const matrix = new Array(this.#hiddenSize);
+        for (let d = 0; d < this.#hiddenSize; d++) {
+            const row = new Float32Array(this.#lowDim);
+            for (let l = 0; l < this.#lowDim; l++) {
+                const u = 1 - Math.random();
+                const v = Math.random();
+                const g = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+                row[l] = g * invSqrtLow;
+            }
+            matrix[d] = row;
+        }
+        return matrix;
+    }
+
+    #generateLshHyperplanesLow() {
+        return Array.from({length: this.#lshNumTables}, () =>
+            Array.from({length: this.#lshHashBits}, () => {
+                const vec = new Float32Array(this.#lowDim);
+                let normSq = 0;
+                for (let d = 0; d < this.#lowDim; d++) {
+                    vec[d] = this.#randomNormal(0, 1);
+                    normSq += vec[d] * vec[d];
+                }
+                const norm = Math.sqrt(normSq) || 1;
+                for (let d = 0; d < this.#lowDim; d++) {
+                    vec[d] /= norm;
+                }
+                return vec;
+            })
+        );
+    }
+
+    #computeProjNorms(mean) {
+        const projs = [];
+        for (let np = 0; np < this.#numProjections; np++) {
+            const proj = new Float32Array(this.#lowDim).fill(0);
+            for (let d = 0; d < this.#hiddenSize; d++) {
+                const val = mean[d];
+                const row = this.#projectionMatrices[np][d];
+                for (let l = 0; l < this.#lowDim; l++) {
+                    proj[l] += val * row[l];
+                }
+            }
+            let norm = 0;
+            for (let l = 0; l < this.#lowDim; l++) norm += proj[l] * proj[l];
+            norm = Math.sqrt(norm);
+            if (norm < 1e-8) norm = 1;
+            for (let l = 0; l < this.#lowDim; l++) proj[l] /= norm;
+            projs.push(proj);
+        }
+        return projs;
+    }
+
+    #projSimilarity(projsA, projsB) {
+        if (!projsA || !projsB || projsA.length !== this.#numProjections || projsB.length !== this.#numProjections) {
+            return 0;
+        }
+        let sumSim = 0;
+        for (let np = 0; np < this.#numProjections; np++) {
+            let dot = 0;
+            for (let l = 0; l < this.#lowDim; l++) {
+                dot += projsA[np][l] * projsB[np][l];
+            }
+            sumSim += dot;
+        }
+        return sumSim / this.#numProjections;
+    }
+
+    #computeProtoUtility(proto) {
+        if (!proto || !proto.mean || proto.mean.length !== this.#hiddenSize) return 0;
+
+        let varSum = 0;
+        for (let j = 0; j < this.#hiddenSize; j++) {
+            varSum += proto.variance[j];
+        }
+        const avgVariance = varSum / this.#hiddenSize;
+
+        const importanceFactor = 1 + 0.2 * Math.sqrt(Math.max(0, proto.importance || 0));
+
+        return proto.size * proto.accessCount * (1 + Math.sqrt(Math.max(avgVariance, 1e-6))) * importanceFactor;
+    }
+
     #rmsNorm (x, gamma, eps = 1e-6) {
-        if (
-            !Array.isArray(x) || x.length !== this.#hiddenSize ||
-            !Array.isArray(gamma) || gamma.length !== this.#hiddenSize ||
-            !x.every(isValidNumber) || !gamma.every(isValidNumber)
-        ) {
+        if (!Array.isArray(x) || x.length !== this.#hiddenSize ||
+            !Array.isArray(gamma) || gamma.length !== this.#hiddenSize) {
             return Array(this.#hiddenSize).fill(0);
         }
 
-        const sq_sum = x.reduce((sum, val) => sum + val * val, 0);
+        let sq_sum = 0;
+        for (let i = 0; i < this.#hiddenSize; i++) {
+            const val = x[i];
+            sq_sum += val * val;
+        }
         const rms = Math.sqrt(sq_sum / this.#hiddenSize + eps);
-        return x.map((val, i) => val * gamma[i] / rms);
+
+        const output = Array(this.#hiddenSize);
+        for (let i = 0; i < this.#hiddenSize; i++) {
+            output[i] = x[i] * gamma[i] / rms;
+        }
+        return output;
     }
 
     #applyRoPE (matrix, startPos = 0) {
         if (!Array.isArray(matrix) || matrix.length === 0 || !matrix[0] || matrix[0].length !== this.#hiddenSize) return;
+
         const head_dim = this.#hiddenSize / this.#numHeads;
         if (head_dim % 2 !== 0) return;
+
         const base = 10000.0;
         const seqLen = matrix.length;
 
@@ -871,9 +1748,10 @@ class HiveMind {
                     const sin = Math.sin(theta);
                     const idx1 = offset + 2 * i;
                     const idx2 = offset + 2 * i + 1;
+
                     const x = matrix[pos][idx1];
                     const y = matrix[pos][idx2];
-                    if (!isValidNumber(x) || !isValidNumber(y)) continue;
+
                     matrix[pos][idx1] = x * cos - y * sin;
                     matrix[pos][idx2] = x * sin + y * cos;
                 }
@@ -883,20 +1761,21 @@ class HiveMind {
 
     #weightedMean (protos) {
         if (!Array.isArray(protos) || protos.length === 0) {
-            return Array(this.#hiddenSize).fill(0);
+            return new Float32Array(this.#hiddenSize);
         }
         let totalSize = 0;
         for (const p of protos) {
             totalSize += p.size || 0;
         }
         if (totalSize === 0) {
-            return Array(this.#hiddenSize).fill(0);
+            return new Float32Array(this.#hiddenSize);
         }
-        const rep = Array(this.#hiddenSize).fill(0);
+        const rep = new Float32Array(this.#hiddenSize);
         for (const p of protos) {
             const weight = p.size / totalSize;
+            const m = p.mean;
             for (let j = 0; j < this.#hiddenSize; j++) {
-                rep[j] += (p.mean[j] || 0) * weight;
+                rep[j] += m[j] * weight;
             }
         }
         return rep;
@@ -916,32 +1795,428 @@ class HiveMind {
 
     #cosineSimilarity (a, b) {
         let dot = 0, normA = 0, normB = 0;
-        for (let i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] ** 2;
-            normB += b[i] ** 2;
+        const len = a.length;
+        for (let i = 0; i < len; i++) {
+            const ai = a[i];
+            const bi = b[i];
+            dot += ai * bi;
+            normA += ai * ai;
+            normB += bi * bi;
         }
         const denom = Math.sqrt(normA * normB) + 1e-8;
         return denom > 0 ? dot / denom : 0;
     }
 
-    #activationEntropy (entry) {
-        let entropy = 0;
-        let totalMass = 0;
-        for (let p = 0; p < entry.length; p++) {
-            for (let j = 0; j < entry[p].length; j++) {
-                const val = Math.abs(entry[p][j]);
-                if (val > 1e-6) {
-                    const p = val;
-                    entropy -= p * Math.log(p + 1e-12);
-                    totalMass += val;
+    #sampleDirichlet(count) {
+        if (count < 1) return [];
+        const gammas = [];
+        for (let i = 0; i < count; i++) {
+            let g = 0;
+            while (g <= 0) g = -Math.log(Math.random() || 1e-10);
+            gammas.push(g);
+        }
+        const sum = gammas.reduce((a, b) => a + b, 0);
+        return gammas.map(g => g / sum);
+    }
+
+    #detectSuddenDrop(transformerIdx) {
+        const hist = this.#historicalPerformance[transformerIdx];
+
+        const minHistDrop = Math.max(6, Math.round(this.#contextWindow * 0.06));
+        if (hist.length < minHistDrop) return 1.0;
+
+        let prevSum = 0;
+        for (let i = hist.length - 7; i < hist.length - 2; i++) prevSum += hist[i];
+        const prevMean = prevSum / 5;
+        const current = this.#performanceScores[transformerIdx] ?? prevMean;
+        const drop = prevMean - current;
+
+        const severeDropThresh = 0.10 + 0.08 * (1 - this.#protoCapacityFactor);
+        const moderateDropThresh = 0.05 + 0.05 * (1 - this.#protoCapacityFactor);
+
+        if (drop > severeDropThresh + 0.08 * (1 - prevMean)) return 3.0;
+        if (drop > moderateDropThresh) return 1.8;
+        return 1.0;
+    }
+
+    #computeLSHHashesLow(projNorm, hyperplanesSet) {
+        const hashes = new Array(this.#lshNumTables);
+        for (let t = 0; t < this.#lshNumTables; t++) {
+            let hash = 0n;
+            for (let b = 0; b < this.#lshHashBits; b++) {
+                let dot = 0;
+                const hyp = hyperplanesSet[t][b];
+                for (let d = 0; d < this.#lowDim; d++) {
+                    dot += projNorm[d] * hyp[d];
+                }
+                if (dot > 0) {
+                    hash |= 1n << BigInt(b);
+                }
+            }
+            hashes[t] = hash;
+        }
+        return hashes;
+    }
+
+    #rebuildSemanticLSHBuckets(transformerIdx) {
+        const buckets = this.#semanticLSHBuckets[transformerIdx];
+        for (let s = 0; s < this.#numLshSets; s++) {
+            for (let t = 0; t < this.#lshNumTables; t++) {
+                buckets[s][t].clear();
+            }
+        }
+        const sem = this.#semanticProtos[transformerIdx];
+        for (let i = 0; i < sem.length; i++) {
+            const proto = sem[i];
+            if (!proto.mean || !proto.projNorms) continue;
+            for (let s = 0; s < this.#numLshSets; s++) {
+                const proj = proto.projNorms[s];
+                const hashes = this.#computeLSHHashesLow(proj, this.#lshHyperplanes[s]);
+                const setBuckets = buckets[s];
+                for (let t = 0; t < this.#lshNumTables; t++) {
+                    const key = hashes[t];
+                    let bucket = setBuckets[t].get(key);
+                    if (!bucket) {
+                        bucket = new Set();
+                        setBuckets[t].set(key, bucket);
+                    }
+                    bucket.add(i);
                 }
             }
         }
-        return totalMass > 0 ? entropy / totalMass : 0;
     }
 
-    #poolMultiPrototype (entry, maxAdditionalProtos = 8, thresholdFactor = 4.0) {
+    #isStagnating(transformerIdx) {
+        const history = this.#historicalPerformance[transformerIdx];
+
+        const minHistStag = Math.max(5, Math.round(this.#contextWindow * 0.05));
+        if (history.length < minHistStag) return false;
+
+        const recent = history.slice(-minHistStag);
+        const currentPerf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const meanRecent = recent.reduce((a, b) => a + b, 0) / recent.length;
+        const variance = recent.reduce((a, v) => a + (v - meanRecent) ** 2, 0) / recent.length;
+        const trend = currentPerf - recent[0];
+
+        const lowVarianceThreshold = 0.004 + 0.008 * (1 - this.#protoCapacityFactor);
+        const noProgressThreshold = 0.005 + 0.01 * (1 - this.#protoCapacityFactor);
+
+        const lowVariance = variance < lowVarianceThreshold;
+        const noProgress = trend < noProgressThreshold;
+
+        return lowVariance || noProgress;
+    }
+
+    #replayOldMemory(transformerIdx) {
+        const attMem = this.#attentionMemory[transformerIdx];
+
+        const minMemLengthForReplay = Math.max(8, Math.round(this.#contextWindow * 0.08));
+        if (attMem.length < minMemLengthForReplay) return;
+
+        const perf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const stagnationFactor = this.#isStagnating(transformerIdx) ? 5.0 : 1.0;
+        const dropBoost = this.#detectSuddenDrop(transformerIdx);
+        const totalBoost = stagnationFactor * dropBoost * (1 + 2 * (1 - perf));
+
+        let numSamples = Math.round(this.#replaySamples * (1 + 5 * (1 - perf)) * totalBoost);
+        const minSamples = Math.max(4, Math.round(this.#baseProtoCapacity * 0.166));
+        numSamples = Math.max(numSamples, minSamples);
+
+        const sampledProtos = [];
+        const divisor = Math.max(numSamples + 4, Math.round(numSamples * 1.5));
+        const step = Math.max(1, Math.floor(attMem.length / divisor));
+
+        for (let i = 1; i <= numSamples; i++) {
+            const idx = attMem.length - i * step - 1;
+            if (idx < 0) break;
+            const entry = attMem[idx];
+            if (!entry || entry.protos.length === 0) continue;
+
+            for (const p of entry.protos) {
+                const newMean = new Float32Array(p.mean);
+                const newVariance = new Float32Array(p.variance);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newVariance[j] = Math.min(newVariance[j], this.#maxVariancePerDim);
+                }
+                sampledProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: p.size * 0.9,
+                    accessCount: p.accessCount * 2.5 + p.size * 30,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: p.isCore,
+                    importance: (p.importance || 0) * 0.95
+                });
+            }
+        }
+
+        const coreEp = this.#coreEpisodic[transformerIdx];
+        if (coreEp.length > 0) {
+            let coreNumSamples = Math.round(numSamples * 1.5 * totalBoost);
+            const minCoreSamples = Math.round(this.#coreMaxProtos * 0.2);
+            coreNumSamples = Math.max(coreNumSamples, minCoreSamples);
+
+            for (let i = 0; i < coreNumSamples; i++) {
+                const entry = coreEp[Math.floor(Math.random() * coreEp.length)];
+                if (!entry || entry.protos.length === 0) continue;
+
+                const p = entry.protos[Math.floor(Math.random() * entry.protos.length)];
+
+                const noiseFactor = 0.15 + 0.6 * (1 - perf) * totalBoost;
+                const newMean = new Float32Array(this.#hiddenSize);
+                const newVariance = new Float32Array(this.#hiddenSize);
+
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    const std = Math.sqrt(Math.max(p.variance[j], 1e-6)) * noiseFactor;
+                    newMean[j] = this.#randomNormal(p.mean[j], std);
+                    newVariance[j] = Math.min(p.variance[j] * (1 + 0.4 * noiseFactor), this.#maxVariancePerDim);
+                }
+
+                sampledProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: p.size * 1.0,
+                    accessCount: p.accessCount * 2.0 + p.size * 50,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: true,
+                    importance: (p.importance || 0) + 40
+                });
+            }
+        }
+
+        if (sampledProtos.length > 0) {
+            const effectiveMax = Math.round(this.#effectiveSemanticMax * this.#tempOverloadFactor)
+            if (sampledProtos.length > effectiveMax) {
+                sampledProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+                sampledProtos.length = effectiveMax;
+            }
+            this.#updateSemanticProtos(transformerIdx, sampledProtos);
+        }
+    }
+
+    #generativeReplay(transformerIdx) {
+        const sem = this.#semanticProtos[transformerIdx];
+        if (sem.length === 0) return;
+
+        const pcf = this.#protoCapacityFactor;
+        const perf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const agreement = this.#agreementScores[transformerIdx] ?? 0.5;
+        const overconfidence = perf * agreement;
+        const forgetPressure = (1 - perf) * 0.8 + (1 - agreement) * 0.2;
+        const effectivePressure = forgetPressure + 0.8 * overconfidence;
+
+        const stagnationFactor = this.#isStagnating(transformerIdx) ? 4.0 : 1.0;
+        const dropBoost = this.#detectSuddenDrop(transformerIdx);
+        const totalBoost = stagnationFactor * dropBoost * (1 + 1.5 * (1 - perf));
+        const extraNoiseStag = this.#isStagnating(transformerIdx) ? 2.5 : 0.0;
+
+        const generatedProtos = [];
+
+        const cores = sem.filter(p => p.isCore);
+        if (cores.length > 0) {
+            const coreReplayPressure = effectivePressure + (1 - perf) * 0.8;
+            const numCoreSamples = Math.round((this.#coreMaxProtos / 4 + this.#coreMaxProtos * coreReplayPressure) * totalBoost);
+            const coreNoiseFactor = 0.10 + 0.45 * effectivePressure + extraNoiseStag * 1.2;
+
+            for (let s = 0; s < numCoreSamples; s++) {
+                const coreP = cores[Math.floor(Math.random() * cores.length)];
+                const newMean = new Float32Array(this.#hiddenSize);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    const std = Math.sqrt(Math.max(coreP.variance[j], 1e-6)) * coreNoiseFactor;
+                    newMean[j] = this.#randomNormal(coreP.mean[j], std);
+                }
+                const newVariance = new Float32Array(this.#hiddenSize);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newVariance[j] = Math.min(Math.max(coreP.variance[j] * (1 + 0.35 * coreNoiseFactor), 1e-6), this.#maxVariancePerDim);
+                }
+                generatedProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: Math.max(1, coreP.size * 0.5 * (0.7 + 0.3 * perf)),
+                    accessCount: coreP.accessCount * 1.0 + 20,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: (coreP.importance || 0) * 0.95 + 15
+                });
+            }
+        }
+
+        const baseNum = Math.round((this.#longTermMaxProtos + this.#semanticMaxProtos / 3 * effectivePressure) * totalBoost);
+        let candidates = [];
+        if (baseNum > 0) {
+            const enriched = sem.map(p => ({
+                proto: p,
+                access: p.accessCount / (p.size + 1),
+                utility: this.#computeProtoUtility(p)
+            }));
+
+            enriched.sort((a, b) => a.access - b.access || b.utility - a.utility);
+
+            const numCandidates = Math.min(Math.round(this.#baseProtoCapacity * 12 * (1 + 3.5 * effectivePressure)), enriched.length);
+            candidates = enriched.slice(0, numCandidates);
+
+            const noiseFactor = 1.2 + 2.8 * effectivePressure + extraNoiseStag * 2.5;
+            const samplesPerProto = Math.round((4 + 12 * effectivePressure) * pcf);
+
+            let generatedCount = 0;
+            for (const item of candidates) {
+                if (generatedCount >= baseNum * samplesPerProto) break;
+                const p = item.proto;
+
+                for (let s = 0; s < samplesPerProto && generatedCount < baseNum * samplesPerProto; s++) {
+                    const newMean = new Float32Array(this.#hiddenSize);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const std = Math.sqrt(Math.max(p.variance[j], 1e-6)) * noiseFactor;
+                        newMean[j] = this.#randomNormal(p.mean[j], std);
+                    }
+
+                    const newVariance = new Float32Array(this.#hiddenSize);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        newVariance[j] = Math.min(Math.max(p.variance[j] * (1 + 0.7 * noiseFactor), 1e-6), this.#maxVariancePerDim);
+                    }
+
+                    generatedProtos.push({
+                        mean: newMean,
+                        variance: newVariance,
+                        size: Math.max(1, p.size * 0.25 * (0.6 + 0.4 * perf)),
+                        accessCount: 12 + p.accessCount * 0.5,
+                        projNorms: this.#computeProjNorms(newMean),
+                        isCore: false,
+                        importance: (p.importance || 0) * 0.6 + 5
+                    });
+                    generatedCount++;
+                }
+            }
+        }
+
+        const numInterp = Math.round(baseNum * 1.5 * (1 + 1.8 * effectivePressure) * totalBoost);
+        const stagnating = this.#isStagnating(transformerIdx);
+        if (numInterp > 0 && candidates.length > 1) {
+            const shuffled = candidates.slice();
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+
+            let interpCount = 0;
+            for (let c = 0; c + 1 < shuffled.length && interpCount < numInterp; c += 2) {
+                const p1 = shuffled[c].proto;
+                const p2 = shuffled[c + 1].proto;
+
+                let alpha = 0.25 + Math.random() * 0.5;
+                const extrapProb = stagnating ? 0.95 : 0.3;
+                if (Math.random() < extrapProb) {
+                    alpha = Math.random() < 0.5 ? -0.4 + Math.random() * 0.5 : 1.0 + Math.random() * 0.8;
+                }
+
+                const newMean = new Float32Array(this.#hiddenSize);
+                const newVariance = new Float32Array(this.#hiddenSize);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newMean[j] = alpha * p1.mean[j] + (1 - alpha) * p2.mean[j];
+                    const diff = p1.mean[j] - p2.mean[j];
+                    newVariance[j] = Math.max(p1.variance[j], p2.variance[j]) + alpha * (1 - alpha) * diff * diff * 3.0;
+                    if (alpha < 0 || alpha > 1) {
+                        newVariance[j] += Math.abs(alpha - 0.5) * 2 * diff * diff * 5.0;
+                    }
+                    newVariance[j] = Math.min(Math.max(newVariance[j], 1e-6), this.#maxVariancePerDim);
+                }
+
+                generatedProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: Math.max(1, (p1.size + p2.size) * 0.2 * (0.6 + 0.4 * perf)),
+                    accessCount: 12 + (p1.accessCount + p2.accessCount) * 0.4,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: ((p1.importance || 0) + (p2.importance || 0)) * 0.5 + 8
+                });
+                interpCount++;
+            }
+        }
+
+        const minClusterSize = Math.max(3, Math.round(4 * this.#protoCapacityFactor));
+        const mixPressure = effectivePressure + (stagnationFactor - 1) + (dropBoost - 1);
+        if (mixPressure > 0.2 && sem.length >= minClusterSize) {
+            const numMixSamples = Math.round(this.#baseProtoCapacity * (3 + 9 * mixPressure) * totalBoost);
+            for (let s = 0; s < numMixSamples; s++) {
+                let m = Math.round((minClusterSize + Math.random() * minClusterSize) * this.#protoCapacityFactor);
+                if (stagnating) m += Math.round(2 * pcf);
+                m = Math.max(minClusterSize, m);
+                if (sem.length < m) continue;
+
+                const shuffled = sem.slice();
+                for (let i = shuffled.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                }
+                const selected = shuffled.slice(0, m);
+
+                const alphas = this.#sampleDirichlet(m);
+
+                const newMean = new Float32Array(this.#hiddenSize);
+                const newVariance = new Float32Array(this.#hiddenSize);
+
+                for (let k = 0; k < m; k++) {
+                    const alpha = alphas[k];
+                    const p = selected[k];
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        newMean[j] += alpha * p.mean[j];
+                        const diff = p.mean[j] - newMean[j];
+                        newVariance[j] += alpha * (p.variance[j] + diff * diff * 1.5);
+                    }
+                }
+
+                const mixNoise = (0.4 + 1.2 * effectivePressure + extraNoiseStag * 2) * 3.0;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newVariance[j] += mixNoise;
+                    newVariance[j] = Math.min(newVariance[j], this.#maxVariancePerDim);
+                }
+
+                generatedProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: Math.max(1, 20 * (0.5 + 0.5 * perf)),
+                    accessCount: 30,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: 25
+                });
+            }
+        }
+
+        const needExploration = this.#isStagnating(transformerIdx) || perf < 0.7;
+        if (needExploration) {
+            const numRandom = Math.round(this.#baseProtoCapacity * (0.417 + 1.667 * (1 - perf)) * totalBoost);
+            const randomVar = Math.min(this.#maxVariancePerDim, 8.0 + 16.0 * (1 - perf));
+            for (let s = 0; s < numRandom; s++) {
+                const newMean = new Float32Array(this.#hiddenSize);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newMean[j] = this.#randomNormal(0, 2.0);
+                }
+                const newVariance = new Float32Array(this.#hiddenSize).fill(randomVar);
+                generatedProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: Math.max(1, 5 * (0.5 + 0.5 * perf)),
+                    accessCount: 8,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: 8 * (1 - perf)
+                });
+            }
+        }
+
+        if (generatedProtos.length > 0) {
+            const effectiveMax = Math.round(this.#effectiveSemanticMax * this.#tempOverloadFactor)
+            if (generatedProtos.length > effectiveMax) {
+                generatedProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+                generatedProtos.length = effectiveMax;
+            }
+            this.#updateSemanticProtos(transformerIdx, generatedProtos);
+        }
+    }
+
+    #poolMultiPrototype(entry, maxAdditionalProtos, thresholdFactor) {
         if (
             !Array.isArray(entry) ||
             entry.length === 0 ||
@@ -952,43 +2227,63 @@ class HiveMind {
             return [];
         }
         const seqLen = entry.length;
-        const hiddenSize = this.#hiddenSize;
+        const hidden = this.#hiddenSize;
 
-        const globalMean = new Array(hiddenSize).fill(0);
+        const globalMean = new Float32Array(hidden);
         for (let i = 0; i < seqLen; i++) {
             const row = entry[i];
-            for (let j = 0; j < hiddenSize; j++) {
+            for (let j = 0; j < hidden; j++) {
                 globalMean[j] += row[j];
             }
         }
-        for (let j = 0; j < hiddenSize; j++) globalMean[j] /= seqLen;
-        const globalVariance = new Array(hiddenSize).fill(0);
+        for (let j = 0; j < hidden; j++) globalMean[j] /= seqLen;
+
+        const globalVariance = new Float32Array(hidden);
         for (let i = 0; i < seqLen; i++) {
             const row = entry[i];
-            for (let j = 0; j < hiddenSize; j++) {
+            for (let j = 0; j < hidden; j++) {
                 const diff = row[j] - globalMean[j];
                 globalVariance[j] += diff * diff;
             }
         }
-        for (let j = 0; j < hiddenSize; j++) globalVariance[j] /= seqLen;
-        let protos = [{
-            mean: globalMean.slice(),
-            variance: globalVariance.map(v => Math.max(v, 1e-6)),
-            size: seqLen
-        }];
-        if (seqLen <= 1) return protos;
+        for (let j = 0; j < hidden; j++) globalVariance[j] /= seqLen;
 
-        const avgVar = globalVariance.reduce((a, b) => a + b, 0) / hiddenSize;
-        const thresholdSq = avgVar * hiddenSize * thresholdFactor;
+        let avgVarSum = 0;
+        for (let j = 0; j < hidden; j++) avgVarSum += globalVariance[j];
+        const avgVar = avgVarSum / hidden;
+        const thresholdSq = avgVar * hidden * thresholdFactor;
+
+        const protos = [];
+
+        const initialMean = new Float32Array(globalMean);
+        const initialVariance = new Float32Array(hidden);
+        for (let j = 0; j < hidden; j++) {
+            initialVariance[j] = Math.max(globalVariance[j], 1e-6);
+        }
+        const initialProto = {
+            mean: initialMean,
+            variance: initialVariance,
+            size: seqLen,
+            accessCount: seqLen,
+            projNorms: this.#computeProjNorms(initialMean),
+            isCore: false,
+            importance: 0
+        };
+        protos.push(initialProto);
+
+        if (seqLen <= 1) {
+            return protos;
+        }
 
         for (let i = 0; i < seqLen; i++) {
             const point = entry[i];
             let minDistSq = Infinity;
             let bestProtoIdx = 0;
             for (let c = 0; c < protos.length; c++) {
+                const pm = protos[c].mean;
                 let d = 0;
-                for (let j = 0; j < hiddenSize; j++) {
-                    const diff = point[j] - protos[c].mean[j];
+                for (let j = 0; j < hidden; j++) {
+                    const diff = point[j] - pm[j];
                     d += diff * diff;
                 }
                 if (d < minDistSq) {
@@ -997,28 +2292,38 @@ class HiveMind {
                 }
             }
 
-            if (protos.length <= maxAdditionalProtos && minDistSq > thresholdSq) {
-                protos.push({
-                    mean: point.slice(),
-                    variance: new Array(hiddenSize).fill(1e-6),
-                    size: 1
-                });
+            if (protos.length < 1 + maxAdditionalProtos && minDistSq > thresholdSq) {
+                const newMean = new Float32Array(hidden);
+                for (let j = 0; j < hidden; j++) newMean[j] = point[j];
+                const newVariance = new Float32Array(hidden).fill(1e-6);
+                const newProto = {
+                    mean: newMean,
+                    variance: newVariance,
+                    size: 1,
+                    accessCount: 1,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: 0
+                };
+                protos.push(newProto);
             } else {
                 const proto = protos[bestProtoIdx];
-                const oldMean = proto.mean.slice();
                 proto.size++;
-                for (let j = 0; j < hiddenSize; j++) {
-                    const delta = point[j] - oldMean[j];
+                proto.accessCount += 1;
+                for (let j = 0; j < hidden; j++) {
+                    const oldM = proto.mean[j];
+                    const delta = point[j] - oldM;
                     proto.mean[j] += delta / proto.size;
                     const newDiff = point[j] - proto.mean[j];
                     proto.variance[j] += delta * newDiff;
                 }
+                proto.projNorms = this.#computeProjNorms(proto.mean);
             }
         }
 
         for (const proto of protos) {
             if (proto.size > 1) {
-                for (let j = 0; j < hiddenSize; j++) {
+                for (let j = 0; j < hidden; j++) {
                     proto.variance[j] /= (proto.size - 1);
                     proto.variance[j] = Math.max(proto.variance[j], 1e-6);
                 }
@@ -1027,73 +2332,913 @@ class HiveMind {
         return protos;
     }
 
-    #kernelSimilarity (protoA, protoB, gamma = 4.0) {
-        let dist = 0;
-        const eps = 1e-6;
-        for (let j = 0; j < this.#hiddenSize; j++) {
-            const diff = protoA.mean[j] - protoB.mean[j];
-            const pooledVar = protoA.variance[j] + protoB.variance[j] + eps;
-            dist += diff * diff / pooledVar;
-        }
-        dist /= this.#hiddenSize;
-        return Math.exp(-gamma * dist);
-    }
+    #updateSemanticProtos(transformerIdx, newProtos) {
+        if (!Array.isArray(newProtos) || newProtos.length === 0) return;
 
-    #selectTopKRelevantEntries (transformerIdx, currentProtos, K = 12) {
-        const memory = this.#attentionMemory[transformerIdx];
-        const adaptive = this.#adaptiveContext[transformerIdx];
-        const pastEntries = [...memory, ...adaptive];
+        let sem = this.#semanticProtos[transformerIdx];
+        const baseLR = this.#semanticLR;
+        const maxP = this.#effectiveSemanticMax;
+        const boost = this.#semanticBoost;
+        const hidden = this.#hiddenSize;
 
-        if (pastEntries.length <= K) {
-            return pastEntries;
-        }
+        const perf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const agreement = this.#agreementScores[transformerIdx] ?? 0.5;
+        const overload = sem.length / maxP;
+        const mergePressure = Math.max(0, overload - 0.15) + (perf > 0.7 ? (perf - 0.7) * 3.0 : 0);
+        let dynamicThreshold = (0.85 + 0.15 * this.#protoCapacityFactor) - 0.50 * mergePressure + 0.30 * (1 - agreement);
+        const stagnation = this.#isStagnating(transformerIdx);
+        if (stagnation) dynamicThreshold += 0.20;
+        dynamicThreshold = Math.max(0.50, Math.min(0.98, dynamicThreshold));
 
-        const scores = pastEntries.map(entry => {
-            const entryProtos = this.#poolMultiPrototype(entry);
-            return this.#maxPairwiseKernel(currentProtos, entryProtos, 4.0);
+        const accessDecay = 0.80 + 0.15 * perf;
+        const sizeDecay = 0.98 + 0.01 * perf;
+        const noiseThreshold = 1 + 12 * (1 - perf);
+        const baseNoiseScale = 0.05 + 0.15 * (1 - perf);
+        const effectiveBoost = boost * (1 + 2.5 * (1 - perf) + 1.2 * (1 - agreement));
+
+        sem.forEach(p => {
+            if (p.isCore) return;
+            const importance = p.importance || 0;
+            const decayPower = 1 / (1 + 0.04 * importance);
+            p.accessCount *= Math.pow(accessDecay, decayPower);
+            p.size *= Math.pow(sizeDecay, decayPower);
+
+            if (p.accessCount < noiseThreshold) {
+                let varianceSum = 0;
+                for (let j = 0; j < hidden; j++) {
+                    varianceSum += p.variance[j];
+                }
+                const avgVar = varianceSum / hidden;
+                let noiseScale = baseNoiseScale * Math.sqrt(Math.max(avgVar, 1e-6));
+                if (importance > 60) noiseScale = 0;
+                else if (importance > 0) noiseScale /= (1 + importance / 10);
+                if (noiseScale > 0) {
+                    for (let j = 0; j < hidden; j++) {
+                        p.mean[j] += (Math.random() - 0.5) * 2 * noiseScale * 1.5;
+                    }
+                    p.projNorms = this.#computeProjNorms(p.mean);
+                }
+            }
         });
 
-        const indexedScores = scores.map((score, index) => ({ score, index }));
-        indexedScores.sort((a, b) => b.score - a.score);
+        const initialLength = sem.length;
+        sem = sem.filter(p => p.isCore || p.accessCount >= 0.15);
+        if (sem.length < initialLength) {
+            this.#semanticProtos[transformerIdx] = sem;
+        }
 
-        const topKIndices = indexedScores.slice(0, K).map(item => item.index);
-        return topKIndices.map(idx => pastEntries[idx]);
-    }
+        for (const p of newProtos) {
+            if (!p || !p.mean) continue;
 
-    #computeMemoryScore (memoryEntry, attentionScores, transformerIdx, entryIndex, ignoreRecency = false) {
-        let sum = 0, absSum = 0, sqSum = 0, cubeSum = 0, fourthSum = 0;
-        let count = 0, nonZero = 0;
-        for (let i = 0; i < memoryEntry.length; i++) {
-            for (let j = 0; j < memoryEntry[i].length; j++) {
-                const val = memoryEntry[i][j];
-                if (isValidNumber(val)) {
-                    const absVal = Math.abs(val);
-                    sum += val;
-                    absSum += absVal;
-                    sqSum += val * val;
-                    cubeSum += val * val * val;
-                    fourthSum += val * val * val * val;
-                    count++;
-                    if (absVal > 1e-3) nonZero++;
+            if (!p.projNorms || p.projNorms.length !== this.#numProjections) p.projNorms = this.#computeProjNorms(p.mean);
+
+            p.isCore = p.isCore || false;
+            if (typeof p.importance !== 'number') p.importance = 0;
+
+            for (let j = 0; j < hidden; j++) {
+                p.variance[j] = Math.min(Math.max(p.variance[j], 1e-6), this.#maxVariancePerDim);
+            }
+
+            if (sem.length === 0) {
+                const newMean = new Float32Array(p.mean);
+                const newVar = new Float32Array(hidden);
+                for (let j = 0; j < hidden; j++) {
+                    newVar[j] = p.variance[j];
+                }
+                sem.push({
+                    mean: newMean,
+                    variance: newVar,
+                    size: p.size * effectiveBoost * 1.5,
+                    accessCount: p.size * 2.0,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: 15
+                });
+                continue;
+            }
+
+            const n = sem.length;
+            const topM = Math.min(Math.round(this.#effectiveSemanticMax * 1.3),Math.max(Math.round(this.#effectiveSemanticMax * 0.4),Math.round(n * 0.6)));
+            const approxScores = new Float32Array(n);
+
+            for (let i = 0; i < n; i++) {
+                if (!sem[i].projNorms || sem[i].projNorms.length !== this.#numProjections) sem[i].projNorms = this.#computeProjNorms(sem[i].mean);
+                approxScores[i] = this.#projSimilarity(p.projNorms, sem[i].projNorms);
+            }
+
+            const indices = Array.from({length: n}, (_, i) => i);
+            indices.sort((a, b) => approxScores[b] - approxScores[a]);
+
+            const topCandidates = indices.slice(0, topM);
+
+            let bestSim = -1;
+            let bestIdx = -1;
+            for (const idx of topCandidates) {
+                const sim = this.#kernelSimilarity(p, sem[idx], 4.0);
+                if (sim > bestSim) {
+                    bestSim = sim;
+                    bestIdx = idx;
+                }
+            }
+
+            const noveltyFactor = Math.max(0, (dynamicThreshold - bestSim) / dynamicThreshold);
+
+            let merged = false;
+            if (bestSim >= dynamicThreshold && bestIdx !== -1) {
+                const proto = sem[bestIdx];
+                const oldMean = Float32Array.from(proto.mean);
+                const importance = proto.importance || 0;
+
+                let dynamicLR = baseLR / (1 + 0.8 * importance);
+                let sizeBoost = 1.0;
+                let accessBoost = 1.8;
+
+                if (proto.isCore) {
+                    dynamicLR *= 0.01 + 0.10 * perf + 0.08 * agreement;
+                    sizeBoost = 0.03 + 0.15 * perf;
+                    accessBoost = 0.3 + 0.5 * perf;
+                }
+
+                proto.size += p.size * sizeBoost;
+                proto.accessCount += p.size * accessBoost;
+
+                let deltaSqSum = 0;
+                for (let j = 0; j < hidden; j++) {
+                    const oldVal = oldMean[j];
+                    const diff = p.mean[j] - oldVal;
+                    proto.mean[j] = oldVal * (1 - dynamicLR) + p.mean[j] * dynamicLR;
+                    proto.variance[j] = (1 - dynamicLR) * proto.variance[j] + dynamicLR * (p.variance[j] + diff * diff * 1.5);
+                    proto.variance[j] = Math.min(Math.max(proto.variance[j], 1e-6), this.#maxVariancePerDim);
+
+                    const delta = proto.mean[j] - oldVal;
+                    deltaSqSum += delta * delta;
+                }
+                proto.importance = importance + 3.0 * deltaSqSum / hidden + (proto.isCore ? 40 : 0);
+                proto.projNorms = this.#computeProjNorms(proto.mean);
+                merged = true;
+            }
+
+            if (!merged) {
+                const newMean = new Float32Array(p.mean);
+                const newVar = new Float32Array(hidden);
+                for (let j = 0; j < hidden; j++) {
+                    newVar[j] = p.variance[j];
+                }
+
+                let extraNoveltyImportance = 0;
+                if (bestIdx !== -1 && sem[bestIdx].isCore && bestSim > dynamicThreshold * 0.7) {
+                    extraNoveltyImportance = 60 * (bestSim - dynamicThreshold * 0.7) / (1 - dynamicThreshold * 0.7);
+                }
+
+                const addedProto = {
+                    mean: newMean,
+                    variance: newVar,
+                    size: p.size * effectiveBoost * (1 + 3.0 * noveltyFactor),
+                    accessCount: p.size * 2.0 * (1 + 1.5 * noveltyFactor),
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: 50 * noveltyFactor + extraNoveltyImportance
+                };
+                sem.push(addedProto);
+
+                if (sem.length > maxP * this.#tempOverloadFactor) {
+                    sem.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+                    sem.length = Math.round(maxP * this.#mergeTrimFactor);
                 }
             }
         }
 
-        const mean = count > 0 ? sum / count : 0;
-        const variance = count > 0 ? (sqSum / count - mean * mean) : 0;
-        const std = Math.sqrt(Math.max(variance, 0));
-        const skew = std > 0 ? (cubeSum / count - 3 * mean * variance - mean * mean * mean) / (std * std * std) : 0;
-        const kurtosis = variance > 0 ? (fourthSum / count) / (variance * variance) - 3 : 0;
+        sem.forEach(proto => {
+            for (let j = 0; j < hidden; j++) {
+                proto.variance[j] = Math.min(proto.variance[j], this.#maxVariancePerDim);
+            }
+        });
 
-        const varianceScore = Math.tanh(std);
-        const skewScore = Math.tanh(Math.abs(skew));
-        const kurtosisScore = Math.tanh(Math.abs(kurtosis));
-        const entropyScore = Math.tanh(this.#activationEntropy(memoryEntry));
+        const minAvgVar = 0.08 + 0.50 * (1 - perf) + 0.40 * (1 - agreement);
+        const inflationFactor = 3.0 + 5.0 * (1 - perf);
+        const noiseBase = 0.06 + 0.20 * (1 - perf);
+        for (const proto of sem) {
+            let varSum = 0;
+            for (let j = 0; j < hidden; j++) {
+                varSum += proto.variance[j];
+            }
+            const avgVar = varSum / hidden;
+            if (avgVar < minAvgVar && !proto.isCore) {
+                const deficit = minAvgVar - avgVar;
+                const noiseScale = noiseBase + 0.6 * deficit;
+                for (let j = 0; j < hidden; j++) {
+                    proto.mean[j] += this.#randomNormal(0, noiseScale * 1.5);
+                    proto.variance[j] *= inflationFactor;
+                    proto.variance[j] = Math.min(proto.variance[j], this.#maxVariancePerDim);
+                }
+                proto.projNorms = this.#computeProjNorms(proto.mean);
+            }
+        }
 
-        const sparsity = count > 0 ? nonZero / count : 0;
+        const numPriority = Math.min(Math.round(this.#priorityMax * this.#tempOverloadFactor), sem.length);
+        if (numPriority > 0) {
+            const indexed = sem.map((proto, i) => ({i, util: this.#computeProtoUtility(proto)}));
+            indexed.sort((a, b) => b.util - a.util);
+            this.#priorityIndices[transformerIdx] = indexed.slice(0, numPriority).map(o => o.i);
+        } else {
+            this.#priorityIndices[transformerIdx] = [];
+        }
+
+        this.#rebuildSemanticLSHBuckets(transformerIdx);
+    }
+
+    #kernelSimilarity(protoA, protoB, gamma = 4.0) {
+        let dist = 0;
+        const eps = 1e-6;
+        const maxRelevantDist = 2.5;
+
+        for (let j = 0; j < this.#hiddenSize; j++) {
+            const diff = protoA.mean[j] - protoB.mean[j];
+            const pooledVar = protoA.variance[j] + protoB.variance[j] + eps;
+            dist += diff * diff / pooledVar;
+
+            if (dist > maxRelevantDist * this.#hiddenSize) {
+                return 0;
+            }
+        }
+
+        dist /= this.#hiddenSize;
+
+        if (dist > maxRelevantDist) {
+            return 0;
+        }
+
+        return Math.exp(-gamma * dist);
+    }
+
+    #retrieveTopRelevantProtos(transformerIdx, currentProtos, maxRetrieve = this.#maxRetrievedProtos) {
+        if (currentProtos.length === 0) return [];
+
+        currentProtos.forEach(cp => {
+            if (!cp.projNorms || cp.projNorms.length !== this.#numProjections) {
+                cp.projNorms = this.#computeProjNorms(cp.mean);
+            }
+        });
+
+        const avgProj = Array.from({length: this.#numProjections}, () => new Float32Array(this.#lowDim).fill(0));
+        const numCurrent = currentProtos.length;
+        for (const cp of currentProtos) {
+            for (let np = 0; np < this.#numProjections; np++) {
+                const a = avgProj[np];
+                const c = cp.projNorms[np];
+                for (let l = 0; l < this.#lowDim; l++) {
+                    a[l] += c[l] / numCurrent;
+                }
+            }
+        }
+
+        const attMem = this.#attentionMemory[transformerIdx];
+        const episodicToConsider = attMem.length > this.#maxEpisodicConsider 
+            ? attMem.slice(-this.#maxEpisodicConsider) 
+            : attMem;
+        const episodicLen = episodicToConsider.length;
+
+        const adaptMem = this.#adaptiveContext[transformerIdx];
+        const adaptLen = adaptMem.length;
+
+        const numEntries = episodicLen + adaptLen;
+
+        const perf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const agreement = this.#agreementScores[transformerIdx] ?? 0.5;
+        const overconfidence = perf * agreement;
+        let explorationRate = 0.35 + 0.65 * (1 - perf) + 0.45 * (1 - agreement) + 0.8 * overconfidence;
+        const stagnation = this.#isStagnating(transformerIdx);
+        const dropBoost = this.#detectSuddenDrop(transformerIdx);
+        if (stagnation) {
+            explorationRate = Math.min(1.0, explorationRate + 0.7);
+        }
+
+        let candProtos = [];
+        let candIsSem = [];
+
+        const basePerEntry = Math.max(this.#longTermMaxProtos, this.#shortTermMaxProtos / 2);
+        const maxPerMemoryEntry = Math.round(basePerEntry * (1 + explorationRate));
+
+        if (numEntries > 0) {
+            const entryScores = new Float32Array(numEntries);
+
+            for (let e = 0; e < episodicLen; e++) {
+                const entry = episodicToConsider[e];
+                if (entry && entry.repProj && entry.repProj.length === this.#numProjections) {
+                    entryScores[e] = this.#projSimilarity(avgProj, entry.repProj);
+                }
+            }
+
+            for (let a = 0; a < adaptLen; a++) {
+                const entry = adaptMem[a];
+                if (entry && entry.repProj && entry.repProj.length === this.#numProjections) {
+                    entryScores[episodicLen + a] = this.#projSimilarity(avgProj, entry.repProj);
+                }
+            }
+
+            for (let e = 0; e < episodicLen; e++) {
+                const age = episodicLen - 1 - e;
+                entryScores[e] += 0.8 * Math.exp(-0.01 * age);
+            }
+            for (let a = 0; a < adaptLen; a++) {
+                const age = adaptLen - 1 - a;
+                entryScores[episodicLen + a] += 0.7 * Math.exp(-0.01 * age);
+            }
+
+            const entryIndices = Array.from({length: numEntries}, (_, i) => i);
+            entryIndices.sort((a, b) => entryScores[b] - entryScores[a]);
+
+            const numEpCand = Math.min(Math.round(this.#numRetrievalCandidates * 1.2 * (1 + 2.5 * explorationRate)), numEntries);
+
+            for (let ii = 0; ii < numEpCand && ii < entryIndices.length; ii++) {
+                const eIdx = entryIndices[ii];
+                let protos = [];
+                if (eIdx < episodicLen) {
+                    const entry = episodicToConsider[eIdx];
+                    if (entry && entry.protos && entry.protos.length > 0) protos = entry.protos;
+                } else {
+                    const aIdx = eIdx - episodicLen;
+                    const entry = adaptMem[aIdx];
+                    if (entry && entry.protos && entry.protos.length > 0) protos = entry.protos;
+                }
+
+                if (protos.length > 0) {
+                    const sortedProtos = protos.slice();
+                    sortedProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+                    const takeNum = Math.min(Math.round(maxPerMemoryEntry * 2), sortedProtos.length);
+                    for (let pp = 0; pp < takeNum; pp++) {
+                        const p = sortedProtos[pp];
+                        if (!p.projNorms || p.projNorms.length !== this.#numProjections) {
+                            p.projNorms = this.#computeProjNorms(p.mean);
+                        }
+                        candProtos.push(p);
+                        candIsSem.push(false);
+                    }
+                }
+            }
+        }
+
+        const coreEp = this.#coreEpisodic[transformerIdx];
+        if (coreEp.length > 0) {
+            for (const entry of coreEp) {
+                if (entry.protos && entry.protos.length > 0) {
+                    const sortedProtos = entry.protos.slice();
+                    sortedProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+                    const takeNum = Math.min(maxPerMemoryEntry * 8, sortedProtos.length);
+                    for (let pp = 0; pp < takeNum; pp++) {
+                        const p = sortedProtos[pp];
+                        if (!p.projNorms || p.projNorms.length !== this.#numProjections) {
+                            p.projNorms = this.#computeProjNorms(p.mean);
+                        }
+                        candProtos.push(p);
+                        candIsSem.push(false);
+                    }
+                }
+            }
+        }
+
+        const semProtos = this.#semanticProtos[transformerIdx];
+        const numSem = semProtos.length;
+        if (numSem > 0) {
+            semProtos.forEach(p => {
+                if (!p.projNorms || p.projNorms.length !== this.#numProjections) {
+                    p.projNorms = this.#computeProjNorms(p.mean);
+                }
+            });
+
+            const queryMean = this.#weightedMean(currentProtos);
+            const queryProjs = this.#computeProjNorms(queryMean);
+
+            const semCandidates = new Set();
+
+            const addCandidatesFromSet = (s, hashes) => {
+                const tableArray = this.#semanticLSHBuckets[transformerIdx][s];
+                for (let t = 0; t < this.#lshNumTables; t++) {
+                    let key = hashes[t];
+                    let bucket = tableArray[t].get(key);
+                    if (bucket) for (const i of bucket) semCandidates.add(i);
+
+                    for (let b = 0; b < this.#lshHashBits; b++) {
+                        const flipped = key ^ (1n << BigInt(b));
+                        bucket = tableArray[t].get(flipped);
+                        if (bucket) for (const i of bucket) semCandidates.add(i);
+                    }
+
+                    const baseProbes = Math.round(this.#numRetrievalCandidates * explorationRate * 0.8);
+                    const scaledAdditive = Math.round(this.#baseProtoCapacity * 6);
+                    let numProbes = baseProbes + scaledAdditive;
+
+                    const stagnationAdd = Math.round(this.#baseProtoCapacity * (6 + 12 * this.#memoryFactor) * (stagnation ? 1 : 0));
+                    const dropAdd = Math.round(this.#baseProtoCapacity * (5 + 10 * this.#memoryFactor) * (dropBoost > 1.5 ? 1 : 0));
+                    const lowPerfAdd = Math.round(this.#baseProtoCapacity * (4 + 8 * this.#memoryFactor) * (perf < 0.6 ? 1 : 0));
+
+                    numProbes += stagnationAdd + dropAdd + lowPerfAdd;
+
+                    const maxCandidateCap = Math.round(this.#effectiveSemanticMax * (6 + 4 * this.#memoryFactor));
+                    for (let k = 0; k < numProbes; k++) {
+                        if (semCandidates.size > maxCandidateCap) break;
+                        let flipBits = 2 + Math.floor(Math.random() * 18);
+                        if (explorationRate > 0.6) flipBits += Math.floor(Math.random() * 12);
+                        if (stagnation) flipBits += 8;
+                        let flippedHash = key;
+                        for (let f = 0; f < flipBits; f++) {
+                            const bit = Math.floor(Math.random() * this.#lshHashBits);
+                            flippedHash ^= (1n << BigInt(bit));
+                        }
+                        bucket = tableArray[t].get(flippedHash);
+                        if (bucket) for (const i of bucket) semCandidates.add(i);
+                    }
+                }
+            };
+
+            for (let s = 0; s < this.#numLshSets; s++) {
+                const hashes = this.#computeLSHHashesLow(queryProjs[s], this.#lshHyperplanes[s]);
+                addCandidatesFromSet(s, hashes);
+            }
+
+            let desiredSem = Math.round(this.#numRetrievalCandidates * 0.7 * (1 + 4.0 * explorationRate));
+            if (stagnation) desiredSem = Math.round(desiredSem * 2.2);
+            if (dropBoost > 1.5) desiredSem = Math.round(desiredSem * 1.8);
+
+            const projFallbackMultiplier = 3 + 2 * explorationRate;
+            const lowAccessMultiplier = 1.5 + explorationRate;
+            const randomFillTarget = 2.5 + explorationRate;
+
+            if (semCandidates.size < desiredSem * 0.3) {
+                const projScores = new Float32Array(numSem);
+                for (let i = 0; i < numSem; i++) {
+                    projScores[i] = this.#projSimilarity(queryProjs, semProtos[i].projNorms);
+                }
+                const projIndices = Array.from({length: numSem}, (_, i) => i);
+                projIndices.sort((a, b) => projScores[b] - projScores[a]);
+                const need = Math.min(numSem, Math.round(desiredSem * projFallbackMultiplier - semCandidates.size));
+                for (let k = 0; k < need; k++) {
+                    semCandidates.add(projIndices[k]);
+                }
+            }
+
+            if (semCandidates.size < desiredSem * 0.2) {
+                const lowAccess = semProtos.map((p, i) => ({i, acc: p.accessCount || 0}));
+                lowAccess.sort((a, b) => a.acc - b.acc);
+                const need = Math.min(lowAccess.length, Math.round(desiredSem * lowAccessMultiplier - semCandidates.size));
+                for (let k = 0; k < need; k++) {
+                    const i = lowAccess[k].i;
+                    if (!semCandidates.has(i)) semCandidates.add(i);
+                }
+            }
+
+            let targetTotal = Math.round(desiredSem * randomFillTarget);
+            if (stagnation || explorationRate > 0.6) {
+                targetTotal = Math.round(targetTotal * 2.0);
+            }
+            while (semCandidates.size < targetTotal && semCandidates.size < numSem * 0.95) {
+                const randI = Math.floor(Math.random() * numSem);
+                if (!semCandidates.has(randI)) semCandidates.add(randI);
+            }
+
+            for (let i = 0; i < numSem; i++) {
+                if (semProtos[i].isCore && !semCandidates.has(i)) {
+                    semCandidates.add(i);
+                }
+            }
+            const priorityIndices = this.#priorityIndices[transformerIdx] || [];
+            for (const i of priorityIndices) {
+                if (!semCandidates.has(i)) semCandidates.add(i);
+            }
+
+            let semIndices = Array.from(semCandidates);
+            semIndices.forEach(idx => {
+                candProtos.push(semProtos[idx]);
+                candIsSem.push(true);
+            });
+        }
+
+        const totalCandLimit = Math.round(this.#numRetrievalCandidates * (1 + 5.0 * explorationRate));
+        if (candProtos.length > totalCandLimit) {
+            const approxScores = candProtos.map(p => this.#projSimilarity(avgProj, p.projNorms));
+            const sortedIdx = Array.from({length: candProtos.length}, (_, i) => i);
+            sortedIdx.sort((a, b) => approxScores[b] - approxScores[a]);
+            const newCandProtos = [];
+            const newCandIsSem = [];
+            for (let t = 0; t < totalCandLimit; t++) {
+                const oldi = sortedIdx[t];
+                newCandProtos.push(candProtos[oldi]);
+                newCandIsSem.push(candIsSem[oldi]);
+            }
+            candProtos = newCandProtos;
+            candIsSem = newCandIsSem;
+        }
+
+        const numCandProtos = candProtos.length;
+        if (numCandProtos === 0) return [];
+
+        const queryMean = this.#weightedMean(currentProtos);
+        const totalSizeQuery = currentProtos.reduce((s, p) => s + p.size, 0) || 1;
+        const queryVariance = new Float32Array(this.#hiddenSize).fill(0);
+        for (const cp of currentProtos) {
+            const weight = cp.size / totalSizeQuery;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                const diff = cp.mean[j] - queryMean[j];
+                queryVariance[j] += weight * (cp.variance[j] + diff * diff);
+            }
+        }
+        for (let j = 0; j < this.#hiddenSize; j++) {
+            queryVariance[j] = Math.max(queryVariance[j], 1e-6);
+        }
+
+        const queryProj = this.#computeProjNorms(queryMean);
+
+        const baseThresh = 0.55;
+        let threshAdjust = 0.60 * explorationRate;
+
+        const semScale = this.#effectiveSemanticMax;
+        if (numSem < semScale * 1.5) threshAdjust += 0.55;
+        else if (numSem < semScale * 3) threshAdjust += 0.35;
+
+        if (stagnation) threshAdjust += 0.45;
+
+        let threshold = Math.max(-0.6, baseThresh - threshAdjust);
+
+        const candidatesForExact = [];
+        for (let i = 0; i < numCandProtos; i++) {
+            const proto = candProtos[i];
+            const approxSim = this.#projSimilarity(queryProj, proto.projNorms);
+            if (approxSim > threshold || proto.isCore) {
+                candidatesForExact.push({i, approxSim});
+            }
+        }
+        candidatesForExact.sort((a, b) => b.approxSim - a.approxSim);
+
+        let maxExactCompute = Math.round(this.#effectiveSemanticMax * (8 + 6 * explorationRate) * this.#memoryFactor);
+        if (stagnation) maxExactCompute = Math.round(maxExactCompute * 1.8);
+
+        candidatesForExact.length = Math.min(maxExactCompute, candidatesForExact.length);
+
+        const protoScores = new Float32Array(numCandProtos).fill(-100);
+
+        for (const {i} of candidatesForExact) {
+            const proto = candProtos[i];
+            const sim = this.#kernelSimilarity(
+                { mean: queryMean, variance: queryVariance },
+                proto,
+                4.0
+            );
+
+            let score = sim * 1.4;
+
+            score += candIsSem[i] ? 4.0 : 0;
+
+            const coreBoostFactor = 20 + 30 * this.#protoCapacityFactor;
+            if (proto.isCore) score += coreBoostFactor;
+
+            score += 0.4 * Math.log(1 + proto.size / 8);
+
+            const accessBonus = explorationRate / Math.sqrt(proto.accessCount + 1);
+            score += accessBonus * 12.0;
+
+            let varSum = 0;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                varSum += proto.variance[j];
+            }
+            const avgVar = varSum / this.#hiddenSize;
+            const varBoost = Math.tanh(Math.sqrt(avgVar + 1e-6) * 2.5);
+            score += explorationRate * 3.5 * varBoost;
+
+            protoScores[i] = score;
+        }
+
+        const protoIndices = Array.from({length: numCandProtos}, (_, i) => i);
+        protoIndices.sort((a, b) => protoScores[b] - protoScores[a]);
+
+        const diversityAdjust = Math.tanh(numCandProtos / 80.0);
+        const baseThreshDiv = 0.45;
+        let DIVERSITY_THRESHOLD = baseThreshDiv - 0.55 * explorationRate - 0.4 * diversityAdjust;
+        if (stagnation) DIVERSITY_THRESHOLD -= 0.45;
+        if (dropBoost > 1.5) DIVERSITY_THRESHOLD -= 0.25;
+        DIVERSITY_THRESHOLD = Math.max(0.01, Math.min(0.75, DIVERSITY_THRESHOLD));
+
+        let effectiveMaxRetrieve = Math.round(maxRetrieve * (1 + 3.0 * explorationRate + 2.0 * this.#memoryFactor));
+        if (stagnation) effectiveMaxRetrieve = Math.round(effectiveMaxRetrieve * 1.6);
+
+        const topNum = Math.min(effectiveMaxRetrieve, numCandProtos);
+
+        const selectedProtoIndices = [];
+        let pi = 0;
+        while (selectedProtoIndices.length < topNum && pi < numCandProtos) {
+            const candIdx = protoIndices[pi];
+            const pProjs = candProtos[candIdx].projNorms;
+
+            let maxSimToSelected = -1;
+            for (const selIdx of selectedProtoIndices) {
+                const sProjs = candProtos[selIdx].projNorms;
+                const sim = this.#projSimilarity(pProjs, sProjs);
+                if (sim > maxSimToSelected) maxSimToSelected = sim;
+            }
+
+            let effectiveThresh = candProtos[candIdx].isCore ? DIVERSITY_THRESHOLD + 0.5 : DIVERSITY_THRESHOLD;
+
+            const diversityBypassMin = Math.max(20, Math.round(this.#maxRetrievedProtos * 0.2 * this.#memoryFactor));
+            if (maxSimToSelected < effectiveThresh || selectedProtoIndices.length < diversityBypassMin) {
+                selectedProtoIndices.push(candIdx);
+                candProtos[candIdx].accessCount += 6.0;
+            }
+            pi++;
+        }
+
+        const selectedProtos = selectedProtoIndices.map(idx => candProtos[idx]);
+
+        return selectedProtos;
+    }
+
+    #consolidateSemanticProtos(transformerIdx) {
+        const sem = this.#semanticProtos[transformerIdx];
+
+        const minForConsolidate = Math.max(5, Math.round(this.#baseProtoCapacity * 0.2));
+        if (sem.length < minForConsolidate) {
+            this.#rebuildSemanticLSHBuckets(transformerIdx);
+            return;
+        }
+
+        const n = sem.length;
+        const hidden = this.#hiddenSize;
+
+        const perf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const agreement = this.#agreementScores[transformerIdx] ?? 0.5;
+        const overload = sem.length / this.#effectiveSemanticMax;
+        const mergePressure = Math.max(0, overload - 0.15) + (perf > 0.7 ? (perf - 0.7) * 3.0 : 0);
+        let mergeKernelThresh = (0.73 + 0.15 * this.#protoCapacityFactor) - 0.40 * mergePressure - 0.25 * (1 - agreement);
+        mergeKernelThresh = Math.max(0.40, Math.min(0.85, mergeKernelThresh));
+
+        const stagnation = this.#isStagnating(transformerIdx);
+        const drop = this.#detectSuddenDrop(transformerIdx) > 1.2;
+
+        const topPreCandidates = Math.min(Math.round(this.#effectiveSemanticMax * 1.05), Math.round(n * 0.6));
+
+        for (let i = 0; i < n; i++) {
+            if (!sem[i].projNorms || sem[i].projNorms.length !== this.#numProjections) sem[i].projNorms = this.#computeProjNorms(sem[i].mean);
+        }
+
+        const pairs = [];
+        for (let i = 0; i < n; i++) {
+            if (sem[i].isCore) continue;
+
+            const piProjs = sem[i].projNorms;
+
+            const approxScores = new Float32Array(n);
+            approxScores.fill(-10);
+
+            for (let j = 0; j < n; j++) {
+                if (j === i) continue;
+                approxScores[j] = this.#projSimilarity(piProjs, sem[j].projNorms);
+            }
+
+            const indices = Array.from({length: n}, (_, k) => k);
+            indices.sort((a, b) => approxScores[b] - approxScores[a]);
+
+            const topIdx = indices.slice(0, topPreCandidates);
+
+            for (const j of topIdx) {
+                if (i >= j) continue;
+                if (sem[j].isCore) continue;
+
+                const sim = this.#kernelSimilarity(sem[i], sem[j], 4.0);
+                if (sim > mergeKernelThresh) {
+                    pairs.push([i, j, sim]);
+                }
+            }
+        }
+
+        if (pairs.length > 0) {
+            pairs.sort((a, b) => b[2] - a[2]);
+
+            const merged = new Set();
+            for (const pair of pairs) {
+                let i = pair[0];
+                let j = pair[1];
+                if (merged.has(i) || merged.has(j)) continue;
+
+                let keepIdx = sem[i].size >= sem[j].size ? i : j;
+                let removeIdx = keepIdx === i ? j : i;
+
+                if (this.#computeProtoUtility(sem[removeIdx]) > this.#computeProtoUtility(sem[keepIdx])) {
+                    [keepIdx, removeIdx] = [removeIdx, keepIdx];
+                }
+
+                const keep = sem[keepIdx];
+                const remove = sem[removeIdx];
+                const oldMean = Float32Array.from(keep.mean);
+                const keepSize = keep.size;
+                const removeSize = remove.size;
+                const totalSize = keepSize + removeSize;
+                keep.size = totalSize;
+                keep.accessCount += remove.accessCount * 1.8;
+                keep.importance = (keep.importance || 0) + (remove.importance || 0) * 0.95;
+
+                let deltaSqSum = 0;
+                for (let k = 0; k < hidden; k++) {
+                    const oldKeepVal = oldMean[k];
+                    keep.mean[k] = (oldKeepVal * keepSize + remove.mean[k] * removeSize) / totalSize;
+                    const diff1 = oldKeepVal - keep.mean[k];
+                    const diff2 = remove.mean[k] - keep.mean[k];
+                    keep.variance[k] = (keepSize * (keep.variance[k] + diff1 * diff1) +
+                                       removeSize * (remove.variance[k] + diff2 * diff2)) / totalSize * 1.4;
+                    keep.variance[k] = Math.max(keep.variance[k], 1e-6);
+
+                    const delta = keep.mean[k] - oldKeepVal;
+                    deltaSqSum += delta * delta;
+                }
+                keep.importance += 3.0 * deltaSqSum / hidden;
+                keep.projNorms = this.#computeProjNorms(keep.mean);
+
+                merged.add(removeIdx);
+            }
+
+            const sortedMerged = Array.from(merged).sort((a, b) => b - a);
+            for (const idx of sortedMerged) {
+                sem.splice(idx, 1);
+            }
+        }
+
+        const preSplitLength = sem.length;
+        sem = sem.filter(p => p.isCore || p.accessCount >= 0.15);
+        if (sem.length < preSplitLength) {
+            this.#semanticProtos[transformerIdx] = sem;
+        }
+
+        let varThresh = 1.0 + 4.0 * (1 - perf) * this.#memoryFactor + 2.0 * (1 - agreement) * this.#protoCapacityFactor;
+        const baseMinSize = Math.round(this.#baseProtoCapacity * 0.25);
+        let minSizeForSplit = baseMinSize - Math.round((6 + 4 * (1 - this.#protoCapacityFactor)) * perf);
+        minSizeForSplit = Math.max(4, minSizeForSplit);
+        if (stagnation || drop) {
+            varThresh -= 5.0 * this.#memoryFactor;
+            minSizeForSplit = Math.max(3, minSizeForSplit - Math.round((6 + 4 * this.#protoCapacityFactor) * this.#memoryFactor));
+        }
+
+        if (sem.length < this.#effectiveSemanticMax * 1.4) {
+            for (let i = 0; i < sem.length; i++) {
+                const p = sem[i];
+                if (p.size < minSizeForSplit || p.isCore) continue;
+
+                let varSum = 0;
+                for (let j = 0; j < hidden; j++) {
+                    varSum += p.variance[j];
+                }
+                const avgVar = varSum / hidden;
+                if (avgVar <= varThresh) continue;
+
+                let maxVar = 0;
+                let splitDim = 0;
+                for (let j = 0; j < hidden; j++) {
+                    if (p.variance[j] > maxVar) {
+                        maxVar = p.variance[j];
+                        splitDim = j;
+                    }
+                }
+
+                const baseScale = Math.sqrt(Math.max(maxVar, 1e-6)) * 1.5;
+                const perfScaleAdjust = 1 + 6.0 * (1 - perf) + 3.0 * (1 - agreement);
+                let splitScale = baseScale * perfScaleAdjust;
+                if (stagnation || drop) splitScale *= 3.0;
+
+                const originalMean = new Float32Array(p.mean);
+                const oldImportance = p.importance || 0;
+                const oldSize = p.size;
+                const oldAccess = p.accessCount;
+                const halfSize = Math.floor(oldSize / 2);
+                const size1 = oldSize - halfSize;
+                const size2 = halfSize;
+
+                p.mean[splitDim] -= splitScale;
+                p.size = size1;
+                p.accessCount = oldAccess * (size1 / oldSize);
+                p.variance[splitDim] = Math.min(p.variance[splitDim] + splitScale ** 2 * 3.0, this.#maxVariancePerDim);
+                p.importance = oldImportance * 0.5;
+                p.projNorms = this.#computeProjNorms(p.mean);
+
+                const newMean = new Float32Array(originalMean);
+                newMean[splitDim] += splitScale;
+
+                const newVariance = new Float32Array(p.variance);
+                newVariance[splitDim] = Math.min(newVariance[splitDim] + splitScale ** 2 * 3.0, this.#maxVariancePerDim);
+
+                const newProto = {
+                    mean: newMean,
+                    variance: newVariance,
+                    size: size2,
+                    accessCount: oldAccess * (size2 / oldSize),
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: oldImportance * 0.5
+                };
+
+                sem.push(newProto);
+
+                if (sem.length >= this.#effectiveSemanticMax * this.#mergeTrimFactor) break;
+            }
+        }
+
+        if (sem.length > 0) {
+            sem.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+
+            let numCores = Math.min(this.#coreMaxProtos * 2, sem.length);
+            if (stagnation || drop) {
+                numCores = Math.min(Math.round(this.#coreMaxProtos * 4), sem.length);
+            }
+            sem.forEach(p => p.isCore = false);
+            if (numCores > 0) {
+                const candidateLimit = Math.min(sem.length, numCores * (6 + 4 * this.#protoCapacityFactor));
+                const candidates = sem.slice(0, candidateLimit);
+
+                const coreProtos = [];
+                coreProtos.push(candidates[0]);
+                candidates[0].isCore = true;
+
+                for (let c = 1; c < numCores; c++) {
+                    let bestIdx = -1;
+                    let maxMinDist = -1;
+                    for (let i = 0; i < candidates.length; i++) {
+                        const cand = candidates[i];
+                        if (coreProtos.includes(cand)) continue;
+
+                        let maxSimToCore = -Infinity;
+                        for (const coreP of coreProtos) {
+                            const sim = this.#projSimilarity(cand.projNorms, coreP.projNorms);
+                            if (sim > maxSimToCore) maxSimToCore = sim;
+                        }
+                        const dist = 1 - maxSimToCore;
+
+                        if (dist > maxMinDist || (dist === maxMinDist && Math.random() < 0.5)) {
+                            maxMinDist = dist;
+                            bestIdx = i;
+                        }
+                    }
+                    if (bestIdx !== -1) {
+                        const selected = candidates[bestIdx];
+                        coreProtos.push(selected);
+                        selected.isCore = true;
+                    } else {
+                        break;
+                    }
+                }
+
+                coreProtos.forEach(p => {
+                    p.importance = (p.importance || 0) + 80 + 25 * Math.log(1 + p.size);
+                });
+            }
+
+            if (sem.length > this.#effectiveSemanticMax) {
+                sem.length = this.#effectiveSemanticMax;
+            }
+        }
+
+        this.#rebuildSemanticLSHBuckets(transformerIdx);
+    }
+
+    #computeMemoryScoreFromProtos (protos, attentionScores, transformerIdx, entryIndex, memoryList, ignoreRecency = false) {
+        if (!Array.isArray(protos) || protos.length === 0) return 0;
+
+        const hidden = this.#hiddenSize;
+        const totalSize = protos.reduce((sum, p) => sum + p.size, 0) || 1;
+        const rep = this.#weightedMean(protos);
+
+        let sqSumApprox = 0;
+        let pooledVarSum = 0;
+        for (let j = 0; j < hidden; j++) {
+            let weightedSq = 0;
+            let varJ = 0;
+            for (const p of protos) {
+                const m = p.mean[j];
+                const v = Math.max(p.variance[j], 1e-6);
+                const diff = m - rep[j];
+                varJ += p.size * (v + diff * diff);
+                weightedSq += p.size * m * m;
+            }
+            pooledVarSum += varJ / totalSize;
+            sqSumApprox += weightedSq;
+        }
+        const magnitudeScore = Math.sqrt(sqSumApprox);
+        const varianceScore = Math.tanh(Math.sqrt(Math.max(0, pooledVarSum / hidden)));
+
+        let clusterDiversityScore = 0;
+        if (protos.length > 1) {
+            let clusterEnt = 0;
+            for (const p of protos) {
+                const prob = p.size / totalSize;
+                if (prob > 1e-6) clusterEnt -= prob * Math.log(prob + 1e-12);
+            }
+            clusterDiversityScore = clusterEnt / Math.log(protos.length + 1);
+        }
+
+        let activeDims = 0;
+        for (let j = 0; j < hidden; j++) {
+            let maxAbs = 0;
+            for (const p of protos) {
+                maxAbs = Math.max(maxAbs, Math.abs(p.mean[j]));
+            }
+            if (maxAbs > 1e-3) activeDims++;
+        }
+        const sparsity = activeDims / hidden;
         const sparsityScore = 1 - Math.abs(sparsity - 0.5) * 2;
-
-        const magnitudeScore = Math.sqrt(sqSum);
 
         let attentionSharpness = 0;
         if (attentionScores) {
@@ -1101,11 +3246,12 @@ class HiveMind {
             for (let h = 0; h < attentionScores.length; h++) {
                 for (let i = 0; i < attentionScores[h].length; i++) {
                     let entropy = 0, sumP = 0;
-                    for (let j = 0; j < attentionScores[h][i].length; j++) {
-                        const p = attentionScores[h][i][j];
-                        if (p > 0) {
-                            entropy -= p * Math.log(p + 1e-12);
-                            sumP += p;
+                    const headRow = attentionScores[h][i];
+                    for (let jj = 0; jj < headRow.length; jj++) {
+                        const prob = headRow[jj];
+                        if (prob > 0) {
+                            entropy -= prob * Math.log(prob + 1e-12);
+                            sumP += prob;
                         }
                     }
                     if (sumP > 0.1) {
@@ -1118,191 +3264,169 @@ class HiveMind {
             attentionSharpness = Math.exp(-avgEntropy / Math.log(this.#inputSize));
         }
 
+        let totalAccess = 0;
+        for (const p of protos) totalAccess += p.accessCount;
+
+        const accessScore = Math.tanh(totalAccess / (protos.length * 50.0));
+
+        const perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
         const specScore = Math.min(Math.max(this.#specializationScores[transformerIdx] || 0.5, 0), 1);
-        let perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
         const confidenceBoost = 0.25 * perf * specScore;
 
-        const entryProtos = this.#poolMultiPrototype(memoryEntry);
-
         let uniqueness = 1.0;
-        if (!ignoreRecency && this.#attentionMemory[transformerIdx].length > 1) {
-            if (entryProtos.length > 0) {
-                const entryRep = this.#weightedMean(entryProtos);
-
-                let centroidRep = Array(this.#hiddenSize).fill(0);
-                let totalSize = 0;
-
-                const pastMemory = this.#attentionMemory[transformerIdx];
-                const maxSampled = this.#adaptiveWindow;
-
-                let indicesToUse = [];
-                if (pastMemory.length > maxSampled) {
-                    for (let i = 0; i < maxSampled; i++) {
-                        indicesToUse.push(Math.floor(i * pastMemory.length / maxSampled));
-                    }
-                } else {
-                    for (let i = 0; i < pastMemory.length; i++) {
-                        indicesToUse.push(i);
-                    }
+        if (!ignoreRecency && memoryList.length > 1) {
+            const centroidRep = new Float32Array(hidden);
+            let totalCentSize = 0;
+            const maxSampled = Math.min(Math.round(this.#contextWindow * 0.15), memoryList.length);
+            const indicesToUse = [];
+            if (memoryList.length > maxSampled) {
+                for (let i = 0; i < maxSampled; i++) {
+                    indicesToUse.push(Math.floor(i * memoryList.length / maxSampled));
                 }
-
-                indicesToUse = indicesToUse.filter(idx => idx !== entryIndex);
-
-                for (const idx of indicesToUse) {
-                    const mem = pastMemory[idx];
-                    const mProtos = this.#poolMultiPrototype(mem);
-                    for (const pr of mProtos) {
-                        for (let j = 0; j < this.#hiddenSize; j++) {
-                            centroidRep[j] += pr.mean[j] * pr.size;
-                        }
-                        totalSize += pr.size;
+            } else {
+                for (let i = 0; i < memoryList.length; i++) indicesToUse.push(i);
+            }
+            const filtered = indicesToUse.filter(idx => idx !== entryIndex);
+            for (const idx of filtered) {
+                const mProtos = memoryList[idx].protos;
+                for (const pr of mProtos) {
+                    for (let j = 0; j < hidden; j++) {
+                        centroidRep[j] += pr.mean[j] * pr.size;
                     }
-                }
-
-                if (totalSize > 0) {
-                    for (let j = 0; j < this.#hiddenSize; j++) centroidRep[j] /= totalSize;
-                    uniqueness = 1 - this.#cosineSimilarity(entryRep, centroidRep);
-                    uniqueness = Math.max(0, uniqueness);
-                } else {
-                    uniqueness = 1.0;
+                    totalCentSize += pr.size;
                 }
             }
-        }
-
-        let clusterDiversityScore = 0;
-        if (entryProtos.length > 1) {
-            let clusterEntropy = 0;
-            const totalMass = entryProtos.reduce((s, p) => s + p.size, 0);
-            if (totalMass > 0) {
-                for (const p of entryProtos) {
-                    const prob = p.size / totalMass;
-                    if (prob > 1e-6) {
-                        clusterEntropy -= prob * Math.log(prob);
-                    }
-                }
+            if (totalCentSize > 0) {
+                for (let j = 0; j < hidden; j++) centroidRep[j] /= totalCentSize;
+                uniqueness = 1 - this.#cosineSimilarity(rep, centroidRep);
+                uniqueness = Math.max(0, uniqueness);
             }
-            const maxEnt = Math.log(entryProtos.length);
-            clusterDiversityScore = maxEnt > 0 ? clusterEntropy / maxEnt : 0;
         }
 
         let baseScore =
-            0.2 * varianceScore +
-            0.15 * skewScore +
-            0.15 * kurtosisScore +
-            0.1 * entropyScore +
-            0.1 * sparsityScore +
-            0.15 * magnitudeScore +
-            0.15 * attentionSharpness +
-            0.1 * clusterDiversityScore;
+            0.25 * varianceScore +
+            0.15 * clusterDiversityScore +
+            0.15 * sparsityScore +
+            0.15 * Math.tanh(magnitudeScore / Math.sqrt(totalSize * hidden)) +
+            0.10 * attentionSharpness +
+            0.15 * accessScore;
 
         baseScore = baseScore * (1 + confidenceBoost) * Math.pow(uniqueness + 0.5, 1.5);
 
         let diversityFactor = 1.0;
-        if (!ignoreRecency && this.#attentionMemory[transformerIdx].length > 5) {
-            const memoryLength = this.#attentionMemory[transformerIdx].length;
-            const recentCount = Math.max(4, Math.floor(memoryLength * 0.2));
-
+        if (!ignoreRecency && memoryList.length > 5) {
+            const minRecentForDiversity = Math.max(Math.round(3 * this.#memoryFactor), Math.round(memoryList.length * 0.15));
+            const recentCount = Math.max(minRecentForDiversity, Math.floor(memoryList.length * 0.2));
             let distSum = 0;
+            let rCount = 0;
             for (let r = 1; r <= recentCount; r++) {
-                const recentIndex = memoryLength - r;
-                if (recentIndex < 0) break;
-                if (recentIndex === entryIndex) continue;
-
-                const recentEntry = this.#attentionMemory[transformerIdx][recentIndex];
-                const recentProtos = this.#poolMultiPrototype(recentEntry);
-                const overlapSim = this.#maxPairwiseKernel(entryProtos, recentProtos);
+                const recentIndex = memoryList.length - r;
+                if (recentIndex < 0 || recentIndex === entryIndex) continue;
+                const recentProtos = memoryList[recentIndex].protos;
+                const overlapSim = this.#maxPairwiseKernel(protos, recentProtos);
                 distSum += 1 - overlapSim;
+                rCount++;
             }
-            diversityFactor = 1 + 1.0 * (distSum / recentCount);
+            if (rCount > 0) diversityFactor = 1 + (distSum / rCount);
         }
 
-        const age = ignoreRecency ? 0 : this.#attentionMemory[transformerIdx].length - 1 - entryIndex;
+        const age = ignoreRecency ? 0 : memoryList.length - 1 - entryIndex;
         const recencyFactor = Math.exp(-0.03 * age) * (1 + 1.0 / (1 + age / 5));
 
         return baseScore * diversityFactor * recencyFactor;
     }
 
-    #pruneMemory (transformerIdx, contextWindow, latestScores) {
+    #pruneMemory (transformerIdx, contextWindow, latestAttentionScores) {
         const memory = this.#attentionMemory[transformerIdx];
         if (memory.length <= contextWindow) return;
 
         const numToKeep = contextWindow;
+        const baseRecent = Math.round(this.#baseProtoCapacity * 0.4);
+        const scaledRecent = Math.round(baseRecent * this.#memoryFactor);
+        const numForcedRecent = Math.min(scaledRecent, Math.floor(numToKeep * 0.6));
+        const latestIndex = memory.length - 1;
+        let forcedStart = Math.max(0, latestIndex - numForcedRecent + 1);
 
-        const candidates = memory.map((entry, index) => ({
-            index,
-            entry,
-            protos: this.#poolMultiPrototype(entry),
-            score: this.#computeMemoryScore(
-                entry,
-                index === memory.length - 1 ? latestScores : null,
-                transformerIdx,
-                index
-            )
-        }));
-
-        let selected = [];
-
-        const numForcedRecent = Math.min(20, Math.floor(numToKeep * 0.5));
-        for (let r = 0; r < numForcedRecent; r++) {
-            const candIdx = candidates.length - 1 - r;
-            if (candIdx >= 0) {
-                selected.push(candidates[candIdx]);
-            }
+        const numEntries = memory.length;
+        const scores = new Float32Array(numEntries);
+        for (let i = 0; i < numEntries; i++) {
+            const attScores = (i === latestIndex) ? latestAttentionScores : null;
+            scores[i] = this.#computeMemoryScoreFromProtos(memory[i].protos, attScores, transformerIdx, i, memory);
         }
 
-        while (selected.length < numToKeep) {
-            let bestCand = null;
-            let bestMarginal = -Infinity;
+        const olderIndices = [];
+        for (let i = 0; i < forcedStart; i++) {
+            olderIndices.push(i);
+        }
+        olderIndices.sort((a, b) => scores[b] - scores[a]);
 
-            for (const cand of candidates) {
-                if (selected.some(s => s.index === cand.index)) continue;
+        const actualForcedCount = latestIndex - forcedStart + 1;
+        const numFromOlder = Math.max(0, numToKeep - actualForcedCount);
 
-                let maxOverlap = 0;
-                for (const sel of selected) {
-                    const overlap = this.#maxPairwiseKernel(cand.protos, sel.protos);
-                    if (overlap > maxOverlap) maxOverlap = overlap;
-                }
-
-                const dist = 1 - maxOverlap;
-                const marginal = cand.score * (1 + 2.0 * dist);
-
-                if (marginal > bestMarginal) {
-                    bestMarginal = marginal;
-                    bestCand = cand;
-                }
-            }
-
-            if (bestCand === null) break;
-            selected.push(bestCand);
+        const selectedIndices = [];
+        for (let i = forcedStart; i <= latestIndex; i++) {
+            selectedIndices.push(i);
+        }
+        for (let k = 0; k < numFromOlder && k < olderIndices.length; k++) {
+            selectedIndices.push(olderIndices[k]);
         }
 
-        if (selected.length < numToKeep) {
-            candidates.sort((a, b) => b.score - a.score);
-            for (const cand of candidates) {
-                if (!selected.some(s => s.index === cand.index)) {
-                    selected.push(cand);
-                    if (selected.length >= numToKeep) break;
-                }
+        selectedIndices.sort((a, b) => a - b);
+        this.#attentionMemory[transformerIdx] = selectedIndices.map(idx => memory[idx]);
+
+        const perf = this.#performanceScores[transformerIdx] ?? 0.5;
+        const allIndices = Array.from({length: memory.length}, (_, i) => i);
+        const discardedIndices = allIndices.filter(idx => !selectedIndices.includes(idx));
+
+        if (discardedIndices.length > 0) {
+            const discardWithScore = discardedIndices.map(idx => ({
+                idx,
+                score: this.#computeMemoryScoreFromProtos(memory[idx].protos, null, transformerIdx, idx, memory, true)
+            }));
+            discardWithScore.sort((a, b) => b.score - a.score);
+
+            const numPromote = Math.min(Math.round(this.#baseProtoCapacity * (0.25 + 0.75 * (1 - perf))), discardWithScore.length);
+
+            const promotedEntries = [];
+            for (let k = 0; k < numPromote; k++) {
+                const { idx } = discardWithScore[k];
+                const entry = memory[idx];
+                const newProtos = entry.protos.map(p => ({
+                    mean: new Float32Array(p.mean),
+                    variance: new Float32Array(p.variance),
+                    size: p.size * 1.5,
+                    accessCount: p.accessCount + p.size * 15,
+                    projNorms: p.projNorms ? p.projNorms.map(arr => new Float32Array(arr)) : this.#computeProjNorms(p.mean),
+                    isCore: true,
+                    importance: (p.importance || 0) + 40
+                }));
+                const repMean = entry.repMean ? new Float32Array(entry.repMean) : this.#weightedMean(entry.protos);
+                promotedEntries.push({
+                    protos: newProtos,
+                    repMean,
+                    repProj: this.#computeProjNorms(repMean)
+                });
+            }
+
+            this.#coreEpisodic[transformerIdx].push(...promotedEntries);
+
+            if (this.#coreEpisodic[transformerIdx].length > this.#coreEpisodicMaxEntries) {
+                const coreWithScore = this.#coreEpisodic[transformerIdx].map(entry => ({
+                    entry,
+                    score: this.#computeMemoryScoreFromProtos(entry.protos, null, transformerIdx, -1, [], true)
+                }));
+                coreWithScore.sort((a, b) => b.score - a.score);
+                this.#coreEpisodic[transformerIdx] = coreWithScore.slice(0, this.#coreEpisodicMaxEntries).map(item => item.entry);
             }
         }
-
-        selected.sort((a, b) => a.index - b.index);
-        this.#attentionMemory[transformerIdx] = selected.map(s => s.entry);
     }
 
     #multiHeadAttention (x, layer, transformerIdx, training = true) {
         if (
             !Array.isArray(x) ||
             x.length !== this.#inputSize ||
-            !x.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)) ||
-            !Number.isInteger(transformerIdx) ||
-            transformerIdx < 0 ||
-            transformerIdx >= this.#ensembleSize ||
-            !layer || !layer.Wq || !layer.Wk || !layer.Wv || !layer.Wo ||
-            !layer.Wq.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)) ||
-            !layer.Wk.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)) ||
-            !layer.Wv.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber)) ||
-            !layer.Wo.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
+            !x.every(row => Array.isArray(row) && row.length === this.#hiddenSize) ||
+            !layer || !layer.Wq || !layer.Wk || !layer.Wv || !layer.Wo
         ) {
             return {
                 output: Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
@@ -1310,81 +3434,70 @@ class HiveMind {
                 Q: Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
                 K: Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
                 V: Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0)),
-                scores: Array(this.#numHeads).fill().map(() =>
-                    Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
-                ),
-                probs: Array(this.#numHeads).fill().map(() =>
-                    Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
-                )
+                scores: Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))),
+                probs: Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)))
             };
         }
 
+        const perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
+        const threshMultiplier = 0.75 + 0.5 * perf;
+        const maxAddMultiplier = 1.0 + 1.0 * (1 - perf);
+        const mergeThreshold = 0.7 + 0.2 * perf * this.#protoCapacityFactor;
+
         const headSize = this.#hiddenSize / this.#numHeads;
-        if (this.#hiddenSize % this.#numHeads !== 0 || headSize <= 0 || headSize % 2 !== 0) {
-            console.log(`Critical error: hiddenSize (${this.#hiddenSize}) must be divisible by numHeads (${this.#numHeads}) and headSize must be even for RoPE.`);
-            process.exit();
-        }
 
         const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         const K = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         const V = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
 
+        const specScore = this.#specializationScores[transformerIdx] || 0.5;
+
         for (let i = 0; i < this.#inputSize; i++) {
             for (let j = 0; j < this.#hiddenSize; j++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j])
-                        ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j], 0.5), 1.5)
-                        : 1;
-                    Q[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wq[k][j])
-                        ? x[i][k] * layer.Wq[k][j] * specWeight
-                        : 0;
-                    K[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wk[k][j])
-                        ? x[i][k] * layer.Wk[k][j] * specWeight
-                        : 0;
-                    V[i][j] += isValidNumber(x[i][k]) && isValidNumber(layer.Wv[k][j])
-                        ? x[i][k] * layer.Wv[k][j] * specWeight
-                        : 0;
+                let qSum = 0;
+                let kSum = 0;
+                let vSum = 0;
+                for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                    const specWeight = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][kk % this.#hiddenSize][j], 0.5), 1.5);
+                    const xVal = x[i][kk];
+                    qSum += xVal * layer.Wq[kk][j] * specWeight;
+                    kSum += xVal * layer.Wk[kk][j] * specWeight;
+                    vSum += xVal * layer.Wv[kk][j] * specWeight;
                 }
+                Q[i][j] = qSum;
+                K[i][j] = kSum;
+                V[i][j] = vSum;
             }
         }
 
         this.#applyRoPE(Q);
         this.#applyRoPE(K);
 
-        const attentionScores = Array(this.#numHeads).fill().map(() =>
-            Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
-        );
-        const attentionProbs = Array(this.#numHeads).fill().map(() =>
-            Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0))
-        );
+        const attentionScores = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
+        const attentionProbs = Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)));
 
         for (let h = 0; h < this.#numHeads; h++) {
+            const offset = h * headSize;
             for (let i = 0; i < this.#inputSize; i++) {
                 for (let j = 0; j < this.#inputSize; j++) {
                     let sum = 0;
-                    for (let k = 0; k < headSize; k++) {
-                        const idx = h * headSize + k;
-                        sum += isValidNumber(Q[i][idx]) && isValidNumber(K[j][idx])
-                            ? Q[i][idx] * K[j][idx]
-                            : 0;
+                    for (let kk = 0; kk < headSize; kk++) {
+                        sum += Q[i][offset + kk] * K[j][offset + kk];
                     }
-                    attentionScores[h][i][j] = isValidNumber(sum)
-                        ? sum / Math.sqrt(headSize)
-                        : 0;
+                    attentionScores[h][i][j] = sum / Math.sqrt(headSize);
                 }
-                attentionProbs[h][i] = this.#softmax(attentionScores[h][i].map(score => isValidNumber(score) ? score : 0));
+                attentionProbs[h][i] = this.#softmax(attentionScores[h][i]);
             }
         }
 
         const preWoOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         for (let h = 0; h < this.#numHeads; h++) {
+            const offset = h * headSize;
             for (let i = 0; i < this.#inputSize; i++) {
                 for (let j = 0; j < this.#inputSize; j++) {
-                    for (let k = 0; k < headSize; k++) {
-                        const idx = h * headSize + k;
-                        preWoOutput[i][idx] += isValidNumber(attentionProbs[h][i][j]) && isValidNumber(V[j][idx])
-                            ? attentionProbs[h][i][j] * V[j][idx]
-                            : 0;
+                    const p = attentionProbs[h][i][j];
+                    for (let kk = 0; kk < headSize; kk++) {
+                        preWoOutput[i][offset + kk] += p * V[j][offset + kk];
                     }
                 }
             }
@@ -1393,46 +3506,204 @@ class HiveMind {
         const finalOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         for (let i = 0; i < this.#inputSize; i++) {
             for (let j = 0; j < this.#hiddenSize; j++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j])
-                        ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][k % this.#hiddenSize][j], 0.5), 1.5)
-                        : 1;
-                    finalOutput[i][j] += isValidNumber(preWoOutput[i][k]) && isValidNumber(layer.Wo[k][j])
-                        ? preWoOutput[i][k] * layer.Wo[k][j] * specWeight
-                        : 0;
+                let sum = 0;
+                for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                    const specWeight = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][kk % this.#hiddenSize][j], 0.5), 1.5);
+                    sum += preWoOutput[i][kk] * layer.Wo[kk][j] * specWeight;
                 }
+                finalOutput[i][j] = sum;
             }
         }
 
         let outputToAdaptive = finalOutput;
         if (training) {
-            let perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
-            const specScore = Math.min(Math.max(this.#specializationScores[transformerIdx] || 0.5, 0), 1);
             const confidence = perf * (0.7 + 0.3 * specScore);
             const maxNoiseScale = 0.03 + 0.3 * (1 - confidence);
 
             outputToAdaptive = finalOutput.map(tokenVec => {
-                const noiseVec = tokenVec.map(() => (Math.random() - 0.5) * maxNoiseScale);
-                return tokenVec.map((val, j) => val + noiseVec[j] * (1 + (this.#specializationWeights[transformerIdx][j % this.#hiddenSize][j % this.#hiddenSize] || 1)));
+                return tokenVec.map((val, j) => val + (Math.random() - 0.5) * maxNoiseScale * (1 + (this.#specializationWeights[transformerIdx][j % this.#hiddenSize][j % this.#hiddenSize] || 1)));
             });
         } else {
-            let perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
-            if (perf < 0.6) {
-                const scale = 0.01 * (1 - perf);
-                outputToAdaptive = finalOutput.map(tokenVec =>
-                    tokenVec.map((val, j) => val * (1 + scale * Math.sin(j * 0.1)))
-                );
+            const baseScale = 0.01 + 0.04 * (1 - perf);
+            const timePhase = this.#attentionMemory[transformerIdx].length * 0.05;
+            outputToAdaptive = finalOutput.map(tokenVec =>
+                tokenVec.map((val, j) => val + baseScale * Math.sin(j * 0.12 + timePhase))
+            );
+        }
+
+        const dynamicShortThreshFactor = 4.0 * threshMultiplier;
+        const dynamicShortMaxAdd = Math.round(this.#shortTermMaxProtos * maxAddMultiplier);
+        const shortProtos = this.#poolMultiPrototype(outputToAdaptive, dynamicShortMaxAdd, dynamicShortThreshFactor);
+
+        if (shortProtos.length > Math.round(this.#shortTermMaxProtos * this.#tempOverloadFactor)) {
+            shortProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+            shortProtos.length = Math.round(this.#shortTermMaxProtos * this.#tempOverloadFactor);
+        }
+
+        if (shortProtos.length > 0) {
+            const shortRepMean = this.#weightedMean(shortProtos);
+            const shortRepProj = this.#computeProjNorms(shortRepMean);
+            const shortTotalSize = shortProtos.reduce((s, p) => s + p.size, 0) || 1;
+
+            const adaptMem = this.#adaptiveContext[transformerIdx];
+            if (adaptMem.length > 0) {
+                const last = adaptMem[adaptMem.length - 1];
+                if (!last.repMean) last.repMean = this.#weightedMean(last.protos);
+                const lastTotalSize = last.protos.reduce((s, p) => s + p.size, 0) || 1;
+                const sim = this.#projSimilarity(last.repProj, shortRepProj);
+
+                if (sim > mergeThreshold) {
+                    const combinedTotal = lastTotalSize + shortTotalSize;
+                    const combinedMean = new Float32Array(this.#hiddenSize);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        combinedMean[j] = (last.repMean[j] * lastTotalSize + shortRepMean[j] * shortTotalSize) / combinedTotal;
+                    }
+                    last.repMean = combinedMean;
+                    last.repProj = this.#computeProjNorms(combinedMean);
+
+                    for (const p of shortProtos) {
+                        last.protos.push({
+                            mean: new Float32Array(p.mean),
+                            variance: new Float32Array(p.variance),
+                            size: p.size,
+                            accessCount: p.accessCount + 1,
+                            projNorms: p.projNorms.map(arr => new Float32Array(arr))
+                        });
+                    }
+
+                    const maxPerShortEntry = Math.round(this.#shortTermMaxProtos * this.#mergeTrimFactor);
+                    if (last.protos.length > maxPerShortEntry) {
+                        last.protos.sort((a, b) => (b.size * b.accessCount) - (a.size * b.accessCount));
+                        last.protos = last.protos.slice(0, maxPerShortEntry);
+                        last.repMean = this.#weightedMean(last.protos);
+                        last.repProj = this.#computeProjNorms(last.repMean);
+                    }
+                } else {
+                    adaptMem.push({
+                        protos: shortProtos,
+                        repMean: shortRepMean,
+                        repProj: shortRepProj
+                    });
+                }
+            } else {
+                adaptMem.push({
+                    protos: shortProtos,
+                    repMean: shortRepMean,
+                    repProj: shortRepProj
+                });
+            }
+
+            if (adaptMem.length > this.#adaptiveWindow) {
+                adaptMem.shift();
             }
         }
 
-        this.#adaptiveContext[transformerIdx].push(outputToAdaptive);
-        if (this.#adaptiveContext[transformerIdx].length > this.#adaptiveWindow) {
-            this.#adaptiveContext[transformerIdx].shift();
+        const dynamicLongThreshFactor = 4.0 * threshMultiplier;
+        const dynamicLongMaxAdd = Math.round(this.#longTermMaxProtos * maxAddMultiplier);
+        const longProtos = this.#poolMultiPrototype(finalOutput, dynamicLongMaxAdd, dynamicLongThreshFactor);
+
+        if (longProtos.length > Math.round(this.#longTermMaxProtos * this.#tempOverloadFactor)) {
+            longProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+            longProtos.length = Math.round(this.#longTermMaxProtos * this.#tempOverloadFactor);
         }
 
-        if (training) {
-            this.#attentionMemory[transformerIdx].push(finalOutput);
-            this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
+        if (longProtos.length > 0) {
+            const longRepMean = this.#weightedMean(longProtos);
+            const longRepProj = this.#computeProjNorms(longRepMean);
+            const longTotalSize = longProtos.reduce((s, p) => s + p.size, 0) || 1;
+
+            const attMem = this.#attentionMemory[transformerIdx];
+            if (attMem.length > 0) {
+                const last = attMem[attMem.length - 1];
+                if (!last.repMean) last.repMean = this.#weightedMean(last.protos);
+                const lastTotalSize = last.protos.reduce((s, p) => s + p.size, 0) || 1;
+                const sim = this.#projSimilarity(last.repProj, longRepProj);
+
+                if (sim > mergeThreshold) {
+                    const combinedTotal = lastTotalSize + longTotalSize;
+                    const combinedMean = new Float32Array(this.#hiddenSize);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        combinedMean[j] = (last.repMean[j] * lastTotalSize + longRepMean[j] * longTotalSize) / combinedTotal;
+                    }
+                    last.repMean = combinedMean;
+                    last.repProj = this.#computeProjNorms(combinedMean);
+
+                    for (const p of longProtos) {
+                        last.protos.push({
+                            mean: new Float32Array(p.mean),
+                            variance: new Float32Array(p.variance),
+                            size: p.size,
+                            accessCount: p.accessCount + 1,
+                            projNorms: p.projNorms.map(arr => new Float32Array(arr))
+                        });
+                    }
+
+                    const maxPerLongEntry = Math.round(this.#longTermMaxProtos * this.#mergeTrimFactor);
+                    if (last.protos.length > maxPerLongEntry) {
+                        last.protos.sort((a, b) => (b.size * b.accessCount) - (a.size * b.accessCount));
+                        last.protos = last.protos.slice(0, maxPerLongEntry);
+                        last.repMean = this.#weightedMean(last.protos);
+                        last.repProj = this.#computeProjNorms(last.repMean);
+                    }
+                } else {
+                    attMem.push({
+                        protos: longProtos,
+                        repMean: longRepMean,
+                        repProj: longRepProj
+                    });
+                }
+            } else {
+                attMem.push({
+                    protos: longProtos,
+                    repMean: longRepMean,
+                    repProj: longRepProj
+                });
+            }
+        }
+
+        const episodicDecay = 0.95 + 0.04 * perf;
+
+        const attMem = this.#attentionMemory[transformerIdx];
+        for (let i = 0; i < attMem.length - 1; i++) {
+            attMem[i].protos.forEach(p => p.accessCount *= episodicDecay);
+        }
+
+        const adaptMem = this.#adaptiveContext[transformerIdx];
+        for (let i = 0; i < adaptMem.length - 1; i++) {
+            adaptMem[i].protos.forEach(p => p.accessCount *= episodicDecay);
+        }
+
+        const coreEp = this.#coreEpisodic[transformerIdx];
+        for (const entry of coreEp) {
+            entry.protos.forEach(p => p.accessCount *= 0.99);
+        }
+
+        this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
+
+        this.#semanticStepCounters[transformerIdx]++;
+        if (this.#semanticStepCounters[transformerIdx] >= this.#semanticUpdateEvery) {
+            this.#semanticStepCounters[transformerIdx] = 0;
+            if (longProtos.length > 0) {
+                this.#updateSemanticProtos(transformerIdx, longProtos);
+            }
+
+            this.#generativeReplay(transformerIdx);
+
+            this.#semanticMergeCounters[transformerIdx]++;
+            if (this.#semanticMergeCounters[transformerIdx] >= this.#semanticMergeEvery) {
+                this.#semanticMergeCounters[transformerIdx] = 0;
+                this.#consolidateSemanticProtos(transformerIdx);
+            }
+        }
+
+        const dropBoost = this.#detectSuddenDrop(transformerIdx);
+        if (dropBoost > 1.5 && Math.random() < 0.4) {
+            this.#replayOldMemory(transformerIdx);
+            this.#generativeReplay(transformerIdx);
+        }
+
+        if (this.#semanticStepCounters[transformerIdx] % this.#replayEvery === 0) {
+            this.#replayOldMemory(transformerIdx);
         }
 
         return {
@@ -1449,84 +3720,79 @@ class HiveMind {
     #feedForward (x, layer, transformerIdx) {
         if (
             !Array.isArray(x) || x.length !== this.#hiddenSize ||
-            !x.every(isValidNumber) ||
-            !Number.isInteger(transformerIdx) ||
-            transformerIdx < 0 ||
-            transformerIdx >= this.#ensembleSize ||
-            !layer || !layer.gate_proj || !layer.up_proj || !layer.down_proj ||
-            !layer.gate_proj.every(row => Array.isArray(row) && row.length === this.#feedForwardSize && row.every(isValidNumber)) ||
-            !layer.up_proj.every(row => Array.isArray(row) && row.length === this.#feedForwardSize && row.every(isValidNumber)) ||
-            !layer.down_proj.every(row => Array.isArray(row) && row.length === this.#hiddenSize && row.every(isValidNumber))
+            !layer || !layer.gate_proj || !layer.up_proj || !layer.down_proj
         ) {
             return Array(this.#hiddenSize).fill(0);
         }
 
-        const gate = Array(this.#feedForwardSize).fill(0);
-        const up = Array(this.#feedForwardSize).fill(0);
+        const specScore = this.#specializationScores[transformerIdx] || 0.5;
+        const gate = new Float32Array(this.#feedForwardSize);
+        const up = new Float32Array(this.#feedForwardSize);
 
         for (let j = 0; j < this.#feedForwardSize; j++) {
+            let gSum = 0;
+            let uSum = 0;
             for (let i = 0; i < this.#hiddenSize; i++) {
-                const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j % this.#hiddenSize])
-                    ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j % this.#hiddenSize], 0.5), 1.5)
-                    : 1;
-                gate[j] += isValidNumber(x[i]) && isValidNumber(layer.gate_proj[i][j])
-                    ? x[i] * layer.gate_proj[i][j] * specWeight
-                    : 0;
-                up[j] += isValidNumber(x[i]) && isValidNumber(layer.up_proj[i][j])
-                    ? x[i] * layer.up_proj[i][j] * specWeight
-                    : 0;
+                const specWeight = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j % this.#hiddenSize], 0.5), 1.5);
+                const xVal = x[i];
+                gSum += xVal * layer.gate_proj[i][j] * specWeight;
+                uSum += xVal * layer.up_proj[i][j] * specWeight;
             }
+            gate[j] = gSum;
+            up[j] = uSum;
         }
 
-        let activated = Array(this.#feedForwardSize).fill(0);
+        const activated = new Float32Array(this.#feedForwardSize);
         for (let j = 0; j < this.#feedForwardSize; j++) {
             activated[j] = this.#silu(gate[j]) * up[j];
         }
 
-        const output = Array(this.#hiddenSize).fill(0);
+        const output = new Float32Array(this.#hiddenSize);
         for (let j = 0; j < this.#hiddenSize; j++) {
+            let sum = 0;
             for (let i = 0; i < this.#feedForwardSize; i++) {
-                const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][j % this.#hiddenSize][i % this.#hiddenSize])
-                    ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][j % this.#hiddenSize][i % this.#hiddenSize], 0.5), 1.5)
-                    : 1;
-                output[j] += isValidNumber(activated[i]) && isValidNumber(layer.down_proj[i][j])
-                    ? activated[i] * layer.down_proj[i][j] * specWeight
-                    : 0;
+                const specWeight = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][j % this.#hiddenSize][i % this.#hiddenSize], 0.5), 1.5);
+                sum += activated[i] * layer.down_proj[i][j] * specWeight;
             }
+            output[j] = sum;
         }
 
-        return output;
+        return Array.from(output);
     }
 
     #contextAwareAttention (inputs, transformerIdx) {
         if (
             !Array.isArray(inputs) ||
-            inputs.length !== this.#inputSize ||
-            !inputs.every(isValidNumber) ||
-            !Number.isInteger(transformerIdx) ||
-            transformerIdx < 0 ||
-            transformerIdx >= this.#ensembleSize
+            inputs.length !== this.#inputSize
         ) {
             return Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         }
 
-        let perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
+        const perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
+        const specScore = this.#specializationScores[transformerIdx] || 0.5;
 
         const inputProjection = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         for (let i = 0; i < this.#inputSize; i++) {
             for (let j = 0; j < this.#hiddenSize; j++) {
-                const specWeight = isValidNumber(this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j])
-                    ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j], 0.5), 1.5)
-                    : 1;
-                inputProjection[i][j] = isValidNumber(inputs[i])
-                    ? inputs[i] * specWeight * (1 + this.#swarmIntelligenceFactor)
-                    : 0;
+                const specWeight = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][i % this.#hiddenSize][j], 0.5), 1.5);
+                inputProjection[i][j] = inputs[i] * specWeight * (1 + this.#swarmIntelligenceFactor);
             }
         }
 
         const rawComponent = inputProjection.map(row => row.slice());
 
-        const currentProtos = this.#poolMultiPrototype(rawComponent, 8, 2);
+        const threshMultiplier = 0.75 + 0.5 * perf;
+        const dynamicRawThreshFactor = 4.0 * threshMultiplier;
+        const maxAddMultiplier = 1.0 + 1.0 * (1 - perf);
+        const dynamicRawMaxAdd = Math.round(this.#rawMaxProtos * maxAddMultiplier);
+
+        const currentProtos = this.#poolMultiPrototype(rawComponent, dynamicRawMaxAdd, dynamicRawThreshFactor);
+
+        if (currentProtos.length > Math.round(this.#rawMaxProtos * this.#tempOverloadFactor)) {
+            currentProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+            currentProtos.length = Math.round(this.#rawMaxProtos * this.#tempOverloadFactor);
+        }
+
         if (currentProtos.length === 0) {
             return rawComponent;
         }
@@ -1535,31 +3801,170 @@ class HiveMind {
         const shortTermMemoryLength = this.#adaptiveContext[transformerIdx].length;
         const fillFactor = (longTermMemoryLength / this.#contextWindow + shortTermMemoryLength / this.#adaptiveWindow) / 2;
 
-        const dynamicEntrySelection = Math.max(12, Math.floor(this.#adaptiveWindow / 2));
-        const selectedPast = this.#selectTopKRelevantEntries(transformerIdx, currentProtos, dynamicEntrySelection);
+        const dynamicRetrieve = Math.round(this.#maxRetrievedProtos * (1 + fillFactor));
 
-        if (selectedPast.length === 0) {
+        const selectedProtos = this.#retrieveTopRelevantProtos(transformerIdx, currentProtos, dynamicRetrieve);
+
+        if (selectedProtos.length === 0) {
             return rawComponent;
         }
 
-        const tokenPastLen = selectedPast.length * this.#inputSize;
+        const protoMeans = selectedProtos.map(p => p.mean.slice());
+        const protoSizes = selectedProtos.map(p => p.size);
 
-        const pastStates = Array(tokenPastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
-        let pOffset = 0;
-        for (const entry of selectedPast) {
-            for (let pos = 0; pos < this.#inputSize; pos++) {
-                const targetRow = pastStates[pOffset + pos];
-                const sourceRow = entry[pos];
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    targetRow[j] = isValidNumber(sourceRow[j]) ? sourceRow[j] : 0;
-                }
-            }
-            pOffset += this.#inputSize;
-        }
+        const pastLen = protoMeans.length;
 
         const transformer = this.#transformers[transformerIdx];
+        let { avgWq, avgWk, avgWv, avgWo } = transformer.cachedAvgWeights || this.#cacheAverageWeights(transformerIdx);
+
+        const headSize = this.#hiddenSize / this.#numHeads;
+
+        const K = Array(pastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
+        const V = Array(pastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+        for (let pj = 0; pj < pastLen; pj++) {
+            const mean = protoMeans[pj];
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                let sumK = 0;
+                let sumV = 0;
+                for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                    const specW = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5);
+                    sumK += mean[kk] * avgWk[kk][j] * specW;
+                    sumV += mean[kk] * avgWv[kk][j] * specW;
+                }
+                K[pj][j] = sumK;
+                V[pj][j] = sumV;
+            }
+        }
+
+        this.#applyRoPE(K, 0);
+
+        let globalDiversity = 0;
+        if (pastLen > 8) {
+            const numSamples = Math.min(16, pastLen);
+            const sampleIndices = Array.from({length: numSamples}, () => Math.floor(Math.random() * pastLen));
+            const centroid = Array(this.#hiddenSize).fill(0);
+            for (const si of sampleIndices) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    centroid[j] += protoMeans[si][j];
+                }
+            }
+            for (let j = 0; j < this.#hiddenSize; j++) centroid[j] /= numSamples;
+
+            for (const si of sampleIndices) {
+                globalDiversity += 1 - this.#cosineSimilarity(protoMeans[si], centroid);
+            }
+            globalDiversity /= numSamples;
+        }
+        const diversityScore = Math.tanh(globalDiversity * 6);
+
+        let augmented = rawComponent.map(row => row.slice());
+        const baseHops = Math.round(2 + (2 + 3 * this.#memoryFactor) * fillFactor);
+        const maxHops = Math.max(baseHops, Math.round(selectedProtos.length * 0.5 * this.#memoryFactor));
+
+        for (let hop = 0; hop < maxHops; hop++) {
+            const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+            for (let seqi = 0; seqi < this.#inputSize; seqi++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    let sum = 0;
+                    for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                        const specW = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5);
+                        sum += augmented[seqi][kk] * avgWq[kk][j] * specW;
+                    }
+                    Q[seqi][j] = sum;
+                }
+            }
+
+            this.#applyRoPE(Q, pastLen);
+
+            let totalEntropy = 0;
+            let queryCount = 0;
+
+            const preWoOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+
+            for (let h = 0; h < this.#numHeads; h++) {
+                const offset = h * headSize;
+                for (let i = 0; i < this.#inputSize; i++) {
+                    let maxScore = -Infinity;
+                    const scores = Array(pastLen).fill(0);
+                    for (let pj = 0; pj < pastLen; pj++) {
+                        let sum = 0;
+                        for (let kk = 0; kk < headSize; kk++) {
+                            sum += Q[i][offset + kk] * K[pj][offset + kk];
+                        }
+                        scores[pj] = sum / Math.sqrt(headSize);
+                        if (scores[pj] > maxScore) maxScore = scores[pj];
+                    }
+
+                    const expScores = scores.map(s => Math.exp(s - maxScore));
+                    const sumExp = expScores.reduce((a, b) => a + b, 0) || 1;
+
+                    let headEntropy = 0;
+                    let sumP = 0;
+                    for (let pj = 0; pj < pastLen; pj++) {
+                        const p = expScores[pj] / sumExp;
+                        if (p > 1e-6) {
+                            headEntropy -= p * Math.log(p);
+                            sumP += p;
+                        }
+                        if (p > 0) {
+                            for (let kk = 0; kk < headSize; kk++) {
+                                preWoOutput[i][offset + kk] += p * V[pj][offset + kk] * protoSizes[pj];
+                            }
+                        }
+                    }
+
+                    if (sumP > 0.1) {
+                        totalEntropy += headEntropy;
+                        queryCount++;
+                    }
+                }
+            }
+
+            const logPast = Math.log(pastLen + 1);
+            const avgEntropy = queryCount > 0 ? totalEntropy / queryCount : logPast;
+            const attentionSharpness = Math.exp(-avgEntropy / logPast);
+
+            const gate = (3.0 + this.#memoryFactor) * attentionSharpness + (1.5 + this.#memoryFactor) * fillFactor +
+                (1.5 + 0.5 * this.#protoCapacityFactor) * perf + (1.5 + this.#memoryFactor) * diversityScore;
+            let retrievedRatio = 1 / (1 + Math.exp(-gate));
+
+            const retrieved = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
+            for (let i = 0; i < this.#inputSize; i++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    let sum = 0;
+                    for (let kk = 0; kk < this.#hiddenSize; kk++) {
+                        const specW = Math.min(Math.max(1 + specScore * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5);
+                        sum += preWoOutput[i][kk] * avgWo[kk][j] * specW;
+                    }
+                    retrieved[i][j] = sum;
+                }
+            }
+
+            for (let i = 0; i < this.#inputSize; i++) {
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    augmented[i][j] = augmented[i][j] * (1 - retrievedRatio) + retrieved[i][j] * retrievedRatio;
+                }
+            }
+
+            if (hop >= 2 && attentionSharpness > 0.65 + 0.25 * perf) {
+                break;
+            }
+            if (hop >= 3 && retrievedRatio < 0.05) {
+                break;
+            }
+            if (hop >= 5 && retrievedRatio < 0.1) {
+                break;
+            }
+        }
+
+        return augmented;
+    }
+
+    #cacheAverageWeights (transformerIdx) {
+        const transformer = this.#transformers[transformerIdx];
         const numLayers = this.#numLayers;
-        if (numLayers === 0) return rawComponent;
 
         const avgWq = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
         const avgWk = Array(this.#hiddenSize).fill().map(() => Array(this.#hiddenSize).fill(0));
@@ -1579,149 +3984,8 @@ class HiveMind {
             }
         }
 
-        const headSize = this.#hiddenSize / this.#numHeads;
-
-        const K = Array(tokenPastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
-        const V = Array(tokenPastLen).fill().map(() => Array(this.#hiddenSize).fill(0));
-
-        for (let seqi = 0; seqi < tokenPastLen; seqi++) {
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                let sumK = 0;
-                let sumV = 0;
-                for (let kk = 0; kk < this.#hiddenSize; kk++) {
-                    const specW = isValidNumber(this.#specializationWeights[transformerIdx][kk][j])
-                        ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5)
-                        : 1;
-                    sumK += pastStates[seqi][kk] * avgWk[kk][j] * specW || 0;
-                    sumV += pastStates[seqi][kk] * avgWv[kk][j] * specW || 0;
-                }
-                K[seqi][j] = sumK;
-                V[seqi][j] = sumV;
-            }
-        }
-
-        this.#applyRoPE(K, 0);
-
-        let globalDiversity = 0;
-        if (tokenPastLen > this.#inputSize) {
-            const numSamples = Math.min(16, tokenPastLen);
-            const sampleIndices = [];
-            for (let s = 0; s < numSamples; s++) {
-                sampleIndices.push(Math.floor(Math.random() * tokenPastLen));
-            }
-            const centroid = Array(this.#hiddenSize).fill(0);
-            for (const si of sampleIndices) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    centroid[j] += pastStates[si][j];
-                }
-            }
-            for (let j = 0; j < this.#hiddenSize; j++) centroid[j] /= numSamples;
-
-            for (const si of sampleIndices) {
-                globalDiversity += 1 - this.#cosineSimilarity(pastStates[si], centroid);
-            }
-            globalDiversity /= numSamples;
-        }
-        const diversityScore = Math.tanh(globalDiversity * 6);
-
-        let augmented = rawComponent.map(row => row.slice());
-        const maxHops = selectedPast.length;
-
-        for (let hop = 0; hop < maxHops; hop++) {
-            const Q = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-
-            for (let seqi = 0; seqi < this.#inputSize; seqi++) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    let sum = 0;
-                    for (let kk = 0; kk < this.#hiddenSize; kk++) {
-                        const specW = isValidNumber(this.#specializationWeights[transformerIdx][kk][j])
-                            ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5)
-                            : 1;
-                        sum += augmented[seqi][kk] * avgWq[kk][j] * specW || 0;
-                    }
-                    Q[seqi][j] = sum;
-                }
-            }
-
-            this.#applyRoPE(Q, tokenPastLen);
-
-            let totalEntropy = 0;
-            let queryCount = 0;
-
-            const preWoOutput = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-
-            for (let h = 0; h < this.#numHeads; h++) {
-                const offset = h * headSize;
-                for (let i = 0; i < this.#inputSize; i++) {
-                    let maxScore = -Infinity;
-                    const scores = Array(tokenPastLen).fill(0);
-                    for (let jj = 0; jj < tokenPastLen; jj++) {
-                        let sum = 0;
-                        for (let kk = 0; kk < headSize; kk++) {
-                            sum += Q[i][offset + kk] * K[jj][offset + kk] || 0;
-                        }
-                        scores[jj] = sum / Math.sqrt(headSize);
-                        if (scores[jj] > maxScore) maxScore = scores[jj];
-                    }
-
-                    const expScores = scores.map(s => Math.exp(s - maxScore));
-                    const sumExp = expScores.reduce((a, b) => a + b, 0) || 1;
-
-                    let headEntropy = 0;
-                    let sumP = 0;
-                    for (let jj = 0; jj < tokenPastLen; jj++) {
-                        const p = expScores[jj] / sumExp;
-                        if (p > 1e-6) {
-                            headEntropy -= p * Math.log(p);
-                            sumP += p;
-                        }
-                        if (p > 0) {
-                            for (let kk = 0; kk < headSize; kk++) {
-                                preWoOutput[i][offset + kk] += p * V[jj][offset + kk];
-                            }
-                        }
-                    }
-
-                    if (sumP > 0.1) {
-                        totalEntropy += headEntropy;
-                        queryCount++;
-                    }
-                }
-            }
-
-            const logPast = Math.log(tokenPastLen + 1);
-            const avgEntropy = queryCount > 0 ? totalEntropy / queryCount : logPast;
-            const attentionSharpness = Math.exp(-avgEntropy / logPast);
-
-            const gate = 4.0 * attentionSharpness + 2.5 * fillFactor + 2.0 * perf + 2.0 * diversityScore;
-            let retrievedRatio = 1 / (1 + Math.exp(-gate));
-
-            const retrieved = Array(this.#inputSize).fill().map(() => Array(this.#hiddenSize).fill(0));
-            for (let i = 0; i < this.#inputSize; i++) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    let sum = 0;
-                    for (let kk = 0; kk < this.#hiddenSize; kk++) {
-                        const specW = isValidNumber(this.#specializationWeights[transformerIdx][kk][j])
-                            ? Math.min(Math.max(1 + this.#specializationScores[transformerIdx] * this.#specializationWeights[transformerIdx][kk][j], 0.5), 1.5)
-                            : 1;
-                        sum += preWoOutput[i][kk] * avgWo[kk][j] * specW || 0;
-                    }
-                    retrieved[i][j] = sum;
-                }
-            }
-
-            for (let i = 0; i < this.#inputSize; i++) {
-                for (let j = 0; j < this.#hiddenSize; j++) {
-                    augmented[i][j] = augmented[i][j] * (1 - retrievedRatio) + retrieved[i][j] * retrievedRatio;
-                }
-            }
-
-            if (hop >= 1 && retrievedRatio < 0.01) {
-                break;
-            }
-        }
-
-        return augmented;
+        transformer.cachedAvgWeights = { avgWq, avgWk, avgWv, avgWo };
+        return transformer.cachedAvgWeights;
     }
 
     #processTransformer (inputs, idx, computeIntermediates = false, training = true, isLast = false) {
@@ -1833,6 +4097,104 @@ class HiveMind {
         }
     }
 
+    #hiveMemorySharing() {
+        if (this.#ensembleSize < 2) return;
+
+        const compositeScores = this.#performanceScores.map((perf, i) => {
+            const agree = this.#agreementScores[i] ?? 0.5;
+            const spec = this.#specializationScores[i] ?? 0.5;
+            return 0.45 * perf + 0.25 * agree + 0.3 * spec;
+        });
+
+        const rankedIndices = Array.from({length: this.#ensembleSize}, (_, i) => i);
+        rankedIndices.sort((a, b) => compositeScores[b] - compositeScores[a]);
+
+        const minShare = Math.max(2, Math.round(this.#ensembleSize * 0.05));
+        const numShare = Math.max(minShare, Math.round(this.#ensembleSize * (0.2 + 0.4 * this.#swarmIntelligenceFactor)));
+        const donors = rankedIndices.slice(0, numShare);
+        const receivers = rankedIndices.slice(-numShare);
+
+        const hidden = this.#hiddenSize;
+        const maxTransferPerReceiver = Math.round(this.#baseProtoCapacity * (0.5 + 2 * this.#swarmIntelligenceFactor));
+
+        for (const recIdx of receivers) {
+            const recPerf = this.#performanceScores[recIdx] ?? 0.5;
+            const recAgree = this.#agreementScores[recIdx] ?? 0.5;
+            const noiseScale = 0.04 + 0.08 * (1 - recPerf) + 0.04 * (1 - recAgree);
+
+            let transferredProtos = [];
+
+            for (const donIdx of donors) {
+                let donProtos = this.#semanticProtos[donIdx];
+                if (donProtos.length === 0) continue;
+
+                const sorted = donProtos.slice().sort((a, b) => {
+                    const utilA = this.#computeProtoUtility(a);
+                    const utilB = this.#computeProtoUtility(b);
+                    const impA = (a.importance || 0);
+                    const impB = (b.importance || 0);
+                    return (utilB + 15 * impB) - (utilA + 15 * impA);
+                });
+
+                const minFromDonor = Math.max(2, Math.round((2 + 3 * this.#protoCapacityFactor) * this.#memoryFactor));
+                let numFromDonor = Math.max(minFromDonor, Math.round(sorted.length * (0.10 + 0.20 * this.#swarmIntelligenceFactor)));
+                const topFraction = 0.5 + 0.2 * this.#protoCapacityFactor;
+                const numTop = Math.ceil(numFromDonor * topFraction);
+                const numRandom = numFromDonor - numTop;
+
+                for (const p of sorted.slice(0, numTop)) {
+                    const newMean = new Float32Array(p.mean);
+                    for (let j = 0; j < hidden; j++) {
+                        newMean[j] += (Math.random() - 0.5) * 2 * noiseScale;
+                    }
+                    transferredProtos.push({
+                        mean: newMean,
+                        variance: new Float32Array(p.variance),
+                        size: p.size * (0.15 + 0.5 * recPerf),
+                        accessCount: p.accessCount * 0.5,
+                        projNorms: this.#computeProjNorms(newMean),
+                        isCore: false,
+                        importance: (p.importance || 0) * 0.4
+                    });
+                }
+
+                const shuffled = donProtos.slice();
+                for (let i = shuffled.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                }
+                for (let r = 0; r < numRandom && r < shuffled.length; r++) {
+                    const p = shuffled[r];
+                    const newMean = new Float32Array(p.mean);
+                    const extraNoise = noiseScale * 1.5;
+                    for (let j = 0; j < hidden; j++) {
+                        newMean[j] += (Math.random() - 0.5) * 2 * extraNoise;
+                    }
+                    transferredProtos.push({
+                        mean: newMean,
+                        variance: new Float32Array(p.variance),
+                        size: p.size * (0.10 + 0.3 * recPerf),
+                        accessCount: p.accessCount * 0.3,
+                        projNorms: this.#computeProjNorms(newMean),
+                        isCore: false,
+                        importance: (p.importance || 0) * 0.3
+                    });
+                }
+            }
+
+            if (transferredProtos.length > maxTransferPerReceiver) {
+                transferredProtos.sort((a, b) => 
+                    this.#computeProtoUtility(b) - this.#computeProtoUtility(a)
+                );
+                transferredProtos = transferredProtos.slice(0, maxTransferPerReceiver);
+            }
+
+            if (transferredProtos.length > 0) {
+                this.#updateSemanticProtos(recIdx, transferredProtos);
+            }
+        }
+    }
+
     #computeWeightedSum (outputs) {
         return outputs.reduce((sum, out, idx) => {
             if (isValidNumber(out) && isValidNumber(this.#ensembleWeights[idx])) {
@@ -1848,60 +4210,80 @@ class HiveMind {
             inputs.length !== this.#inputSize ||
             !inputs.every(isValidNumber)
         ) {
-            return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
+            this.#ensembleWeights = Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
+            this.#normalizeEnsembleWeights();
+            return;
         }
 
         const attentionScores = Array(this.#ensembleSize).fill(0);
+
+        const maxConsiderChunks = this.#contextWindow;
+
         for (let t = 0; t < this.#ensembleSize; t++) {
-            const memory = this.#attentionMemory[t];
-            const memLen = memory.length;
+            const memChunks = this.#attentionMemory[t];
+            const memLen = memChunks.length;
 
-            const queries = inputs.map(x =>
-                this.#attentionWeightMatrix[t].map(w => isValidNumber(x) && isValidNumber(w) ? x * w : 0)
-            );
+            let considerLen = 0;
+            let consideredChunks = [];
 
-            const pooledMemory = Array(memLen).fill().map(() => Array(this.#hiddenSize).fill(0));
-            for (let m = 0; m < memLen; m++) {
-                for (let k = 0; k < this.#hiddenSize; k++) {
-                    let sum = 0;
-                    for (let i = 0; i < this.#inputSize; i++) {
-                        sum += isValidNumber(memory[m][i][k]) ? memory[m][i][k] : 0;
-                    }
-                    pooledMemory[m][k] = sum / this.#inputSize;
-                }
+            if (memLen > 0) {
+                considerLen = Math.min(maxConsiderChunks, memLen);
+                const startIdx = memLen - considerLen;
+                consideredChunks = memChunks.slice(startIdx);
             }
 
+            if (considerLen === 0) {
+                attentionScores[t] = 0;
+                continue;
+            }
+
+            const pooledMemory = consideredChunks.map(chunkProtos => {
+                if (!Array.isArray(chunkProtos) || chunkProtos.length === 0) {
+                    return Array(this.#hiddenSize).fill(0);
+                }
+                return this.#weightedMean(chunkProtos);
+            });
+
             const keys = pooledMemory.map(pool =>
-                pool.map((v, k) => isValidNumber(v) && isValidNumber(this.#attentionWeightMatrix[t][k]) ? v * this.#attentionWeightMatrix[t][k] : 0)
+                pool.map((v, k) =>
+                    isValidNumber(v) && isValidNumber(this.#attentionWeightMatrix[t][k])
+                        ? v * this.#attentionWeightMatrix[t][k]
+                        : 0
+                )
             );
 
-            const values = keys;
+            const innerSums = Array(considerLen).fill(0);
+            for (let j = 0; j < considerLen; j++) {
+                let sum = 0;
+                for (let k = 0; k < this.#hiddenSize; k++) {
+                    if (isValidNumber(this.#attentionWeightMatrix[t][k]) && isValidNumber(keys[j][k])) {
+                        sum += this.#attentionWeightMatrix[t][k] * keys[j][k];
+                    }
+                }
+                innerSums[j] = sum;
+            }
 
-            const biasSum = this.#attentionBias[t].reduce((sum, val) => sum + (isValidNumber(val) ? val : 0), 0);
-            const avgBias = isValidNumber(biasSum) ? biasSum / this.#hiddenSize : 0;
+            const biasSum = this.#attentionBias[t].reduce((s, val) => s + (isValidNumber(val) ? val : 0), 0);
+            const avgBias = this.#hiddenSize > 0 ? biasSum / this.#hiddenSize : 0;
 
             let score = 0;
+            const scale = 1 / Math.sqrt(this.#hiddenSize);
+
             for (let i = 0; i < this.#inputSize; i++) {
-                const rowScores = Array(memLen).fill(0);
-                for (let j = 0; j < memLen; j++) {
-                    let dotProduct = 0;
-                    for (let k = 0; k < this.#hiddenSize; k++) {
-                        dotProduct += isValidNumber(queries[i][k]) && isValidNumber(keys[j][k])
-                            ? queries[i][k] * keys[j][k]
-                            : 0;
-                    }
-                    rowScores[j] = isValidNumber(dotProduct)
-                        ? dotProduct / Math.sqrt(this.#hiddenSize) + avgBias
-                        : avgBias;
-                }
+                if (!isValidNumber(inputs[i])) continue;
 
-                const attentionWeights = this.#softmax(rowScores.map(s => isValidNumber(s) ? s : 0));
+                const rowScores = innerSums.map(inner =>
+                    inputs[i] * inner * scale + avgBias
+                );
 
-                for (let j = 0; j < memLen; j++) {
+                const attentionWeights = this.#softmax(rowScores);
+
+                for (let j = 0; j < considerLen; j++) {
+                    if (!isValidNumber(attentionWeights[j])) continue;
                     for (let k = 0; k < this.#hiddenSize; k++) {
-                        score += isValidNumber(attentionWeights[j]) && isValidNumber(values[j][k])
-                            ? attentionWeights[j] * values[j][k]
-                            : 0;
+                        if (isValidNumber(keys[j][k])) {
+                            score += attentionWeights[j] * keys[j][k];
+                        }
                     }
                 }
             }
@@ -1916,7 +4298,7 @@ class HiveMind {
             attentionScores[t] = score * (0.7 + 0.2 * performanceScore + 0.1 * specializationBoost);
         }
 
-        const weights = this.#softmax(attentionScores.map(score => isValidNumber(score) ? score : 0));
+        const weights = this.#softmax(attentionScores);
 
         const finalWeights = weights.map((w, idx) => {
             const performanceScore = isValidNumber(this.#performanceScores[idx]) ? this.#performanceScores[idx] : 0.5;
@@ -1929,10 +4311,11 @@ class HiveMind {
 
         const sum = finalWeights.reduce((s, w) => s + (isValidNumber(w) && w >= 0 ? w : 0), 0);
         if (sum <= 1e-6) {
-            return Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
+            this.#ensembleWeights = Array(this.#ensembleSize).fill(1 / this.#ensembleSize);
+        } else {
+            this.#ensembleWeights = finalWeights.map(w => (isValidNumber(w) && w >= 0 ? w / sum : 1 / this.#ensembleSize));
         }
 
-        this.#ensembleWeights = finalWeights.map(w => (isValidNumber(w) && w >= 0 ? w / sum : 1 / this.#ensembleSize));
         this.#normalizeEnsembleWeights();
     }
 
@@ -3475,6 +5858,8 @@ class HiveMind {
             this.#applyGradients(false, false, 1);
 
             this.#updateHiveState(inputs, target, false, false, true, false);
+
+            this.#hiveMemorySharing();
 
             this.#gradientAccumulation = this.#setGradientStructure();
         }
