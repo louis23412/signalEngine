@@ -21,10 +21,9 @@ class HiveMind {
     #semanticLR; #semanticBoost; #effectiveSemanticMax;
     #longTermMaxProtos; #shortTermMaxProtos; #rawMaxProtos;
     #lowDim; #numProjections; #projectionMatrices;
-    #semanticUpdateEvery; #semanticStepCounters; 
-    #semanticMergeEvery; #semanticMergeCounters;
+    #semanticMergeEvery; #kernelGamma;
     #maxRetrievedProtos; #numRetrievalCandidates;
-    #maxEpisodicConsider; #replayEvery; #replaySamples;
+    #maxEpisodicConsider; #replaySamples;
     #coreMaxProtos; #coreEpisodicMaxEntries; #coreEpisodic;
     #lshNumTables; #lshHashBits;
     #numLshSets; #lshHyperplanes; #semanticLSHBuckets;
@@ -47,7 +46,7 @@ class HiveMind {
         console.log(loadStatus.message);
     }
 
-    #loadState(ensembleSize, inputSize) {
+    #loadState (ensembleSize, inputSize) {
         const dbPath = path.join(this.#directoryPath, this.#fileName);
         let db;
 
@@ -67,12 +66,12 @@ class HiveMind {
                 'maxTrustHistory', 'maxPerformanceHistory', 'learningRate', 'learningRateDecay',
                 'swarmIntelligenceFactor', 'gradientResetFrequency', 'semanticLR', 'semanticBoost',
                 'effectiveSemanticMax', 'longTermMaxProtos', 'shortTermMaxProtos', 'rawMaxProtos',
-                'lowDim', 'numProjections', 'semanticUpdateEvery', 'semanticMergeEvery',
+                'lowDim', 'numProjections', 'semanticMergeEvery',
                 'maxRetrievedProtos', 'numRetrievalCandidates', 'maxEpisodicConsider',
-                'replayEvery', 'replaySamples', 'coreMaxProtos', 'coreEpisodicMaxEntries',
+                'replaySamples', 'coreMaxProtos', 'coreEpisodicMaxEntries',
                 'lshNumTables', 'lshHashBits', 'numLshSets', 'priorityMax', 'trainingStepCount',
                 'protoCapacityFactor', 'baseProtoCapacity', 'memoryFactor', 'maxVariancePerDim',
-                'tempOverloadFactor', 'mergeTrimFactor'
+                'tempOverloadFactor', 'mergeTrimFactor', 'kernelGamma'
             ];
 
             scalarKeys.forEach(key => {
@@ -81,19 +80,6 @@ class HiveMind {
                     this[`#${key}`] = Number(row.value);
                 }
             });
-
-            this.#semanticStepCounters = Array(this.#ensembleSize).fill(0);
-            this.#semanticMergeCounters = Array(this.#ensembleSize).fill(0);
-            for (let idx = 0; idx < this.#ensembleSize; idx++) {
-                const stepRow = getMetadata.get(`semanticStepCounter_${idx}`);
-                if (stepRow && Number.isInteger(Number(stepRow.value))) {
-                    this.#semanticStepCounters[idx] = Number(stepRow.value);
-                }
-                const mergeRow = getMetadata.get(`semanticMergeCounter_${idx}`);
-                if (mergeRow && Number.isInteger(Number(mergeRow.value))) {
-                    this.#semanticMergeCounters[idx] = Number(mergeRow.value);
-                }
-            }
 
             const hidden = this.#hiddenSize;
             const low = this.#lowDim;
@@ -880,12 +866,10 @@ class HiveMind {
                 rawMaxProtos: this.#rawMaxProtos,
                 lowDim: this.#lowDim,
                 numProjections: this.#numProjections,
-                semanticUpdateEvery: this.#semanticUpdateEvery,
                 semanticMergeEvery: this.#semanticMergeEvery,
                 maxRetrievedProtos: this.#maxRetrievedProtos,
                 numRetrievalCandidates: this.#numRetrievalCandidates,
                 maxEpisodicConsider: this.#maxEpisodicConsider,
-                replayEvery: this.#replayEvery,
                 replaySamples: this.#replaySamples,
                 coreMaxProtos: this.#coreMaxProtos,
                 coreEpisodicMaxEntries: this.#coreEpisodicMaxEntries,
@@ -899,6 +883,7 @@ class HiveMind {
                 maxVariancePerDim: this.#maxVariancePerDim,
                 tempOverloadFactor: this.#tempOverloadFactor,
                 mergeTrimFactor : this.#mergeTrimFactor,
+                kernelGamma : this.#kernelGamma,
                 trainingStepCount: this.#trainingStepCount ?? 0
             };
 
@@ -906,13 +891,6 @@ class HiveMind {
                 const strValue = (typeof value === 'string') ? value : value.toString();
                 insertMetadata.run(key, strValue);
             }
-
-            this.#semanticStepCounters.forEach((counter, idx) => {
-                insertMetadata.run(`semanticStepCounter_${idx}`, counter.toString());
-            });
-            this.#semanticMergeCounters.forEach((counter, idx) => {
-                insertMetadata.run(`semanticMergeCounter_${idx}`, counter.toString());
-            });
 
             const insertEnsembleWeights = db.prepare('INSERT INTO ensemble_weights (idx, weight) VALUES (?, ?)');
             this.#ensembleWeights.forEach((weight, idx) => {
@@ -1449,11 +1427,9 @@ class HiveMind {
         this.#maxRetrievedProtos = Math.round(this.#baseProtoCapacity * retrievalMultiplier);
         this.#numRetrievalCandidates = Math.round(this.#baseProtoCapacity * candidatesMultiplier);
         
-        this.#semanticUpdateEvery = Math.round(2 + 8 * this.#protoCapacityFactor);
         this.#semanticMergeEvery  = Math.round(8 + 24 * this.#protoCapacityFactor);
 
         this.#maxEpisodicConsider = Math.round(this.#contextWindow * (0.4 + 0.2 * this.#memoryFactor));
-        this.#replayEvery = Math.round(15 + 40 * this.#protoCapacityFactor);
         this.#replaySamples = Math.round(this.#baseProtoCapacity * (0.5 + 0.5 * this.#protoCapacityFactor));
 
         this.#priorityMax = this.#maxRetrievedProtos;
@@ -1463,14 +1439,18 @@ class HiveMind {
         const dimScale = Math.max(1, Math.log2(this.#lowDim / 4));
         const capacityScale = Math.max(0.5, this.#protoCapacityFactor);
         const dimFactor = Math.max(1, Math.log2(this.#lowDim / 8));
-        const rawTables = Math.round((16 + 48 * this.#protoCapacityFactor) * dimScale);
-        const rawBits = Math.round((24 + 72 * this.#protoCapacityFactor) * dimScale);
+        const rawTables = Math.round(this.#hiddenSize * (0.04 + 0.12 * this.#protoCapacityFactor) * dimScale);
+        const rawBits = Math.round(this.#hiddenSize * (0.06 + 0.18 * this.#protoCapacityFactor) * dimScale);
+        const maxTablesCap = Math.round(this.#lowDim * 6 * capacityScale);
+        const maxBitsCap = Math.round(this.#lowDim * 3 * capacityScale);
 
-        this.#lshNumTables = Math.max(Math.round(4 * capacityScale * dimFactor), Math.min(Math.round(768 * capacityScale), rawTables));
-        this.#lshHashBits = Math.max(Math.round(12 * capacityScale * dimFactor), Math.min(Math.round(384 * capacityScale), rawBits));
+        this.#lshNumTables = Math.max(Math.round(4 * capacityScale * dimFactor), Math.min(maxTablesCap, rawTables));
+        this.#lshHashBits = Math.max(Math.round(12 * capacityScale * dimFactor), Math.min(maxBitsCap, rawBits));
 
         this.#tempOverloadFactor = 2.0 + 1.0 * (1 - this.#protoCapacityFactor);
         this.#mergeTrimFactor = 1.5 + 0.5 * (1 - this.#protoCapacityFactor);
+
+        this.#kernelGamma = Number((16 + 32 * this.#protoCapacityFactor).toFixed(1));
 
         this.#projectionMatrices = Array.from({length: this.#numProjections}, () => this.#generateProjectionMatrix());
 
@@ -1499,9 +1479,6 @@ class HiveMind {
         this.#semanticProtos = Array(this.#ensembleSize).fill().map(() => []);
         this.#coreEpisodic = Array(this.#ensembleSize).fill().map(() => []);
         this.#priorityIndices = Array(this.#ensembleSize).fill().map(() => []);
-
-        this.#semanticStepCounters = Array(this.#ensembleSize).fill(0);
-        this.#semanticMergeCounters = Array(this.#ensembleSize).fill(0);
 
         this.#attentionWeightMatrix = Array(this.#ensembleSize).fill().map(() =>
             this.#dynamicInit(this.#hiddenSize, 1, 0, 1).map(row => row[0])
@@ -1616,7 +1593,7 @@ class HiveMind {
         return exp.map(x => x / sum);
     }
 
-    #randomNormal(mean = 0, stdDev = 1) {
+    #randomNormal (mean = 0, stdDev = 1) {
         let sum = 0;
         for (let i = 0; i < 12; i += 1) {
             sum += Math.random();
@@ -1624,7 +1601,7 @@ class HiveMind {
         return mean + stdDev * (sum - 6);
     }
 
-    #generateProjectionMatrix() {
+    #generateProjectionMatrix () {
         const invSqrtLow = 1 / Math.sqrt(this.#lowDim);
         const matrix = new Array(this.#hiddenSize);
         for (let d = 0; d < this.#hiddenSize; d++) {
@@ -1640,7 +1617,7 @@ class HiveMind {
         return matrix;
     }
 
-    #generateLshHyperplanesLow() {
+    #generateLshHyperplanesLow () {
         return Array.from({length: this.#lshNumTables}, () =>
             Array.from({length: this.#lshHashBits}, () => {
                 const vec = new Float32Array(this.#lowDim);
@@ -1658,7 +1635,7 @@ class HiveMind {
         );
     }
 
-    #computeProjNorms(mean) {
+    #computeProjNorms (mean) {
         const projs = [];
         for (let np = 0; np < this.#numProjections; np++) {
             const proj = new Float32Array(this.#lowDim).fill(0);
@@ -1679,7 +1656,7 @@ class HiveMind {
         return projs;
     }
 
-    #projSimilarity(projsA, projsB) {
+    #projSimilarity (projsA, projsB) {
         if (!projsA || !projsB || projsA.length !== this.#numProjections || projsB.length !== this.#numProjections) {
             return 0;
         }
@@ -1694,7 +1671,7 @@ class HiveMind {
         return sumSim / this.#numProjections;
     }
 
-    #computeProtoUtility(proto) {
+    #computeProtoUtility (proto) {
         if (!proto || !proto.mean || proto.mean.length !== this.#hiddenSize) return 0;
 
         let varSum = 0;
@@ -1704,8 +1681,8 @@ class HiveMind {
         const avgVariance = varSum / this.#hiddenSize;
 
         const importanceFactor = 1 + 0.2 * Math.sqrt(Math.max(0, proto.importance || 0));
-
-        return proto.size * proto.accessCount * (1 + Math.sqrt(Math.max(avgVariance, 1e-6))) * importanceFactor;
+        const effectiveCount = Math.sqrt((proto.size || 1) * (proto.accessCount || 1));
+        return effectiveCount * (1 + Math.sqrt(Math.max(avgVariance, 1e-6))) * importanceFactor;
     }
 
     #rmsNorm (x, gamma, eps = 1e-6) {
@@ -1726,6 +1703,34 @@ class HiveMind {
             output[i] = x[i] * gamma[i] / rms;
         }
         return output;
+    }
+
+    #normalizeSemantic (sem) {
+        const maxMeanRMS = 1.8 + 2.2 * this.#protoCapacityFactor;
+        const maxSize = Math.round(this.#baseProtoCapacity * (20 + 80 * this.#protoCapacityFactor));
+        const maxAccess = Math.round(this.#baseProtoCapacity * (40 + 160 * this.#protoCapacityFactor));
+        const maxImportance = Math.round(100 + 300 * this.#protoCapacityFactor);
+
+        for (const proto of sem) {
+            let sqSum = 0;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                sqSum += proto.mean[j] ** 2;
+            }
+            const rms = Math.sqrt(sqSum / this.#hiddenSize + 1e-8);
+            if (rms > maxMeanRMS) {
+                const scale = maxMeanRMS / rms;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    proto.mean[j] *= scale;
+                    proto.variance[j] *= scale ** 2;
+                    proto.variance[j] = Math.min(proto.variance[j], this.#maxVariancePerDim);
+                }
+                proto.projNorms = this.#computeProjNorms(proto.mean);
+            }
+
+            if (proto.size > maxSize) proto.size = maxSize;
+            if (proto.accessCount > maxAccess) proto.accessCount = maxAccess;
+            if (proto.importance > maxImportance) proto.importance = maxImportance;
+        }
     }
 
     #applyRoPE (matrix, startPos = 0) {
@@ -1781,12 +1786,12 @@ class HiveMind {
         return rep;
     }
 
-    #maxPairwiseKernel (protosA, protosB, gamma = 4.0) {
+    #maxPairwiseKernel (protosA, protosB) {
         if (protosA.length === 0 || protosB.length === 0) return 0;
         let maxSim = 0;
         for (const a of protosA) {
             for (const b of protosB) {
-                const sim = this.#kernelSimilarity(a, b, gamma);
+                const sim = this.#kernelSimilarity(a, b);
                 if (sim > maxSim) maxSim = sim;
             }
         }
@@ -1807,7 +1812,7 @@ class HiveMind {
         return denom > 0 ? dot / denom : 0;
     }
 
-    #sampleDirichlet(count) {
+    #sampleDirichlet (count) {
         if (count < 1) return [];
         const gammas = [];
         for (let i = 0; i < count; i++) {
@@ -1819,27 +1824,40 @@ class HiveMind {
         return gammas.map(g => g / sum);
     }
 
-    #detectSuddenDrop(transformerIdx) {
+    #detectSuddenDrop (transformerIdx) {
         const hist = this.#historicalPerformance[transformerIdx];
 
         const minHistDrop = Math.max(6, Math.round(this.#contextWindow * 0.06));
         if (hist.length < minHistDrop) return 1.0;
 
+        const current = this.#performanceScores[transformerIdx] ?? 0.5;
+
+        const recentFraction = 0.06 + 0.04 * this.#memoryFactor;
+        const numRecentPoints = Math.max(5, Math.round(this.#maxPerformanceHistory * recentFraction));
+
         let prevSum = 0;
-        for (let i = hist.length - 7; i < hist.length - 2; i++) prevSum += hist[i];
-        const prevMean = prevSum / 5;
-        const current = this.#performanceScores[transformerIdx] ?? prevMean;
+        let count = 0;
+        const startIdx = Math.max(0, hist.length - numRecentPoints - 2);
+        for (let i = startIdx; i < hist.length - 2; i++) {
+            if (i >= 0 && i < hist.length) {
+                prevSum += hist[i];
+                count++;
+            }
+        }
+        const prevMean = count > 0 ? prevSum / count : current;
+
         const drop = prevMean - current;
 
         const severeDropThresh = 0.10 + 0.08 * (1 - this.#protoCapacityFactor);
         const moderateDropThresh = 0.05 + 0.05 * (1 - this.#protoCapacityFactor);
+        const adaptiveAllowance = 0.06 + 0.06 * (1 - this.#protoCapacityFactor);
 
-        if (drop > severeDropThresh + 0.08 * (1 - prevMean)) return 3.0;
+        if (drop > severeDropThresh + adaptiveAllowance * (1 - prevMean)) return 3.0;
         if (drop > moderateDropThresh) return 1.8;
         return 1.0;
     }
 
-    #computeLSHHashesLow(projNorm, hyperplanesSet) {
+    #computeLSHHashesLow (projNorm, hyperplanesSet) {
         const hashes = new Array(this.#lshNumTables);
         for (let t = 0; t < this.#lshNumTables; t++) {
             let hash = 0n;
@@ -1858,7 +1876,7 @@ class HiveMind {
         return hashes;
     }
 
-    #rebuildSemanticLSHBuckets(transformerIdx) {
+    #rebuildSemanticLSHBuckets (transformerIdx) {
         const buckets = this.#semanticLSHBuckets[transformerIdx];
         for (let s = 0; s < this.#numLshSets; s++) {
             for (let t = 0; t < this.#lshNumTables; t++) {
@@ -1886,7 +1904,22 @@ class HiveMind {
         }
     }
 
-    #isStagnating(transformerIdx) {
+    #getAvgProtoVariance (transformerIdx) {
+        const sem = this.#semanticProtos[transformerIdx];
+        if (sem.length === 0) return 0.0;
+
+        let totalVarSum = 0;
+        for (const proto of sem) {
+            let protoVarSum = 0;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                protoVarSum += proto.variance[j];
+            }
+            totalVarSum += protoVarSum;
+        }
+        return totalVarSum / (sem.length * this.#hiddenSize);
+    }
+
+    #isStagnating (transformerIdx) {
         const history = this.#historicalPerformance[transformerIdx];
 
         const minHistStag = Math.max(5, Math.round(this.#contextWindow * 0.05));
@@ -1904,10 +1937,14 @@ class HiveMind {
         const lowVariance = variance < lowVarianceThreshold;
         const noProgress = trend < noProgressThreshold;
 
-        return lowVariance || noProgress;
+        const avgProtoVar = this.#getAvgProtoVariance(transformerIdx);
+        const protoVarThreshold = this.#maxVariancePerDim * 0.12;
+        const lowProtoVariance = avgProtoVar < protoVarThreshold;
+
+        return lowVariance || noProgress || lowProtoVariance;
     }
 
-    #replayOldMemory(transformerIdx) {
+    #replayOldMemory (transformerIdx) {
         const attMem = this.#attentionMemory[transformerIdx];
 
         const minMemLengthForReplay = Math.max(8, Math.round(this.#contextWindow * 0.08));
@@ -1916,7 +1953,13 @@ class HiveMind {
         const perf = this.#performanceScores[transformerIdx] ?? 0.5;
         const stagnationFactor = this.#isStagnating(transformerIdx) ? 5.0 : 1.0;
         const dropBoost = this.#detectSuddenDrop(transformerIdx);
-        const totalBoost = stagnationFactor * dropBoost * (1 + 2 * (1 - perf));
+        let totalBoost = stagnationFactor * dropBoost * (1 + 2 * (1 - perf));
+
+        const avgProtoVar = this.#getAvgProtoVariance(transformerIdx);
+        const lowProtoVariance = avgProtoVar < this.#maxVariancePerDim * 0.12;
+        if (lowProtoVariance) {
+            totalBoost *= 2.0;
+        }
 
         let numSamples = Math.round(this.#replaySamples * (1 + 5 * (1 - perf)) * totalBoost);
         const minSamples = Math.max(4, Math.round(this.#baseProtoCapacity * 0.166));
@@ -1925,6 +1968,8 @@ class HiveMind {
         const sampledProtos = [];
         const divisor = Math.max(numSamples + 4, Math.round(numSamples * 1.5));
         const step = Math.max(1, Math.floor(attMem.length / divisor));
+
+        const boostBase = Math.round(8 + 24 * this.#protoCapacityFactor);
 
         for (let i = 1; i <= numSamples; i++) {
             const idx = attMem.length - i * step - 1;
@@ -1942,7 +1987,7 @@ class HiveMind {
                     mean: newMean,
                     variance: newVariance,
                     size: p.size * 0.9,
-                    accessCount: p.accessCount * 2.5 + p.size * 30,
+                    accessCount: p.accessCount * 2.5 + p.size * boostBase,
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: p.isCore,
                     importance: (p.importance || 0) * 0.95
@@ -1956,13 +2001,15 @@ class HiveMind {
             const minCoreSamples = Math.round(this.#coreMaxProtos * 0.2);
             coreNumSamples = Math.max(coreNumSamples, minCoreSamples);
 
+            let noiseFactor = 0.15 + 0.6 * (1 - perf) * totalBoost;
+            if (lowProtoVariance) noiseFactor += 1.2;
+
             for (let i = 0; i < coreNumSamples; i++) {
                 const entry = coreEp[Math.floor(Math.random() * coreEp.length)];
                 if (!entry || entry.protos.length === 0) continue;
 
                 const p = entry.protos[Math.floor(Math.random() * entry.protos.length)];
 
-                const noiseFactor = 0.15 + 0.6 * (1 - perf) * totalBoost;
                 const newMean = new Float32Array(this.#hiddenSize);
                 const newVariance = new Float32Array(this.#hiddenSize);
 
@@ -1976,7 +2023,7 @@ class HiveMind {
                     mean: newMean,
                     variance: newVariance,
                     size: p.size * 1.0,
-                    accessCount: p.accessCount * 2.0 + p.size * 50,
+                    accessCount: p.accessCount * 2.0 + p.size * Math.round(20 + 60 * this.#protoCapacityFactor),
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: true,
                     importance: (p.importance || 0) + 40
@@ -1984,8 +2031,51 @@ class HiveMind {
             }
         }
 
+        if (dropBoost > 2.0) {
+            const faithfulNum = Math.round(this.#replaySamples * 0.7 * dropBoost);
+            const faithStep = Math.max(1, Math.floor(attMem.length / (faithfulNum + 5)));
+
+            for (let i = 1; i <= faithfulNum; i++) {
+                const idx = attMem.length - i * faithStep - 1;
+                if (idx < 0) break;
+                const entry = attMem[idx];
+                if (!entry || entry.protos.length === 0) continue;
+
+                for (const p of entry.protos) {
+                    sampledProtos.push({
+                        mean: new Float32Array(p.mean),
+                        variance: new Float32Array(p.variance),
+                        size: p.size * (1.3 + 0.7 * (dropBoost - 1)),
+                        accessCount: p.accessCount * 4.0 + p.size * boostBase * (3 + 2 * this.#protoCapacityFactor),
+                        projNorms: this.#computeProjNorms(p.mean),
+                        isCore: p.isCore,
+                        importance: (p.importance || 0) * 1.4 + Math.round(40 + 120 * this.#protoCapacityFactor) * (dropBoost - 1)
+                    });
+                }
+            }
+
+            if (coreEp.length > 0) {
+                const coreFaithNum = Math.round(faithfulNum * 1.8);
+                for (let i = 0; i < coreFaithNum; i++) {
+                    const entry = coreEp[Math.floor(Math.random() * coreEp.length)];
+                    if (!entry || entry.protos.length === 0) continue;
+                    const p = entry.protos[Math.floor(Math.random() * entry.protos.length)];
+
+                    sampledProtos.push({
+                        mean: new Float32Array(p.mean),
+                        variance: new Float32Array(p.variance),
+                        size: p.size * (1.8 + 1.0 * (dropBoost - 1)),
+                        accessCount: p.accessCount * 6.0 + p.size * boostBase * (6 + 4 * this.#protoCapacityFactor),
+                        projNorms: this.#computeProjNorms(p.mean),
+                        isCore: true,
+                        importance: (p.importance || 0) + Math.round(80 + 240 * this.#protoCapacityFactor) * dropBoost
+                    });
+                }
+            }
+        }
+
         if (sampledProtos.length > 0) {
-            const effectiveMax = Math.round(this.#effectiveSemanticMax * this.#tempOverloadFactor)
+            const effectiveMax = Math.round(this.#effectiveSemanticMax * this.#tempOverloadFactor);
             if (sampledProtos.length > effectiveMax) {
                 sampledProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
                 sampledProtos.length = effectiveMax;
@@ -1994,7 +2084,7 @@ class HiveMind {
         }
     }
 
-    #generativeReplay(transformerIdx) {
+    #generativeReplay (transformerIdx) {
         const sem = this.#semanticProtos[transformerIdx];
         if (sem.length === 0) return;
 
@@ -2003,12 +2093,20 @@ class HiveMind {
         const agreement = this.#agreementScores[transformerIdx] ?? 0.5;
         const overconfidence = perf * agreement;
         const forgetPressure = (1 - perf) * 0.8 + (1 - agreement) * 0.2;
-        const effectivePressure = forgetPressure + 0.8 * overconfidence;
+        let effectivePressure = forgetPressure + 0.8 * overconfidence;
 
-        const stagnationFactor = this.#isStagnating(transformerIdx) ? 4.0 : 1.0;
+        const stagnation = this.#isStagnating(transformerIdx);
         const dropBoost = this.#detectSuddenDrop(transformerIdx);
-        const totalBoost = stagnationFactor * dropBoost * (1 + 1.5 * (1 - perf));
-        const extraNoiseStag = this.#isStagnating(transformerIdx) ? 2.5 : 0.0;
+        let totalBoost = stagnation ? 4.0 : 1.0 * dropBoost * (1 + 1.5 * (1 - perf));
+        let extraNoiseStag = stagnation ? 2.5 : 0.0;
+
+        const avgProtoVar = this.#getAvgProtoVariance(transformerIdx);
+        const lowProtoVariance = avgProtoVar < this.#maxVariancePerDim * 0.12;
+        if (lowProtoVariance) {
+            totalBoost *= 2.5;
+            extraNoiseStag += 5.0;
+            effectivePressure += 1.5;
+        }
 
         const generatedProtos = [];
 
@@ -2016,7 +2114,8 @@ class HiveMind {
         if (cores.length > 0) {
             const coreReplayPressure = effectivePressure + (1 - perf) * 0.8;
             const numCoreSamples = Math.round((this.#coreMaxProtos / 4 + this.#coreMaxProtos * coreReplayPressure) * totalBoost);
-            const coreNoiseFactor = 0.10 + 0.45 * effectivePressure + extraNoiseStag * 1.2;
+            let coreNoiseFactor = 0.10 + 0.45 * effectivePressure + extraNoiseStag * 1.2;
+            if (lowProtoVariance) coreNoiseFactor += 1.8;
 
             for (let s = 0; s < numCoreSamples; s++) {
                 const coreP = cores[Math.floor(Math.random() * cores.length)];
@@ -2029,14 +2128,52 @@ class HiveMind {
                 for (let j = 0; j < this.#hiddenSize; j++) {
                     newVariance[j] = Math.min(Math.max(coreP.variance[j] * (1 + 0.35 * coreNoiseFactor), 1e-6), this.#maxVariancePerDim);
                 }
+
                 generatedProtos.push({
                     mean: newMean,
                     variance: newVariance,
                     size: Math.max(1, coreP.size * 0.5 * (0.7 + 0.3 * perf)),
-                    accessCount: coreP.accessCount * 1.0 + 20,
+                    accessCount: coreP.accessCount * 1.0 + Math.round(8 + 24 * this.#protoCapacityFactor),
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: false,
-                    importance: (coreP.importance || 0) * 0.95 + 15
+                    importance: (coreP.importance || 0) * 0.95 + Math.round(6 + 18 * this.#protoCapacityFactor)
+                });
+            }
+        }
+
+        if (lowProtoVariance || stagnation) {
+            const numDiversity = Math.round(this.#baseProtoCapacity * (2 + 8 * effectivePressure) * totalBoost);
+            const highVar = this.#maxVariancePerDim * (0.75 + 0.25 * Math.random());
+
+            for (let s = 0; s < numDiversity; s++) {
+                const baseP = cores.length > 0 && Math.random() < 0.8 
+                    ? cores[Math.floor(Math.random() * cores.length)] 
+                    : (sem.length > 0 ? sem[Math.floor(Math.random() * sem.length)] : null);
+
+                const newMean = new Float32Array(this.#hiddenSize);
+                const divNoise = 5.0 + 15.0 * effectivePressure + (lowProtoVariance ? 15.0 : 0.0);
+
+                if (baseP) {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        const std = Math.sqrt(Math.max(baseP.variance[j], 1e-6)) * divNoise;
+                        newMean[j] = this.#randomNormal(baseP.mean[j], std);
+                    }
+                } else {
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        newMean[j] = this.#randomNormal(0, divNoise);
+                    }
+                }
+
+                const newVariance = new Float32Array(this.#hiddenSize).fill(highVar);
+
+                generatedProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: Math.max(1, 20 * (0.5 + 0.5 * perf)),
+                    accessCount: Math.round(25 + 50 * this.#protoCapacityFactor) + Math.round(40 + 80 * this.#protoCapacityFactor) * (1 - perf),
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: Math.round(20 + 40 * this.#protoCapacityFactor) + Math.round(30 + 70 * this.#protoCapacityFactor) * (1 - perf)
                 });
             }
         }
@@ -2079,10 +2216,10 @@ class HiveMind {
                         mean: newMean,
                         variance: newVariance,
                         size: Math.max(1, p.size * 0.25 * (0.6 + 0.4 * perf)),
-                        accessCount: 12 + p.accessCount * 0.5,
+                        accessCount: Math.round(5 + 10 * this.#protoCapacityFactor) + p.accessCount * 0.5,
                         projNorms: this.#computeProjNorms(newMean),
                         isCore: false,
-                        importance: (p.importance || 0) * 0.6 + 5
+                        importance: (p.importance || 0) * 0.6 + Math.round(2 + 6 * this.#protoCapacityFactor)
                     });
                     generatedCount++;
                 }
@@ -2090,7 +2227,6 @@ class HiveMind {
         }
 
         const numInterp = Math.round(baseNum * 1.5 * (1 + 1.8 * effectivePressure) * totalBoost);
-        const stagnating = this.#isStagnating(transformerIdx);
         if (numInterp > 0 && candidates.length > 1) {
             const shuffled = candidates.slice();
             for (let i = shuffled.length - 1; i > 0; i--) {
@@ -2104,7 +2240,7 @@ class HiveMind {
                 const p2 = shuffled[c + 1].proto;
 
                 let alpha = 0.25 + Math.random() * 0.5;
-                const extrapProb = stagnating ? 0.95 : 0.3;
+                const extrapProb = stagnation ? 0.95 : 0.3;
                 if (Math.random() < extrapProb) {
                     alpha = Math.random() < 0.5 ? -0.4 + Math.random() * 0.5 : 1.0 + Math.random() * 0.8;
                 }
@@ -2125,22 +2261,64 @@ class HiveMind {
                     mean: newMean,
                     variance: newVariance,
                     size: Math.max(1, (p1.size + p2.size) * 0.2 * (0.6 + 0.4 * perf)),
-                    accessCount: 12 + (p1.accessCount + p2.accessCount) * 0.4,
+                    accessCount: Math.round(5 + 10 * this.#protoCapacityFactor) + (p1.accessCount + p2.accessCount) * 0.4,
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: false,
-                    importance: ((p1.importance || 0) + (p2.importance || 0)) * 0.5 + 8
+                    importance: ((p1.importance || 0) + (p2.importance || 0)) * 0.5 + Math.round(3 + 9 * this.#protoCapacityFactor)
                 });
                 interpCount++;
             }
         }
 
+        const numCrossover = Math.round(baseNum * (0.6 + 1.2 * effectivePressure) * totalBoost);
+        if (numCrossover > 0 && candidates.length > 1) {
+            const shuffled = candidates.slice();
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+
+            let crossoverCount = 0;
+            for (let c = 0; c + 1 < shuffled.length && crossoverCount < numCrossover; c += 2) {
+                const p1 = shuffled[c].proto;
+                const p2 = shuffled[c + 1].proto;
+
+                const newMean = new Float32Array(this.#hiddenSize);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newMean[j] = Math.random() < 0.5 ? p1.mean[j] : p2.mean[j];
+                }
+
+                const mutationNoise = (0.3 + 0.8 * effectivePressure + extraNoiseStag) * 0.8;
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newMean[j] += this.#randomNormal(0, mutationNoise);
+                }
+
+                const newVariance = new Float32Array(this.#hiddenSize);
+                for (let j = 0; j < this.#hiddenSize; j++) {
+                    newVariance[j] = Math.max(p1.variance[j], p2.variance[j]) * (1 + 0.6 * effectivePressure);
+                    newVariance[j] = Math.min(newVariance[j], this.#maxVariancePerDim);
+                }
+
+                generatedProtos.push({
+                    mean: newMean,
+                    variance: newVariance,
+                    size: Math.max(1, (p1.size + p2.size) * 0.18 * (0.6 + 0.4 * perf)),
+                    accessCount: Math.round(6 + 12 * this.#protoCapacityFactor) + (p1.accessCount + p2.accessCount) * 0.35,
+                    projNorms: this.#computeProjNorms(newMean),
+                    isCore: false,
+                    importance: ((p1.importance || 0) + (p2.importance || 0)) * 0.45 + Math.round(5 + 10 * this.#protoCapacityFactor)
+                });
+                crossoverCount++;
+            }
+        }
+
         const minClusterSize = Math.max(3, Math.round(4 * this.#protoCapacityFactor));
-        const mixPressure = effectivePressure + (stagnationFactor - 1) + (dropBoost - 1);
+        const mixPressure = effectivePressure + (stagnation ? 1 : 0) + (dropBoost - 1);
         if (mixPressure > 0.2 && sem.length >= minClusterSize) {
             const numMixSamples = Math.round(this.#baseProtoCapacity * (3 + 9 * mixPressure) * totalBoost);
             for (let s = 0; s < numMixSamples; s++) {
                 let m = Math.round((minClusterSize + Math.random() * minClusterSize) * this.#protoCapacityFactor);
-                if (stagnating) m += Math.round(2 * pcf);
+                if (stagnation) m += Math.round(2 * pcf);
                 m = Math.max(minClusterSize, m);
                 if (sem.length < m) continue;
 
@@ -2176,15 +2354,15 @@ class HiveMind {
                     mean: newMean,
                     variance: newVariance,
                     size: Math.max(1, 20 * (0.5 + 0.5 * perf)),
-                    accessCount: 30,
+                    accessCount: Math.round(12 + 24 * this.#protoCapacityFactor),
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: false,
-                    importance: 25
+                    importance: Math.round(10 + 20 * this.#protoCapacityFactor)
                 });
             }
         }
 
-        const needExploration = this.#isStagnating(transformerIdx) || perf < 0.7;
+        const needExploration = stagnation || perf < 0.7;
         if (needExploration) {
             const numRandom = Math.round(this.#baseProtoCapacity * (0.417 + 1.667 * (1 - perf)) * totalBoost);
             const randomVar = Math.min(this.#maxVariancePerDim, 8.0 + 16.0 * (1 - perf));
@@ -2194,20 +2372,21 @@ class HiveMind {
                     newMean[j] = this.#randomNormal(0, 2.0);
                 }
                 const newVariance = new Float32Array(this.#hiddenSize).fill(randomVar);
+
                 generatedProtos.push({
                     mean: newMean,
                     variance: newVariance,
                     size: Math.max(1, 5 * (0.5 + 0.5 * perf)),
-                    accessCount: 8,
+                    accessCount: Math.round(3 + 9 * this.#protoCapacityFactor),
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: false,
-                    importance: 8 * (1 - perf)
+                    importance: Math.round(3 + 9 * this.#protoCapacityFactor) * (1 - perf)
                 });
             }
         }
 
         if (generatedProtos.length > 0) {
-            const effectiveMax = Math.round(this.#effectiveSemanticMax * this.#tempOverloadFactor)
+            const effectiveMax = Math.round(this.#effectiveSemanticMax * this.#tempOverloadFactor);
             if (generatedProtos.length > effectiveMax) {
                 generatedProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
                 generatedProtos.length = effectiveMax;
@@ -2216,7 +2395,7 @@ class HiveMind {
         }
     }
 
-    #poolMultiPrototype(entry, maxAdditionalProtos, thresholdFactor) {
+    #poolMultiPrototype (entry, maxAdditionalProtos, thresholdFactor) {
         if (
             !Array.isArray(entry) ||
             entry.length === 0 ||
@@ -2332,7 +2511,7 @@ class HiveMind {
         return protos;
     }
 
-    #updateSemanticProtos(transformerIdx, newProtos) {
+    #updateSemanticProtos (transformerIdx, newProtos) {
         if (!Array.isArray(newProtos) || newProtos.length === 0) return;
 
         let sem = this.#semanticProtos[transformerIdx];
@@ -2350,7 +2529,7 @@ class HiveMind {
         if (stagnation) dynamicThreshold += 0.20;
         dynamicThreshold = Math.max(0.50, Math.min(0.98, dynamicThreshold));
 
-        const accessDecay = 0.80 + 0.15 * perf;
+        const accessDecay = 0.95 + 0.04 * perf;
         const sizeDecay = 0.98 + 0.01 * perf;
         const noiseThreshold = 1 + 12 * (1 - perf);
         const baseNoiseScale = 0.05 + 0.15 * (1 - perf);
@@ -2380,12 +2559,6 @@ class HiveMind {
                 }
             }
         });
-
-        const initialLength = sem.length;
-        sem = sem.filter(p => p.isCore || p.accessCount >= 0.15);
-        if (sem.length < initialLength) {
-            this.#semanticProtos[transformerIdx] = sem;
-        }
 
         for (const p of newProtos) {
             if (!p || !p.mean) continue;
@@ -2434,7 +2607,7 @@ class HiveMind {
             let bestSim = -1;
             let bestIdx = -1;
             for (const idx of topCandidates) {
-                const sim = this.#kernelSimilarity(p, sem[idx], 4.0);
+                const sim = this.#kernelSimilarity(p, sem[idx]);
                 if (sim > bestSim) {
                     bestSim = sim;
                     bestIdx = idx;
@@ -2473,7 +2646,7 @@ class HiveMind {
                     const delta = proto.mean[j] - oldVal;
                     deltaSqSum += delta * delta;
                 }
-                proto.importance = importance + 3.0 * deltaSqSum / hidden + (proto.isCore ? 40 : 0);
+                proto.importance = importance + 3.0 * deltaSqSum / hidden + (proto.isCore ? Math.round(15 + 35 * this.#protoCapacityFactor) : 0);
                 proto.projNorms = this.#computeProjNorms(proto.mean);
                 merged = true;
             }
@@ -2487,24 +2660,38 @@ class HiveMind {
 
                 let extraNoveltyImportance = 0;
                 if (bestIdx !== -1 && sem[bestIdx].isCore && bestSim > dynamicThreshold * 0.7) {
-                    extraNoveltyImportance = 60 * (bestSim - dynamicThreshold * 0.7) / (1 - dynamicThreshold * 0.7);
+                    extraNoveltyImportance = Math.round(20 + 80 * this.#protoCapacityFactor) * (bestSim - dynamicThreshold * 0.7) / (1 - dynamicThreshold * 0.7)
                 }
 
                 const addedProto = {
                     mean: newMean,
                     variance: newVar,
-                    size: p.size * effectiveBoost * (1 + 3.0 * noveltyFactor),
-                    accessCount: p.size * 2.0 * (1 + 1.5 * noveltyFactor),
+                    size: p.size * effectiveBoost * (1 + 1.5 * noveltyFactor),
+                    accessCount: p.size * 2.0 * (1 + 0.8 * noveltyFactor),
                     projNorms: this.#computeProjNorms(newMean),
                     isCore: false,
-                    importance: 50 * noveltyFactor + extraNoveltyImportance
+                    importance: Math.round(20 + 60 * this.#protoCapacityFactor) * noveltyFactor + extraNoveltyImportance
                 };
                 sem.push(addedProto);
+            }
+        }
 
-                if (sem.length > maxP * this.#tempOverloadFactor) {
-                    sem.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
-                    sem.length = Math.round(maxP * this.#mergeTrimFactor);
-                }
+        if (sem.length > maxP * this.#tempOverloadFactor) {
+            sem.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+            sem.length = Math.round(maxP * this.#mergeTrimFactor);
+
+            const overloadFactor = sem.length / maxP;
+            if (overloadFactor > 1.0 && sem.length > 0) {
+                const accessValues = sem.map(p => p.accessCount || 0);
+                accessValues.sort((a, b) => a - b);
+
+                const pruneFraction = 0.05 + 0.10 * (overloadFactor - 1.0);
+                const pruneIdx = Math.floor(accessValues.length * pruneFraction);
+                let dynamicThreshold = pruneIdx < accessValues.length ? accessValues[pruneIdx] : 0;
+
+                dynamicThreshold = Math.max(dynamicThreshold, 2.0);
+
+                sem = sem.filter(p => p.isCore || (p.accessCount || 0) >= dynamicThreshold);
             }
         }
 
@@ -2527,7 +2714,7 @@ class HiveMind {
                 const deficit = minAvgVar - avgVar;
                 const noiseScale = noiseBase + 0.6 * deficit;
                 for (let j = 0; j < hidden; j++) {
-                    proto.mean[j] += this.#randomNormal(0, noiseScale * 1.5);
+                    proto.mean[j] += this.#randomNormal(0, noiseScale * 0.8);
                     proto.variance[j] *= inflationFactor;
                     proto.variance[j] = Math.min(proto.variance[j], this.#maxVariancePerDim);
                 }
@@ -2544,34 +2731,51 @@ class HiveMind {
             this.#priorityIndices[transformerIdx] = [];
         }
 
+        this.#normalizeSemantic(sem);
+        this.#semanticProtos[transformerIdx] = sem;
         this.#rebuildSemanticLSHBuckets(transformerIdx);
     }
 
-    #kernelSimilarity(protoA, protoB, gamma = 4.0) {
-        let dist = 0;
-        const eps = 1e-6;
-        const maxRelevantDist = 2.5;
-
-        for (let j = 0; j < this.#hiddenSize; j++) {
-            const diff = protoA.mean[j] - protoB.mean[j];
-            const pooledVar = protoA.variance[j] + protoB.variance[j] + eps;
-            dist += diff * diff / pooledVar;
-
-            if (dist > maxRelevantDist * this.#hiddenSize) {
-                return 0;
-            }
-        }
-
-        dist /= this.#hiddenSize;
-
-        if (dist > maxRelevantDist) {
+    #kernelSimilarity (protoA, protoB) {
+        if (!protoA.mean || !protoB.mean || protoA.mean.length !== this.#hiddenSize ||
+            !protoA.variance || !protoB.variance || protoA.variance.length !== this.#hiddenSize) {
             return 0;
         }
 
-        return Math.exp(-gamma * dist);
+        let mahalSum = 0;
+        let sumLnPooled = 0;
+        let sumLnA = 0;
+        let sumLnB = 0;
+        const eps = 1e-6;
+
+        for (let j = 0; j < this.#hiddenSize; j++) {
+            const diff = protoA.mean[j] - protoB.mean[j];
+            const varA = Math.max(protoA.variance[j], eps);
+            const varB = Math.max(protoB.variance[j], eps);
+            const pooled = (varA + varB) / 2 + eps;
+
+            mahalSum += diff * diff / pooled;
+            sumLnPooled += Math.log(pooled);
+            sumLnA += Math.log(varA);
+            sumLnB += Math.log(varB);
+        }
+
+        const avgMahal = mahalSum / this.#hiddenSize;
+        const quadraticDivisor = 6 + 4 * this.#protoCapacityFactor;
+        const quadratic = avgMahal / quadraticDivisor;
+
+        const avgLnPooled = sumLnPooled / this.#hiddenSize;
+        const avgLnA = sumLnA / this.#hiddenSize;
+        const avgLnB = sumLnB / this.#hiddenSize;
+        const detTerm = 0.5 * (avgLnPooled - 0.5 * (avgLnA + avgLnB));
+
+        let D = quadratic + detTerm;
+        D = Math.max(0, D);
+
+        return Math.exp(-this.#kernelGamma * D);
     }
 
-    #retrieveTopRelevantProtos(transformerIdx, currentProtos, maxRetrieve = this.#maxRetrievedProtos) {
+    #retrieveTopRelevantProtos (transformerIdx, currentProtos, maxRetrieve = this.#maxRetrievedProtos) {
         if (currentProtos.length === 0) return [];
 
         currentProtos.forEach(cp => {
@@ -2579,6 +2783,21 @@ class HiveMind {
                 cp.projNorms = this.#computeProjNorms(cp.mean);
             }
         });
+
+        const queryMean = this.#weightedMean(currentProtos);
+        const totalSizeQuery = currentProtos.reduce((s, p) => s + (p.size || 0), 0) || 1;
+        const queryVariance = new Float32Array(this.#hiddenSize);
+        for (const cp of currentProtos) {
+            const weight = (cp.size || 1) / totalSizeQuery;
+            for (let j = 0; j < this.#hiddenSize; j++) {
+                const diff = cp.mean[j] - queryMean[j];
+                queryVariance[j] += weight * (cp.variance[j] + diff * diff);
+            }
+        }
+        for (let j = 0; j < this.#hiddenSize; j++) {
+            queryVariance[j] = Math.max(queryVariance[j], 1e-6);
+        }
+        const queryProjs = this.#computeProjNorms(queryMean);
 
         const avgProj = Array.from({length: this.#numProjections}, () => new Float32Array(this.#lowDim).fill(0));
         const numCurrent = currentProtos.length;
@@ -2606,11 +2825,18 @@ class HiveMind {
         const perf = this.#performanceScores[transformerIdx] ?? 0.5;
         const agreement = this.#agreementScores[transformerIdx] ?? 0.5;
         const overconfidence = perf * agreement;
+
         let explorationRate = 0.35 + 0.65 * (1 - perf) + 0.45 * (1 - agreement) + 0.8 * overconfidence;
         const stagnation = this.#isStagnating(transformerIdx);
         const dropBoost = this.#detectSuddenDrop(transformerIdx);
         if (stagnation) {
             explorationRate = Math.min(1.0, explorationRate + 0.7);
+        }
+
+        const avgProtoVar = this.#getAvgProtoVariance(transformerIdx);
+        const lowProtoVariance = avgProtoVar < this.#maxVariancePerDim * 0.12;
+        if (lowProtoVariance) {
+            explorationRate = Math.min(1.0, explorationRate + 0.8);
         }
 
         let candProtos = [];
@@ -2697,7 +2923,34 @@ class HiveMind {
             }
         }
 
+        let protectedProtos = [];
         const semProtos = this.#semanticProtos[transformerIdx];
+        semProtos.forEach(p => { if (p.isCore) protectedProtos.push(p); });
+        coreEp.forEach(entry => { if (entry.protos) protectedProtos.push(...entry.protos); });
+
+        if (protectedProtos.length > 0) {
+            protectedProtos.forEach(p => {
+                if (!p.projNorms || p.projNorms.length !== this.#numProjections) {
+                    p.projNorms = this.#computeProjNorms(p.mean);
+                }
+            });
+
+            const protectedSims = protectedProtos.map(p => this.#kernelSimilarity(
+                { mean: queryMean, variance: queryVariance },
+                p,
+            ));
+
+            const protectedIndices = Array.from({length: protectedProtos.length}, (_, i) => i);
+            protectedIndices.sort((a, b) => protectedSims[b] - protectedSims[a]);
+
+            const numProtected = Math.min(Math.round(this.#maxRetrievedProtos * 0.35 * (1 + explorationRate)), protectedProtos.length);
+            for (let k = 0; k < numProtected; k++) {
+                const p = protectedProtos[protectedIndices[k]];
+                candProtos.push(p);
+                candIsSem.push(true);
+            }
+        }
+
         const numSem = semProtos.length;
         if (numSem > 0) {
             semProtos.forEach(p => {
@@ -2706,12 +2959,30 @@ class HiveMind {
                 }
             });
 
-            const queryMean = this.#weightedMean(currentProtos);
-            const queryProjs = this.#computeProjNorms(queryMean);
-
             const semCandidates = new Set();
 
-            const addCandidatesFromSet = (s, hashes) => {
+            const hashesPerSet = new Array(this.#numLshSets);
+            for (let s = 0; s < this.#numLshSets; s++) {
+                hashesPerSet[s] = this.#computeLSHHashesLow(queryProjs[s], this.#lshHyperplanes[s]);
+            }
+
+            const baseProbes = Math.round(this.#numRetrievalCandidates * explorationRate * 0.8);
+            const scaledAdditive = Math.round(this.#baseProtoCapacity * (4 + 4 * this.#memoryFactor));
+
+            let numProbes = baseProbes + scaledAdditive;
+
+            const stagnationAdd = Math.round(this.#baseProtoCapacity * (8 + 16 * this.#memoryFactor) * (stagnation ? 1 : 0));
+            const dropAdd = Math.round(this.#baseProtoCapacity * (7 + 14 * this.#memoryFactor) * (dropBoost > 1.5 ? 1 : 0));
+            const lowPerfAdd = Math.round(this.#baseProtoCapacity * (6 + 12 * this.#memoryFactor) * (perf < 0.6 ? 1 : 0));
+            let lowVarAdd = 0;
+            if (lowProtoVariance) lowVarAdd = Math.round(this.#baseProtoCapacity * (24 + 48 * this.#memoryFactor));
+
+            numProbes += stagnationAdd + dropAdd + lowPerfAdd + lowVarAdd;
+
+            const maxCandidateCap = Math.round(this.#effectiveSemanticMax * (6 + 4 * this.#memoryFactor));
+
+            for (let s = 0; s < this.#numLshSets; s++) {
+                const hashes = hashesPerSet[s];
                 const tableArray = this.#semanticLSHBuckets[transformerIdx][s];
                 for (let t = 0; t < this.#lshNumTables; t++) {
                     let key = hashes[t];
@@ -2724,45 +2995,50 @@ class HiveMind {
                         if (bucket) for (const i of bucket) semCandidates.add(i);
                     }
 
-                    const baseProbes = Math.round(this.#numRetrievalCandidates * explorationRate * 0.8);
-                    const scaledAdditive = Math.round(this.#baseProtoCapacity * 6);
-                    let numProbes = baseProbes + scaledAdditive;
-
-                    const stagnationAdd = Math.round(this.#baseProtoCapacity * (6 + 12 * this.#memoryFactor) * (stagnation ? 1 : 0));
-                    const dropAdd = Math.round(this.#baseProtoCapacity * (5 + 10 * this.#memoryFactor) * (dropBoost > 1.5 ? 1 : 0));
-                    const lowPerfAdd = Math.round(this.#baseProtoCapacity * (4 + 8 * this.#memoryFactor) * (perf < 0.6 ? 1 : 0));
-
-                    numProbes += stagnationAdd + dropAdd + lowPerfAdd;
-
-                    const maxCandidateCap = Math.round(this.#effectiveSemanticMax * (6 + 4 * this.#memoryFactor));
-                    for (let k = 0; k < numProbes; k++) {
-                        if (semCandidates.size > maxCandidateCap) break;
-                        let flipBits = 2 + Math.floor(Math.random() * 18);
-                        if (explorationRate > 0.6) flipBits += Math.floor(Math.random() * 12);
-                        if (stagnation) flipBits += 8;
-                        let flippedHash = key;
-                        for (let f = 0; f < flipBits; f++) {
-                            const bit = Math.floor(Math.random() * this.#lshHashBits);
-                            flippedHash ^= (1n << BigInt(bit));
+                    const flipsPerLevel = [2, 3, 4, Math.round(this.#lshHashBits * 0.08), Math.round(this.#lshHashBits * 0.15)];
+                    const probesPerLevel = Math.round(numProbes / flipsPerLevel.length);
+                    for (let level = 0; level < flipsPerLevel.length && semCandidates.size < maxCandidateCap; level++) {
+                        const flipBits = flipsPerLevel[level];
+                        for (let pr = 0; pr < probesPerLevel && semCandidates.size < maxCandidateCap; pr++) {
+                            let flippedHash = key;
+                            for (let f = 0; f < flipBits; f++) {
+                                const bit = Math.floor(Math.random() * this.#lshHashBits);
+                                flippedHash ^= (1n << BigInt(bit));
+                            }
+                            bucket = tableArray[t].get(flippedHash);
+                            if (bucket) for (const i of bucket) semCandidates.add(i);
                         }
-                        bucket = tableArray[t].get(flippedHash);
-                        if (bucket) for (const i of bucket) semCandidates.add(i);
                     }
                 }
-            };
-
-            for (let s = 0; s < this.#numLshSets; s++) {
-                const hashes = this.#computeLSHHashesLow(queryProjs[s], this.#lshHyperplanes[s]);
-                addCandidatesFromSet(s, hashes);
             }
 
             let desiredSem = Math.round(this.#numRetrievalCandidates * 0.7 * (1 + 4.0 * explorationRate));
             if (stagnation) desiredSem = Math.round(desiredSem * 2.2);
             if (dropBoost > 1.5) desiredSem = Math.round(desiredSem * 1.8);
+            if (lowProtoVariance) desiredSem = Math.round(desiredSem * 3.0);
 
-            const projFallbackMultiplier = 3 + 2 * explorationRate;
-            const lowAccessMultiplier = 1.5 + explorationRate;
-            const randomFillTarget = 2.5 + explorationRate;
+            const lowThresh = Math.round(desiredSem * 0.6);
+            if (semCandidates.size < lowThresh) {
+                let extraProbes = Math.round(this.#baseProtoCapacity * (8 + 24 * explorationRate) * (stagnation ? 2 : 1) * (dropBoost > 1.5 ? 1.8 : 1));
+                if (lowProtoVariance) extraProbes *= 4;
+
+                const farFlipFrac = 0.09 + 0.15 * explorationRate + 0.10 * (stagnation ? 1 : 0);
+
+                for (let ex = 0; ex < extraProbes; ex++) {
+                    if (semCandidates.size >= maxCandidateCap) break;
+                    const ss = Math.floor(Math.random() * this.#numLshSets);
+                    const tt = Math.floor(Math.random() * this.#lshNumTables);
+                    let baseKey = hashesPerSet[ss][tt];
+                    let numFlips = Math.max(4, Math.round(this.#lshHashBits * farFlipFrac));
+                    let flipped = baseKey;
+                    for (let ff = 0; ff < numFlips; ff++) {
+                        const bit = Math.floor(Math.random() * this.#lshHashBits);
+                        flipped ^= (1n << BigInt(bit));
+                    }
+                    const bucket = this.#semanticLSHBuckets[transformerIdx][ss][tt].get(flipped);
+                    if (bucket) for (const i of bucket) semCandidates.add(i);
+                }
+            }
 
             if (semCandidates.size < desiredSem * 0.3) {
                 const projScores = new Float32Array(numSem);
@@ -2771,7 +3047,7 @@ class HiveMind {
                 }
                 const projIndices = Array.from({length: numSem}, (_, i) => i);
                 projIndices.sort((a, b) => projScores[b] - projScores[a]);
-                const need = Math.min(numSem, Math.round(desiredSem * projFallbackMultiplier - semCandidates.size));
+                const need = Math.min(numSem, Math.round(desiredSem * (3 + 2 * explorationRate) - semCandidates.size));
                 for (let k = 0; k < need; k++) {
                     semCandidates.add(projIndices[k]);
                 }
@@ -2780,14 +3056,14 @@ class HiveMind {
             if (semCandidates.size < desiredSem * 0.2) {
                 const lowAccess = semProtos.map((p, i) => ({i, acc: p.accessCount || 0}));
                 lowAccess.sort((a, b) => a.acc - b.acc);
-                const need = Math.min(lowAccess.length, Math.round(desiredSem * lowAccessMultiplier - semCandidates.size));
+                const need = Math.min(lowAccess.length, Math.round(desiredSem * (1.5 + explorationRate) - semCandidates.size));
                 for (let k = 0; k < need; k++) {
                     const i = lowAccess[k].i;
                     if (!semCandidates.has(i)) semCandidates.add(i);
                 }
             }
 
-            let targetTotal = Math.round(desiredSem * randomFillTarget);
+            let targetTotal = Math.round(desiredSem * (2.5 + explorationRate));
             if (stagnation || explorationRate > 0.6) {
                 targetTotal = Math.round(targetTotal * 2.0);
             }
@@ -2815,7 +3091,7 @@ class HiveMind {
 
         const totalCandLimit = Math.round(this.#numRetrievalCandidates * (1 + 5.0 * explorationRate));
         if (candProtos.length > totalCandLimit) {
-            const approxScores = candProtos.map(p => this.#projSimilarity(avgProj, p.projNorms));
+            const approxScores = candProtos.map(p => this.#projSimilarity(queryProjs, p.projNorms));
             const sortedIdx = Array.from({length: candProtos.length}, (_, i) => i);
             sortedIdx.sort((a, b) => approxScores[b] - approxScores[a]);
             const newCandProtos = [];
@@ -2832,22 +3108,6 @@ class HiveMind {
         const numCandProtos = candProtos.length;
         if (numCandProtos === 0) return [];
 
-        const queryMean = this.#weightedMean(currentProtos);
-        const totalSizeQuery = currentProtos.reduce((s, p) => s + p.size, 0) || 1;
-        const queryVariance = new Float32Array(this.#hiddenSize).fill(0);
-        for (const cp of currentProtos) {
-            const weight = cp.size / totalSizeQuery;
-            for (let j = 0; j < this.#hiddenSize; j++) {
-                const diff = cp.mean[j] - queryMean[j];
-                queryVariance[j] += weight * (cp.variance[j] + diff * diff);
-            }
-        }
-        for (let j = 0; j < this.#hiddenSize; j++) {
-            queryVariance[j] = Math.max(queryVariance[j], 1e-6);
-        }
-
-        const queryProj = this.#computeProjNorms(queryMean);
-
         const baseThresh = 0.55;
         let threshAdjust = 0.60 * explorationRate;
 
@@ -2862,7 +3122,7 @@ class HiveMind {
         const candidatesForExact = [];
         for (let i = 0; i < numCandProtos; i++) {
             const proto = candProtos[i];
-            const approxSim = this.#projSimilarity(queryProj, proto.projNorms);
+            const approxSim = this.#projSimilarity(queryProjs, proto.projNorms);
             if (approxSim > threshold || proto.isCore) {
                 candidatesForExact.push({i, approxSim});
             }
@@ -2880,8 +3140,7 @@ class HiveMind {
             const proto = candProtos[i];
             const sim = this.#kernelSimilarity(
                 { mean: queryMean, variance: queryVariance },
-                proto,
-                4.0
+                proto
             );
 
             let score = sim * 1.4;
@@ -2950,8 +3209,8 @@ class HiveMind {
         return selectedProtos;
     }
 
-    #consolidateSemanticProtos(transformerIdx) {
-        const sem = this.#semanticProtos[transformerIdx];
+    #consolidateSemanticProtos (transformerIdx) {
+        let sem = this.#semanticProtos[transformerIdx];
 
         const minForConsolidate = Math.max(5, Math.round(this.#baseProtoCapacity * 0.2));
         if (sem.length < minForConsolidate) {
@@ -2971,6 +3230,10 @@ class HiveMind {
 
         const stagnation = this.#isStagnating(transformerIdx);
         const drop = this.#detectSuddenDrop(transformerIdx) > 1.2;
+
+        if (stagnation) mergeKernelThresh += 0.22;
+        if (drop) mergeKernelThresh += 0.18;
+        mergeKernelThresh = Math.min(0.92, mergeKernelThresh);
 
         const topPreCandidates = Math.min(Math.round(this.#effectiveSemanticMax * 1.05), Math.round(n * 0.6));
 
@@ -3001,7 +3264,7 @@ class HiveMind {
                 if (i >= j) continue;
                 if (sem[j].isCore) continue;
 
-                const sim = this.#kernelSimilarity(sem[i], sem[j], 4.0);
+                const sim = this.#kernelSimilarity(sem[i], sem[j]);
                 if (sim > mergeKernelThresh) {
                     pairs.push([i, j, sim]);
                 }
@@ -3057,12 +3320,6 @@ class HiveMind {
             for (const idx of sortedMerged) {
                 sem.splice(idx, 1);
             }
-        }
-
-        const preSplitLength = sem.length;
-        sem = sem.filter(p => p.isCore || p.accessCount >= 0.15);
-        if (sem.length < preSplitLength) {
-            this.#semanticProtos[transformerIdx] = sem;
         }
 
         let varThresh = 1.0 + 4.0 * (1 - perf) * this.#memoryFactor + 2.0 * (1 - agreement) * this.#protoCapacityFactor;
@@ -3137,6 +3394,25 @@ class HiveMind {
             }
         }
 
+        if (sem.length > this.#effectiveSemanticMax * this.#tempOverloadFactor) {
+            sem.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+            sem.length = Math.round(this.#effectiveSemanticMax * this.#mergeTrimFactor);
+
+            const overloadFactor = sem.length / this.#effectiveSemanticMax;
+            if (overloadFactor > 1.0 && sem.length > 0) {
+                const accessValues = sem.map(p => p.accessCount || 0);
+                accessValues.sort((a, b) => a - b);
+
+                const pruneFraction = 0.05 + 0.10 * (overloadFactor - 1.0);
+                const pruneIdx = Math.floor(accessValues.length * pruneFraction);
+                let dynamicThreshold = pruneIdx < accessValues.length ? accessValues[pruneIdx] : 0;
+
+                dynamicThreshold = Math.max(dynamicThreshold, 2.0);
+
+                sem = sem.filter(p => p.isCore || (p.accessCount || 0) >= dynamicThreshold);
+            }
+        }
+
         if (sem.length > 0) {
             sem.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
 
@@ -3182,7 +3458,9 @@ class HiveMind {
                 }
 
                 coreProtos.forEach(p => {
-                    p.importance = (p.importance || 0) + 80 + 25 * Math.log(1 + p.size);
+                    const logBonus = Math.round(10 + 20 * this.#protoCapacityFactor) * Math.log(1 + p.size);
+                    const cappedLogBonus = Math.min(logBonus, Math.round(40 + 80 * this.#protoCapacityFactor));
+                    p.importance = (p.importance || 0) + Math.round(30 + 70 * this.#protoCapacityFactor) + cappedLogBonus;
                 });
             }
 
@@ -3191,6 +3469,17 @@ class HiveMind {
             }
         }
 
+        const numPriority = Math.min(Math.round(this.#priorityMax * this.#tempOverloadFactor), sem.length);
+        if (numPriority > 0) {
+            const indexed = sem.map((proto, i) => ({i, util: this.#computeProtoUtility(proto)}));
+            indexed.sort((a, b) => b.util - a.util);
+            this.#priorityIndices[transformerIdx] = indexed.slice(0, numPriority).map(o => o.i);
+        } else {
+            this.#priorityIndices[transformerIdx] = [];
+        }
+
+        this.#normalizeSemantic(sem);
+        this.#semanticProtos[transformerIdx] = sem;
         this.#rebuildSemanticLSHBuckets(transformerIdx);
     }
 
@@ -3395,10 +3684,10 @@ class HiveMind {
                     mean: new Float32Array(p.mean),
                     variance: new Float32Array(p.variance),
                     size: p.size * 1.5,
-                    accessCount: p.accessCount + p.size * 15,
+                    accessCount: p.accessCount + p.size * Math.round(6 + 18 * this.#protoCapacityFactor),
                     projNorms: p.projNorms ? p.projNorms.map(arr => new Float32Array(arr)) : this.#computeProjNorms(p.mean),
                     isCore: true,
-                    importance: (p.importance || 0) + 40
+                    importance: (p.importance || 0) + Math.round(15 + 35 * this.#protoCapacityFactor)
                 }));
                 const repMean = entry.repMean ? new Float32Array(entry.repMean) : this.#weightedMean(entry.protos);
                 promotedEntries.push({
@@ -3421,7 +3710,211 @@ class HiveMind {
         }
     }
 
-    #multiHeadAttention (x, layer, transformerIdx, training = true) {
+    #updateMemoryBanks (finalOutput, attentionScores, transformerIdx, training, layerNum) {
+        const specScore = this.#specializationScores[transformerIdx] || 0.5;
+
+        const perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
+        const threshMultiplier = 0.75 + 0.5 * perf;
+        const maxAddMultiplier = 1.0 + 1.0 * (1 - perf);
+        const mergeThreshold = 0.7 + 0.2 * perf * this.#protoCapacityFactor;
+
+        const numLayersEffective = Math.max(1, this.#numLayers - 1);
+        const layerFraction = layerNum / numLayersEffective;
+        const layerDepthFactor = 1 - layerFraction;
+        const earlyBias = 1.5;
+        const lateFloor = 0.4;
+        const noiseMultiplier = earlyBias * layerDepthFactor + lateFloor * (1 - layerDepthFactor);
+
+        let outputToAdaptive = finalOutput;
+        if (training) {
+            const confidence = perf * (0.7 + 0.3 * specScore);
+            const baseMaxNoiseScale = 0.03 + 0.3 * (1 - confidence);
+            const maxNoiseScale = baseMaxNoiseScale * noiseMultiplier;
+
+            outputToAdaptive = finalOutput.map(tokenVec => {
+                return tokenVec.map((val, j) => val + (Math.random() - 0.5) * maxNoiseScale * 
+                    (1 + (this.#specializationWeights[transformerIdx][j % this.#hiddenSize][j % this.#hiddenSize] || 1)));
+            });
+        } else {
+            const baseScale = 0.01 + 0.04 * (1 - perf);
+            const scaledBase = baseScale * noiseMultiplier;
+            const timePhase = this.#attentionMemory[transformerIdx].length * 0.05;
+
+            outputToAdaptive = finalOutput.map(tokenVec =>
+                tokenVec.map((val, j) => val + scaledBase * Math.sin(j * 0.12 + timePhase))
+            );
+        }
+
+        const dynamicShortThreshFactor = 4.0 * threshMultiplier;
+        const dynamicShortMaxAdd = Math.round(this.#shortTermMaxProtos * maxAddMultiplier);
+        const shortProtos = this.#poolMultiPrototype(outputToAdaptive, dynamicShortMaxAdd, dynamicShortThreshFactor);
+
+        if (shortProtos.length > Math.round(this.#shortTermMaxProtos * this.#tempOverloadFactor)) {
+            shortProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+            shortProtos.length = Math.round(this.#shortTermMaxProtos * this.#tempOverloadFactor);
+        }
+
+        if (shortProtos.length > 0) {
+            const shortRepMean = this.#weightedMean(shortProtos);
+            const shortRepProj = this.#computeProjNorms(shortRepMean);
+            const shortTotalSize = shortProtos.reduce((s, p) => s + p.size, 0) || 1;
+
+            const adaptMem = this.#adaptiveContext[transformerIdx];
+            if (adaptMem.length > 0) {
+                const last = adaptMem[adaptMem.length - 1];
+                if (!last.repMean) last.repMean = this.#weightedMean(last.protos);
+                const lastTotalSize = last.protos.reduce((s, p) => s + p.size, 0) || 1;
+                const sim = this.#projSimilarity(last.repProj, shortRepProj);
+
+                if (sim > mergeThreshold) {
+                    const combinedTotal = lastTotalSize + shortTotalSize;
+                    const combinedMean = new Float32Array(this.#hiddenSize);
+                    for (let j = 0; j < this.#hiddenSize; j++) {
+                        combinedMean[j] = (last.repMean[j] * lastTotalSize + shortRepMean[j] * shortTotalSize) / combinedTotal;
+                    }
+                    last.repMean = combinedMean;
+                    last.repProj = this.#computeProjNorms(combinedMean);
+
+                    for (const p of shortProtos) {
+                        last.protos.push({
+                            mean: new Float32Array(p.mean),
+                            variance: new Float32Array(p.variance),
+                            size: p.size,
+                            accessCount: p.accessCount + 1,
+                            projNorms: p.projNorms.map(arr => new Float32Array(arr))
+                        });
+                    }
+
+                    const maxPerShortEntry = Math.round(this.#shortTermMaxProtos * this.#mergeTrimFactor);
+                    if (last.protos.length > maxPerShortEntry) {
+                        last.protos.sort((a, b) => (b.size * b.accessCount) - (a.size * b.accessCount));
+                        last.protos = last.protos.slice(0, maxPerShortEntry);
+                        last.repMean = this.#weightedMean(last.protos);
+                        last.repProj = this.#computeProjNorms(last.repMean);
+                    }
+                } else {
+                    adaptMem.push({
+                        protos: shortProtos,
+                        repMean: shortRepMean,
+                        repProj: shortRepProj
+                    });
+                }
+            } else {
+                adaptMem.push({
+                    protos: shortProtos,
+                    repMean: shortRepMean,
+                    repProj: shortRepProj
+                });
+            }
+
+            if (adaptMem.length > this.#adaptiveWindow) {
+                adaptMem.shift();
+            }
+        }
+
+        if (layerNum + 1 === this.#numLayers) {
+            const dynamicLongThreshFactor = 4.0 * threshMultiplier;
+            const dynamicLongMaxAdd = Math.round(this.#longTermMaxProtos * maxAddMultiplier);
+            const longProtos = this.#poolMultiPrototype(finalOutput, dynamicLongMaxAdd, dynamicLongThreshFactor);
+
+            if (longProtos.length > Math.round(this.#longTermMaxProtos * this.#tempOverloadFactor)) {
+                longProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
+                longProtos.length = Math.round(this.#longTermMaxProtos * this.#tempOverloadFactor);
+            }
+
+            if (longProtos.length > 0) {
+                const longRepMean = this.#weightedMean(longProtos);
+                const longRepProj = this.#computeProjNorms(longRepMean);
+                const longTotalSize = longProtos.reduce((s, p) => s + p.size, 0) || 1;
+
+                const attMem = this.#attentionMemory[transformerIdx];
+                if (attMem.length > 0) {
+                    const last = attMem[attMem.length - 1];
+                    if (!last.repMean) last.repMean = this.#weightedMean(last.protos);
+                    const lastTotalSize = last.protos.reduce((s, p) => s + p.size, 0) || 1;
+                    const sim = this.#projSimilarity(last.repProj, longRepProj);
+
+                    if (sim > mergeThreshold) {
+                        const combinedTotal = lastTotalSize + longTotalSize;
+                        const combinedMean = new Float32Array(this.#hiddenSize);
+                        for (let j = 0; j < this.#hiddenSize; j++) {
+                            combinedMean[j] = (last.repMean[j] * lastTotalSize + longRepMean[j] * longTotalSize) / combinedTotal;
+                        }
+                        last.repMean = combinedMean;
+                        last.repProj = this.#computeProjNorms(combinedMean);
+
+                        for (const p of longProtos) {
+                            last.protos.push({
+                                mean: new Float32Array(p.mean),
+                                variance: new Float32Array(p.variance),
+                                size: p.size,
+                                accessCount: p.accessCount + 1,
+                                projNorms: p.projNorms.map(arr => new Float32Array(arr))
+                            });
+                        }
+
+                        const maxPerLongEntry = Math.round(this.#longTermMaxProtos * this.#mergeTrimFactor);
+                        if (last.protos.length > maxPerLongEntry) {
+                            last.protos.sort((a, b) => (b.size * b.accessCount) - (a.size * b.accessCount));
+                            last.protos = last.protos.slice(0, maxPerLongEntry);
+                            last.repMean = this.#weightedMean(last.protos);
+                            last.repProj = this.#computeProjNorms(last.repMean);
+                        }
+                    } else {
+                        attMem.push({
+                            protos: longProtos,
+                            repMean: longRepMean,
+                            repProj: longRepProj
+                        });
+                    }
+                } else {
+                    attMem.push({
+                        protos: longProtos,
+                        repMean: longRepMean,
+                        repProj: longRepProj
+                    });
+                }
+
+                this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
+            }
+
+            const episodicDecay = 0.95 + 0.04 * perf;
+
+            const attMem = this.#attentionMemory[transformerIdx];
+            for (let i = 0; i < attMem.length - 1; i++) {
+                attMem[i].protos.forEach(p => p.accessCount *= episodicDecay);
+            }
+
+            const adaptMem = this.#adaptiveContext[transformerIdx];
+            for (let i = 0; i < adaptMem.length - 1; i++) {
+                adaptMem[i].protos.forEach(p => p.accessCount *= episodicDecay);
+            }
+
+            const coreEp = this.#coreEpisodic[transformerIdx];
+            for (const entry of coreEp) {
+                entry.protos.forEach(p => p.accessCount *= 0.99);
+            }
+
+            if (longProtos.length > 0) {
+                this.#updateSemanticProtos(transformerIdx, longProtos);
+            }
+
+            this.#generativeReplay(transformerIdx);
+
+            if (this.#trainingStepCount % this.#semanticMergeEvery === 0 && training) {
+                this.#consolidateSemanticProtos(transformerIdx);
+                this.#replayOldMemory(transformerIdx);
+            }
+
+            const dropBoost = this.#detectSuddenDrop(transformerIdx);
+            if (dropBoost > 1.5 && Math.random() < 0.4) {
+                this.#replayOldMemory(transformerIdx);
+                this.#generativeReplay(transformerIdx);
+            }
+        }
+    }
+
+    #multiHeadAttention (x, layerNum, layer, transformerIdx, training = true) {
         if (
             !Array.isArray(x) ||
             x.length !== this.#inputSize ||
@@ -3438,11 +3931,6 @@ class HiveMind {
                 probs: Array(this.#numHeads).fill().map(() => Array(this.#inputSize).fill().map(() => Array(this.#inputSize).fill(0)))
             };
         }
-
-        const perf = Math.max(0, Math.min(1, this.#performanceScores[transformerIdx] || 0.5));
-        const threshMultiplier = 0.75 + 0.5 * perf;
-        const maxAddMultiplier = 1.0 + 1.0 * (1 - perf);
-        const mergeThreshold = 0.7 + 0.2 * perf * this.#protoCapacityFactor;
 
         const headSize = this.#hiddenSize / this.#numHeads;
 
@@ -3515,196 +4003,7 @@ class HiveMind {
             }
         }
 
-        let outputToAdaptive = finalOutput;
-        if (training) {
-            const confidence = perf * (0.7 + 0.3 * specScore);
-            const maxNoiseScale = 0.03 + 0.3 * (1 - confidence);
-
-            outputToAdaptive = finalOutput.map(tokenVec => {
-                return tokenVec.map((val, j) => val + (Math.random() - 0.5) * maxNoiseScale * (1 + (this.#specializationWeights[transformerIdx][j % this.#hiddenSize][j % this.#hiddenSize] || 1)));
-            });
-        } else {
-            const baseScale = 0.01 + 0.04 * (1 - perf);
-            const timePhase = this.#attentionMemory[transformerIdx].length * 0.05;
-            outputToAdaptive = finalOutput.map(tokenVec =>
-                tokenVec.map((val, j) => val + baseScale * Math.sin(j * 0.12 + timePhase))
-            );
-        }
-
-        const dynamicShortThreshFactor = 4.0 * threshMultiplier;
-        const dynamicShortMaxAdd = Math.round(this.#shortTermMaxProtos * maxAddMultiplier);
-        const shortProtos = this.#poolMultiPrototype(outputToAdaptive, dynamicShortMaxAdd, dynamicShortThreshFactor);
-
-        if (shortProtos.length > Math.round(this.#shortTermMaxProtos * this.#tempOverloadFactor)) {
-            shortProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
-            shortProtos.length = Math.round(this.#shortTermMaxProtos * this.#tempOverloadFactor);
-        }
-
-        if (shortProtos.length > 0) {
-            const shortRepMean = this.#weightedMean(shortProtos);
-            const shortRepProj = this.#computeProjNorms(shortRepMean);
-            const shortTotalSize = shortProtos.reduce((s, p) => s + p.size, 0) || 1;
-
-            const adaptMem = this.#adaptiveContext[transformerIdx];
-            if (adaptMem.length > 0) {
-                const last = adaptMem[adaptMem.length - 1];
-                if (!last.repMean) last.repMean = this.#weightedMean(last.protos);
-                const lastTotalSize = last.protos.reduce((s, p) => s + p.size, 0) || 1;
-                const sim = this.#projSimilarity(last.repProj, shortRepProj);
-
-                if (sim > mergeThreshold) {
-                    const combinedTotal = lastTotalSize + shortTotalSize;
-                    const combinedMean = new Float32Array(this.#hiddenSize);
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        combinedMean[j] = (last.repMean[j] * lastTotalSize + shortRepMean[j] * shortTotalSize) / combinedTotal;
-                    }
-                    last.repMean = combinedMean;
-                    last.repProj = this.#computeProjNorms(combinedMean);
-
-                    for (const p of shortProtos) {
-                        last.protos.push({
-                            mean: new Float32Array(p.mean),
-                            variance: new Float32Array(p.variance),
-                            size: p.size,
-                            accessCount: p.accessCount + 1,
-                            projNorms: p.projNorms.map(arr => new Float32Array(arr))
-                        });
-                    }
-
-                    const maxPerShortEntry = Math.round(this.#shortTermMaxProtos * this.#mergeTrimFactor);
-                    if (last.protos.length > maxPerShortEntry) {
-                        last.protos.sort((a, b) => (b.size * b.accessCount) - (a.size * b.accessCount));
-                        last.protos = last.protos.slice(0, maxPerShortEntry);
-                        last.repMean = this.#weightedMean(last.protos);
-                        last.repProj = this.#computeProjNorms(last.repMean);
-                    }
-                } else {
-                    adaptMem.push({
-                        protos: shortProtos,
-                        repMean: shortRepMean,
-                        repProj: shortRepProj
-                    });
-                }
-            } else {
-                adaptMem.push({
-                    protos: shortProtos,
-                    repMean: shortRepMean,
-                    repProj: shortRepProj
-                });
-            }
-
-            if (adaptMem.length > this.#adaptiveWindow) {
-                adaptMem.shift();
-            }
-        }
-
-        const dynamicLongThreshFactor = 4.0 * threshMultiplier;
-        const dynamicLongMaxAdd = Math.round(this.#longTermMaxProtos * maxAddMultiplier);
-        const longProtos = this.#poolMultiPrototype(finalOutput, dynamicLongMaxAdd, dynamicLongThreshFactor);
-
-        if (longProtos.length > Math.round(this.#longTermMaxProtos * this.#tempOverloadFactor)) {
-            longProtos.sort((a, b) => this.#computeProtoUtility(b) - this.#computeProtoUtility(a));
-            longProtos.length = Math.round(this.#longTermMaxProtos * this.#tempOverloadFactor);
-        }
-
-        if (longProtos.length > 0) {
-            const longRepMean = this.#weightedMean(longProtos);
-            const longRepProj = this.#computeProjNorms(longRepMean);
-            const longTotalSize = longProtos.reduce((s, p) => s + p.size, 0) || 1;
-
-            const attMem = this.#attentionMemory[transformerIdx];
-            if (attMem.length > 0) {
-                const last = attMem[attMem.length - 1];
-                if (!last.repMean) last.repMean = this.#weightedMean(last.protos);
-                const lastTotalSize = last.protos.reduce((s, p) => s + p.size, 0) || 1;
-                const sim = this.#projSimilarity(last.repProj, longRepProj);
-
-                if (sim > mergeThreshold) {
-                    const combinedTotal = lastTotalSize + longTotalSize;
-                    const combinedMean = new Float32Array(this.#hiddenSize);
-                    for (let j = 0; j < this.#hiddenSize; j++) {
-                        combinedMean[j] = (last.repMean[j] * lastTotalSize + longRepMean[j] * longTotalSize) / combinedTotal;
-                    }
-                    last.repMean = combinedMean;
-                    last.repProj = this.#computeProjNorms(combinedMean);
-
-                    for (const p of longProtos) {
-                        last.protos.push({
-                            mean: new Float32Array(p.mean),
-                            variance: new Float32Array(p.variance),
-                            size: p.size,
-                            accessCount: p.accessCount + 1,
-                            projNorms: p.projNorms.map(arr => new Float32Array(arr))
-                        });
-                    }
-
-                    const maxPerLongEntry = Math.round(this.#longTermMaxProtos * this.#mergeTrimFactor);
-                    if (last.protos.length > maxPerLongEntry) {
-                        last.protos.sort((a, b) => (b.size * b.accessCount) - (a.size * b.accessCount));
-                        last.protos = last.protos.slice(0, maxPerLongEntry);
-                        last.repMean = this.#weightedMean(last.protos);
-                        last.repProj = this.#computeProjNorms(last.repMean);
-                    }
-                } else {
-                    attMem.push({
-                        protos: longProtos,
-                        repMean: longRepMean,
-                        repProj: longRepProj
-                    });
-                }
-            } else {
-                attMem.push({
-                    protos: longProtos,
-                    repMean: longRepMean,
-                    repProj: longRepProj
-                });
-            }
-        }
-
-        const episodicDecay = 0.95 + 0.04 * perf;
-
-        const attMem = this.#attentionMemory[transformerIdx];
-        for (let i = 0; i < attMem.length - 1; i++) {
-            attMem[i].protos.forEach(p => p.accessCount *= episodicDecay);
-        }
-
-        const adaptMem = this.#adaptiveContext[transformerIdx];
-        for (let i = 0; i < adaptMem.length - 1; i++) {
-            adaptMem[i].protos.forEach(p => p.accessCount *= episodicDecay);
-        }
-
-        const coreEp = this.#coreEpisodic[transformerIdx];
-        for (const entry of coreEp) {
-            entry.protos.forEach(p => p.accessCount *= 0.99);
-        }
-
-        this.#pruneMemory(transformerIdx, this.#contextWindow, attentionScores);
-
-        this.#semanticStepCounters[transformerIdx]++;
-        if (this.#semanticStepCounters[transformerIdx] >= this.#semanticUpdateEvery) {
-            this.#semanticStepCounters[transformerIdx] = 0;
-            if (longProtos.length > 0) {
-                this.#updateSemanticProtos(transformerIdx, longProtos);
-            }
-
-            this.#generativeReplay(transformerIdx);
-
-            this.#semanticMergeCounters[transformerIdx]++;
-            if (this.#semanticMergeCounters[transformerIdx] >= this.#semanticMergeEvery) {
-                this.#semanticMergeCounters[transformerIdx] = 0;
-                this.#consolidateSemanticProtos(transformerIdx);
-            }
-        }
-
-        const dropBoost = this.#detectSuddenDrop(transformerIdx);
-        if (dropBoost > 1.5 && Math.random() < 0.4) {
-            this.#replayOldMemory(transformerIdx);
-            this.#generativeReplay(transformerIdx);
-        }
-
-        if (this.#semanticStepCounters[transformerIdx] % this.#replayEvery === 0) {
-            this.#replayOldMemory(transformerIdx);
-        }
+        this.#updateMemoryBanks(finalOutput, attentionScores, transformerIdx, training, layerNum);
 
         return {
             output: finalOutput,
@@ -4000,7 +4299,7 @@ class HiveMind {
         for (let layer = 0; layer < this.#numLayers; layer++) {
             const normX = x.map(row => this.#rmsNorm(row, transformer.layerNormWeights[layer].gamma1));
 
-            const attentionResult = this.#multiHeadAttention(normX, transformer.attentionWeights[layer], idx, training);
+            const attentionResult = this.#multiHeadAttention(normX, layer, transformer.attentionWeights[layer], idx, training);
             const attentionOutput = attentionResult.output;
 
             const attentionResidual = x.map((row, i) => row.map((val, j) => val + attentionOutput[i][j]));
@@ -4097,7 +4396,7 @@ class HiveMind {
         }
     }
 
-    #hiveMemorySharing() {
+    #hiveMemorySharing () {
         if (this.#ensembleSize < 2) return;
 
         const compositeScores = this.#performanceScores.map((perf, i) => {
@@ -4138,7 +4437,7 @@ class HiveMind {
 
                 const minFromDonor = Math.max(2, Math.round((2 + 3 * this.#protoCapacityFactor) * this.#memoryFactor));
                 let numFromDonor = Math.max(minFromDonor, Math.round(sorted.length * (0.10 + 0.20 * this.#swarmIntelligenceFactor)));
-                const topFraction = 0.5 + 0.2 * this.#protoCapacityFactor;
+                const topFraction = 0.6 + 0.3 * this.#protoCapacityFactor;
                 const numTop = Math.ceil(numFromDonor * topFraction);
                 const numRandom = numFromDonor - numTop;
 
